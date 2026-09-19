@@ -90,16 +90,29 @@ class Settings(BaseSettings):
     @field_validator("database_url", mode="before")
     @classmethod
     def normalize_database_url(cls, v: str) -> str:
-        """Railway/Heroku provide postgres(ql):// — app + Alembic use asyncpg."""
+        """Railway/Heroku provide postgres(ql):// — app + Alembic use asyncpg.
+
+        Uses SQLAlchemy make_url so user/password/host are not corrupted by
+        naive string replacement (e.g. passwords containing @ or :).
+        """
         if not isinstance(v, str) or not v:
             return v
-        # Already has an explicit driver
-        if v.startswith("postgresql+") or v.startswith("postgres+"):
+        if "+asyncpg" in v.split("://", 1)[0]:
             return v
-        if v.startswith("postgres://"):
-            return "postgresql+asyncpg://" + v[len("postgres://") :]
-        if v.startswith("postgresql://"):
-            return "postgresql+asyncpg://" + v[len("postgresql://") :]
+        try:
+            from sqlalchemy.engine import make_url
+
+            u = make_url(v)
+            base = u.drivername.split("+")[0]
+            if base in ("postgres", "postgresql"):
+                u = u.set(drivername="postgresql+asyncpg")
+                return u.render_as_string(hide_password=False)
+        except Exception:
+            # Fallback for incomplete URLs during local tests
+            if v.startswith("postgres://"):
+                return "postgresql+asyncpg://" + v[len("postgres://") :]
+            if v.startswith("postgresql://"):
+                return "postgresql+asyncpg://" + v[len("postgresql://") :]
         return v
 
     @property

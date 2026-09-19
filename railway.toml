@@ -2,6 +2,10 @@
 builder = "NIXPACKS"
 
 [deploy]
+# Runs in the service deploy environment (has private network access to Postgres)
+# rather than during image build.
+preDeployCommand = "alembic upgrade head"
 startCommand = "uvicorn wax.api.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
+restartPolicyType = "ON_FAILURE"
