@@ -111,7 +111,17 @@ async def run_sandboxed(
     max_output = max_output or int(settings.terminal_max_output_bytes)
     cwd.mkdir(parents=True, exist_ok=True)
     env = _scrub_env({"HOME": str(cwd)})
-    require = bool(getattr(settings, "terminal_require_sandbox", False))
+    # Production always requires docker/bwrap — never silent rlimits fallback
+    require = bool(getattr(settings, "effective_terminal_require_sandbox", False))
+    if not require:
+        # property may exist
+        try:
+            require = bool(settings.effective_terminal_require_sandbox)
+        except Exception:
+            require = bool(getattr(settings, "terminal_require_sandbox", False))
+            if getattr(settings, "app_env", "") == "production":
+                require = True
+
 
     # 1) Docker isolation (strong multi-tenant boundary when available)
     if _want_docker() and _has_docker():

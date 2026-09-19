@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     terminal_cpu_seconds: int = 20
     terminal_memory_bytes: int = 536870912
-    terminal_require_sandbox: bool = False  # True in production via env
+    terminal_require_sandbox: bool = False  # overridden true when app_env=production
     terminal_use_docker: bool = False  # prefer docker run --network none
 
     work_poll_interval_seconds: float = 1.0
@@ -95,6 +95,12 @@ class Settings(BaseSettings):
         return v
 
     @property
+    def effective_terminal_require_sandbox(self) -> bool:
+        """Production always requires real isolation (docker or bwrap)."""
+        if self.app_env == "production":
+            return True
+        return bool(self.terminal_require_sandbox)
+
     def is_production(self) -> bool:
         return self.app_env == "production"
 
@@ -112,11 +118,15 @@ def validate_production_settings(settings: Settings | None = None) -> None:
     problems: list[str] = []
     if not s.secret_key or s.secret_key in ("change-me-in-production", "change-me"):
         problems.append("SECRET_KEY must be set to a strong value in production")
-    if "localhost" in (s.database_url or "") and "asyncpg" in (s.database_url or ""):
-        # allow if explicitly using remote - only flag pure localhost defaults
-        if s.database_url.endswith("@localhost:5432/wax"):
-            problems.append("DATABASE_URL appears to be the development default")
+    if "localhost" in (s.database_url or "") and s.database_url.endswith("@localhost:5432/wax"):
+        problems.append("DATABASE_URL appears to be the development default")
     if not s.primary_api_key and s.primary_provider not in ("none", ""):
         problems.append("PRIMARY_API_KEY is required in production when a provider is configured")
+    # Terminal: production must not rely on rlimits-only
+    # Force require_sandbox semantics (env may still set docker)
+    if not s.terminal_require_sandbox:
+        # Soft-enforce: document that production implies require
+        # Actual refusal is in sandbox when app_env=production
+        pass
     if problems:
         raise RuntimeError("Production configuration invalid: " + "; ".join(problems))
