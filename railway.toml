@@ -4,7 +4,9 @@ builder = "NIXPACKS"
 [deploy]
 # Runs in the service deploy environment (has private network access to Postgres)
 # rather than during image build.
-preDeployCommand = "sh -c 'echo \"=== Alembic before ===\" && alembic current && alembic history -r -3:head && echo \"=== Running upgrade head ===\" && alembic upgrade head && echo \"=== Alembic after ===\" && alembic current'"
+# After upgrade, verify_schema.py fails the deploy if "works" (and other core
+# tables) are still missing — prevents SUCCESS status with a broken schema.
+preDeployCommand = "sh -c 'echo \"=== Alembic before ===\" && alembic current || true && echo \"=== Running upgrade head ===\" && alembic upgrade head && echo \"=== Alembic after ===\" && alembic current && echo \"=== Verify schema ===\" && python scripts/verify_schema.py'"
 startCommand = "uvicorn wax.api.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
