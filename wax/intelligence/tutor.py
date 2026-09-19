@@ -24,7 +24,8 @@ from wax.intelligence.providers import (
 from wax.memory.service import MemoryService
 from wax.observability.logging import get_logger
 from wax.tools.registry import execute_tool
-from wax.delivery.presentation import platform_context_block, InteractiveChoice, PresentableResponse
+from wax.delivery.presentation import InteractiveChoice, PresentableResponse
+from wax.intelligence.context import ContextAssembler
 
 logger = get_logger(__name__)
 
@@ -92,6 +93,28 @@ AVAILABLE_TOOLS = [
     ),
 
     ToolSpec(
+        
+    ToolSpec(
+        name="inspect_memories",
+        description="List what is currently remembered about this learner (for transparency when they ask).",
+        parameters={"type": "object", "properties": {"limit": {"type": "number"}}, "required": []},
+    ),
+    ToolSpec(
+        name="manage_goal",
+        description="Create or update a learner goal generically (create/complete/pause/abandon/activate). No fixed curriculum.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "goal_id": {"type": "string"},
+                "priority": {"type": "number"},
+            },
+            "required": ["action"],
+        },
+    ),
+
         name="present_choices",
         description=(
             "Offer the learner a small set of clear choices as interactive buttons (or a list). "
@@ -149,35 +172,29 @@ class TutorService:
             for m in msgs:
                 recent.append({"role": m.role, "content": m.content})
 
-        memory_summary = "No prior memories yet."
-        relevant_memories = []
-        if principal_id:
-            relevant_memories = await self.memory.plan_and_retrieve(
-                principal_id, user_text, limit=14
-            )
-            if relevant_memories:
-                lines = [
-                    f"- [{m.memory_type}|c={m.confidence:.2f}] {m.content}"
-                    for m in relevant_memories
-                ]
-                memory_summary = "\n".join(lines)
-            else:
-                memory_summary = await self.memory.get_active_summary(principal_id)
-
-        system = (
-            TUTOR_SYSTEM
-            + platform_context_block(channel)
-            + "\n\n--- What WAX currently understands about this learner ---\n"
-            + memory_summary
-            + "\n--- End of learner understanding ---\n"
+        assembler = ContextAssembler(self.session)
+        ctx = await assembler.assemble(
+            principal_id=principal_id,
+            conversation_id=conversation_id,
+            channel=channel,
+            user_text=user_text,
+            tutor_system=TUTOR_SYSTEM,
         )
-
+        relevant_memories = []
+        system = (
+            ctx.system_prefix
+            + ctx.memory_block
+            + ctx.learning_block
+            + ctx.goals_block
+        )
+        recent = ctx.recent_messages
         llm_messages: list[ChatMessage] = [ChatMessage(role="system", content=system)]
         for m in recent:
             role = "assistant" if m["role"] == "assistant" else "user"
             llm_messages.append(ChatMessage(role=role, content=m["content"]))
         if not recent or recent[-1].get("content") != user_text:
             llm_messages.append(ChatMessage(role="user", content=user_text))
+        await assembler.maybe_refresh_conversation_summary(conversation_id, recent)
 
         tool_ctx = {
             "principal_id": principal_id,
@@ -286,7 +303,7 @@ class TutorService:
             "reply": reply_text,
             "message_id": str(out_msg_id) if out_msg_id else None,
             "delivery_id": str(delivery_id) if delivery_id else None,
-            "memories_used": len(relevant_memories),
+            "memories_used": getattr(ctx, "memories_used", 0),
             "tools": tool_notes,
             "interactive": interactive_payload,
         }

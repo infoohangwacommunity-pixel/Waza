@@ -19,6 +19,8 @@ from wax.config import get_settings
 from wax.db.models import Delivery, Work
 from wax.db.session import session_scope
 from wax.intelligence.tutor import TutorService
+from wax.delivery.retry import DeliveryRetryService
+from wax.memory.consolidation import MemoryConsolidationService
 from wax.observability.logging import get_logger, setup_logging, work_id_var
 
 setup_logging()
@@ -208,11 +210,11 @@ async def worker_loop(worker_id: str) -> None:
 
 
 async def recovery_loop() -> None:
+    cycle = 0
     while RUNNING:
         try:
             async with session_scope() as session:
                 await recover_orphans(session)
-                # Due scheduled actions → durable work
                 from wax.scheduler.service import SchedulerService
                 sched = SchedulerService(session)
                 due = await sched.due_actions(limit=10)
@@ -220,6 +222,21 @@ async def recovery_loop() -> None:
                     await sched.mark_executing(action)
                     await sched.create_work_for_action(action)
                     logger.info("scheduled_action_enqueued", action_id=str(action.id))
+                # Delivery retries
+                retried = await DeliveryRetryService(session).process_batch(limit=10)
+                if retried:
+                    logger.info("deliveries_retried", count=retried)
+                # Periodic memory consolidation (every ~10 cycles)
+                cycle += 1
+                if cycle % 10 == 0:
+                    from wax.db.models import Principal
+                    from sqlalchemy import select
+                    result = await session.execute(select(Principal.id).limit(5))
+                    for (pid,) in result.all():
+                        try:
+                            await MemoryConsolidationService(session).consolidate_principal(pid)
+                        except Exception:
+                            logger.exception("consolidation_error", principal_id=str(pid))
         except Exception:
             logger.exception("recovery_error")
         await asyncio.sleep(max(5.0, settings.scheduler_poll_interval_seconds))

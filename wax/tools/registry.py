@@ -139,6 +139,7 @@ HANDLERS: dict[str, ToolHandler] = {
     "create_artifact": handle_create_artifact,
     "run_python": handle_run_python,
     "present_choices": handle_present_choices,
+    "inspect_memories": handle_inspect_memories,
 }
 
 
@@ -170,3 +171,81 @@ async def execute_tool(
     except Exception as e:
         logger.exception("tool_failed", tool=name)
         return {"ok": False, "error": str(e)}
+
+
+async def handle_inspect_memories(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Return a safe summary of what is remembered — for learner transparency."""
+    from wax.memory.service import MemoryService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    svc = MemoryService(session)
+    mems = await svc.list_for_user(principal_id, limit=int(args.get("limit") or 20))
+    return {
+        "ok": True,
+        "count": len(mems),
+        "memories": [
+            {
+                "id": str(m.id),
+                "type": m.memory_type,
+                "content": m.content,
+                "confidence": m.confidence,
+                "source": m.source,
+            }
+            for m in mems
+        ],
+    }
+
+
+async def handle_manage_goal(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Create or update a goal generically — no educational taxonomy."""
+    from datetime import datetime, timezone
+    from wax.db.models import Goal
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    action = (args.get("action") or "create").lower()
+    title = (args.get("title") or "").strip()
+    if action == "create":
+        if not title:
+            return {"ok": False, "error": "title_required"}
+        g = Goal(
+            id=uuid4(),
+            principal_id=principal_id,
+            title=title[:500],
+            description=(args.get("description") or None),
+            status="active",
+            priority=int(args.get("priority") or 50),
+        )
+        session.add(g)
+        await session.flush()
+        return {"ok": True, "goal_id": str(g.id), "title": g.title, "status": g.status}
+    goal_id = args.get("goal_id")
+    if not goal_id:
+        return {"ok": False, "error": "goal_id_required"}
+    g = await session.get(Goal, goal_id)
+    if not g or g.principal_id != principal_id:
+        return {"ok": False, "error": "not_found"}
+    if action == "complete":
+        g.status = "completed"
+        g.completed_at = datetime.now(timezone.utc)
+    elif action == "pause":
+        g.status = "paused"
+    elif action == "abandon":
+        g.status = "abandoned"
+    elif action == "activate":
+        g.status = "active"
+    if args.get("title"):
+        g.title = str(args["title"])[:500]
+    if args.get("description") is not None:
+        g.description = args.get("description")
+    await session.flush()
+    return {"ok": True, "goal_id": str(g.id), "status": g.status}
+
+

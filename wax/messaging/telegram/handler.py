@@ -20,6 +20,7 @@ from wax.db.models import (
 )
 from wax.db.session import session_scope
 from wax.observability.logging import get_logger
+from wax.messaging.telegram.client import send_typing
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -105,7 +106,11 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
             event.processed = True
             event.work_id = work.id
 
-    return {"status": "ok"}
+    try:
+            await send_typing(chat_id)
+        except Exception:
+            pass
+        return {"status": "ok"}
 
 
 async def _resolve_identity(session, chat_id: str, from_user: dict):
