@@ -27,3 +27,25 @@ Product curriculum, QuizMode/JAMBMode, cost budgets, forced onboarding forms.
 - Assessment item-by-item UI is mechanism-level via Activity, not a full UI product
 - Object storage is local path abstraction (configure WAX_ARTIFACT_ROOT / future S3)
 - Fernet-grade crypto can replace XOR helper when production key management is ready
+
+## Follow-up implementation (e25342e)
+
+### Terminal sandbox
+- Prefers `bwrap` (bubblewrap): network unshare, bind workspace only, die-with-parent
+- Fallback: RLIMIT_CPU / AS / NOFILE / NPROC + scrubbed env
+- Never inherits API keys / DB URLs into child process
+
+### Secrets
+- Primary: Fernet (`cryptography`) with key derived from `WAX_ENCRYPTION_KEY` or `SECRET_KEY`
+- Legacy `wax1:` tokens still decrypt
+
+### Artifact storage
+- `WAX_STORAGE_BACKEND=local|s3`
+- S3-compatible: `WAX_S3_BUCKET`, `WAX_S3_ENDPOINT`, keys via env
+
+### Assessment infrastructure
+- Tables: assessments, assessment_items, assessment_attempts, assessment_responses
+- Tools: create_assessment, submit_assessment_answer
+- Optional timer + durable Activity linkage
+- One-at-a-time item flow for WhatsApp/Telegram
+- Still **not** QuizMode / fixed curriculum
