@@ -585,3 +585,94 @@ async def handle_update_concept_state(
 HANDLERS["start_activity"] = handle_start_activity
 HANDLERS["complete_activity"] = handle_complete_activity
 HANDLERS["update_concept_state"] = handle_update_concept_state
+
+
+async def handle_create_assessment(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.assessment.service import AssessmentService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    items = args.get("items") or []
+    if not items:
+        return {"ok": False, "error": "items_required"}
+    duration = args.get("duration_seconds")
+    if duration is None and args.get("duration_minutes"):
+        duration = int(float(args["duration_minutes"]) * 60)
+    timed = bool(args.get("timed") or duration)
+    assessment = await AssessmentService(session).create(
+        principal_id=principal_id,
+        title=args.get("title") or "Practice",
+        objective=args.get("objective"),
+        items=items,
+        timed=timed,
+        duration_seconds=int(duration) if duration else None,
+        conversation_id=ctx.get("conversation_id"),
+        one_at_a_time=bool(args.get("one_at_a_time", True)),
+    )
+    attempt = await AssessmentService(session).start_attempt(assessment.id, principal_id)
+    nxt = await AssessmentService(session).next_item(assessment.id, attempt.id)
+    return {
+        "ok": True,
+        "assessment_id": str(assessment.id),
+        "attempt_id": str(attempt.id),
+        "next_item": (
+            {
+                "item_id": str(nxt.id),
+                "prompt": nxt.prompt,
+                "item_type": nxt.item_type,
+                "options": nxt.options,
+            }
+            if nxt
+            else None
+        ),
+    }
+
+
+async def handle_submit_assessment_answer(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.assessment.service import AssessmentService
+
+    attempt_id = args.get("attempt_id")
+    item_id = args.get("item_id")
+    if not attempt_id or not item_id:
+        return {"ok": False, "error": "attempt_id_and_item_id_required"}
+    svc = AssessmentService(session)
+    resp = await svc.submit_response(
+        attempt_id=attempt_id,
+        item_id=item_id,
+        response_text=args.get("response_text") or args.get("answer"),
+        response_structured=args.get("response_structured"),
+    )
+    attempt = await session.get(
+        __import__("wax.db.models", fromlist=["AssessmentAttempt"]).AssessmentAttempt,
+        attempt_id,
+    )
+    nxt = await svc.next_item(attempt.assessment_id, attempt_id) if attempt else None
+    done = nxt is None
+    if done and attempt:
+        await svc.complete_attempt(attempt_id)
+    return {
+        "ok": True,
+        "is_correct": resp.is_correct,
+        "score": resp.score,
+        "feedback": resp.feedback,
+        "completed": done,
+        "next_item": (
+            {
+                "item_id": str(nxt.id),
+                "prompt": nxt.prompt,
+                "item_type": nxt.item_type,
+                "options": nxt.options,
+            }
+            if nxt
+            else None
+        ),
+    }
+
+
+HANDLERS["create_assessment"] = handle_create_assessment
+HANDLERS["submit_assessment_answer"] = handle_submit_assessment_answer

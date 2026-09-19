@@ -62,6 +62,12 @@ class Settings(BaseSettings):
     workspace_root: str = "/tmp/wax-workspaces"
     workspace_max_file_bytes: int = 25_000_000
     workspace_ttl_hours: int = 72
+    storage_backend: str = "local"  # local | s3
+    s3_bucket: str = ""
+    s3_endpoint: str = ""
+    s3_region: str = "auto"
+    terminal_cpu_seconds: int = 20
+    terminal_memory_bytes: int = 536870912
 
     work_poll_interval_seconds: float = 1.0
     work_stale_seconds: int = 300

@@ -609,3 +609,103 @@ class DocumentChunk(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[Optional[list[float]]] = mapped_column(JSONB, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Assessment(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Generic durable assessment — not QuizMode.
+    AI decides when to create; infrastructure makes it durable.
+    """
+
+    __tablename__ = "assessments"
+    __table_args__ = (
+        Index("ix_assessment_principal", "principal_id"),
+        Index("ix_assessment_status", "status"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    activity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
+    )
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    objective: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="draft")
+    # draft | active | paused | completed | expired | cancelled
+    timed: Mapped[bool] = mapped_column(Boolean, default=False)
+    duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    settings: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    # e.g. one_at_a_time, shuffle, etc. — open structure
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class AssessmentItem(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """One item in an assessment: free_text | numeric | multiple_choice | file | generated | practical."""
+
+    __tablename__ = "assessment_items"
+    __table_args__ = (Index("ix_aitem_assessment", "assessment_id"),)
+
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    item_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    prompt: Mapped[str] = mapped_column(Text, nullable=False)
+    options: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    answer_key: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    # scoring hints; never shown to learner unless AI decides
+    points: Mapped[float] = mapped_column(Float, default=1.0)
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class AssessmentAttempt(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "assessment_attempts"
+    __table_args__ = (
+        Index("ix_aattempt_assessment", "assessment_id"),
+        Index("ix_aattempt_principal", "principal_id"),
+    )
+
+    assessment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assessments.id", ondelete="CASCADE"), nullable=False
+    )
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    status: Mapped[str] = mapped_column(String(40), default="in_progress")
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    max_score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class AssessmentResponse(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    __tablename__ = "assessment_responses"
+    __table_args__ = (
+        Index("ix_aresp_attempt", "attempt_id"),
+        Index("ix_aresp_item", "item_id"),
+    )
+
+    attempt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assessment_attempts.id", ondelete="CASCADE"), nullable=False
+    )
+    item_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assessment_items.id", ondelete="CASCADE"), nullable=False
+    )
+    response_text: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    response_structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    is_correct: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
+    score: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
