@@ -774,35 +774,6 @@ HANDLERS["record_evidence"] = handle_record_evidence
 HANDLERS["form_hypothesis"] = handle_form_hypothesis
 
 # Complete registry (must be after all handle_* definitions)
-HANDLERS.update({
-    "schedule_followup": handle_schedule_followup,
-    "create_artifact": handle_create_artifact,
-    "run_python": handle_run_python,
-    "present_choices": handle_present_choices,
-    "inspect_memories": handle_inspect_memories,
-    "manage_goal": handle_manage_goal,
-    "forget_memory": handle_forget_memory,
-    "fetch_inbound_media": handle_fetch_inbound_media,
-    "list_workspace": handle_list_workspace,
-    "inspect_media": handle_inspect_media,
-    "workspace_command": handle_workspace_command,
-    "describe_image": handle_describe_image,
-    "list_artifacts": handle_list_artifacts,
-    "read_artifact": handle_read_artifact,
-    "write_workspace_file": handle_write_workspace_file,
-    "read_workspace_file": handle_read_workspace_file,
-    "schedule_continuous": handle_schedule_continuous,
-    "start_activity": handle_start_activity,
-    "complete_activity": handle_complete_activity,
-    "update_concept_state": handle_update_concept_state,
-    "create_assessment": handle_create_assessment,
-    "submit_assessment_answer": handle_submit_assessment_answer,
-    "why_we_believe": handle_why_we_believe,
-    "record_evidence": handle_record_evidence,
-    "form_hypothesis": handle_form_hypothesis,
-    "propose_learning_check": handle_propose_learning_check,
-    "schedule_hypothesis_recheck": handle_schedule_hypothesis_recheck,
-})
 
 
 async def handle_propose_learning_check(
@@ -833,6 +804,33 @@ async def handle_schedule_hypothesis_recheck(
         return {"ok": False, "error": "could_not_schedule"}
     return {"ok": True, "scheduled_action_id": str(action.id), "execute_at": action.execute_at.isoformat() if getattr(action, "execute_at", None) else None}
 
-
-HANDLERS["propose_learning_check"] = handle_propose_learning_check
-HANDLERS["schedule_hypothesis_recheck"] = handle_schedule_hypothesis_recheck
+# Final registry — must run AFTER every handle_* is defined
+HANDLERS.update({
+    "schedule_followup": handle_schedule_followup,
+    "create_artifact": handle_create_artifact,
+    "run_python": handle_run_python,
+    "present_choices": handle_present_choices,
+    "inspect_memories": handle_inspect_memories,
+    "manage_goal": handle_manage_goal,
+    "forget_memory": handle_forget_memory,
+    "fetch_inbound_media": handle_fetch_inbound_media,
+    "list_workspace": handle_list_workspace,
+    "inspect_media": handle_inspect_media,
+    "workspace_command": handle_workspace_command,
+    "describe_image": handle_describe_image,
+    "list_artifacts": handle_list_artifacts,
+    "read_artifact": handle_read_artifact,
+    "write_workspace_file": handle_write_workspace_file,
+    "read_workspace_file": handle_read_workspace_file,
+    "schedule_continuous": handle_schedule_continuous,
+    "start_activity": handle_start_activity,
+    "complete_activity": handle_complete_activity,
+    "update_concept_state": handle_update_concept_state,
+    "create_assessment": handle_create_assessment,
+    "submit_assessment_answer": handle_submit_assessment_answer,
+    "why_we_believe": handle_why_we_believe,
+    "record_evidence": handle_record_evidence,
+    "form_hypothesis": handle_form_hypothesis,
+    "propose_learning_check": handle_propose_learning_check,
+    "schedule_hypothesis_recheck": handle_schedule_hypothesis_recheck,
+})
