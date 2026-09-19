@@ -114,3 +114,23 @@ async def root() -> dict[str, str]:
 def run() -> None:
     import uvicorn
     uvicorn.run("wax.api.main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+@app.get("/health/detail")
+async def health_detail():
+    from wax.config import get_settings
+    from wax.terminal.workspace import workspace_root
+    s = get_settings()
+    root = workspace_root()
+    return {
+        "status": "ok",
+        "app": s.app_name,
+        "env": s.app_env,
+        "whatsapp_enabled": s.whatsapp_enabled,
+        "telegram_enabled": s.telegram_enabled,
+        "terminal_enabled": s.terminal_enabled,
+        "workspace_root": str(root),
+        "primary_provider": s.primary_provider,
+        "fallback_provider": s.fallback_provider,
+    }
+

@@ -190,6 +190,33 @@ AVAILABLE_TOOLS = [
             "required": ["command"],
         },
     ),
+
+    ToolSpec(
+        name="describe_image",
+        description="Multimodal model description of a local image path. Use ONLY if inspect_media/OCR was insufficient.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "question": {"type": "string"},
+            },
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="list_artifacts",
+        description="List durable artifacts previously created for this learner.",
+        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
+    ),
+    ToolSpec(
+        name="read_artifact",
+        description="Read the content of a previously created artifact by id.",
+        parameters={
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string"}},
+            "required": ["artifact_id"],
+        },
+    ),
 ]
 
 

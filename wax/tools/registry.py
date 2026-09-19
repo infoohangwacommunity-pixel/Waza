@@ -356,3 +356,73 @@ HANDLERS["list_workspace"] = handle_list_workspace
 HANDLERS["inspect_media"] = handle_inspect_media
 HANDLERS["workspace_command"] = handle_workspace_command
 
+
+
+async def handle_describe_image(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Multimodal fallback — use only when local OCR/inspect is not enough."""
+    from wax.tools.multimodal import describe_local_image
+
+    path = args.get("path")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    return await describe_local_image(path, args.get("question"))
+
+
+async def handle_list_artifacts(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from sqlalchemy import select
+    from wax.db.models import Artifact
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    stmt = (
+        select(Artifact)
+        .where(Artifact.principal_id == principal_id, Artifact.status == "ready")
+        .order_by(Artifact.created_at.desc())
+        .limit(int(args.get("limit") or 15))
+    )
+    result = await session.execute(stmt)
+    rows = list(result.scalars().all())
+    return {
+        "ok": True,
+        "artifacts": [
+            {
+                "id": str(a.id),
+                "kind": a.kind,
+                "title": a.title,
+                "size_bytes": a.size_bytes,
+                "created_at": a.created_at.isoformat() if a.created_at else None,
+            }
+            for a in rows
+        ],
+    }
+
+
+async def handle_read_artifact(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.db.models import Artifact
+
+    principal_id = ctx.get("principal_id")
+    artifact_id = args.get("artifact_id")
+    if not principal_id or not artifact_id:
+        return {"ok": False, "error": "artifact_id_required"}
+    art = await session.get(Artifact, artifact_id)
+    if not art or art.principal_id != principal_id:
+        return {"ok": False, "error": "not_found"}
+    return {
+        "ok": True,
+        "id": str(art.id),
+        "kind": art.kind,
+        "title": art.title,
+        "content": (art.content or "")[:20000],
+    }
+
+
+HANDLERS["describe_image"] = handle_describe_image
+HANDLERS["list_artifacts"] = handle_list_artifacts
+HANDLERS["read_artifact"] = handle_read_artifact

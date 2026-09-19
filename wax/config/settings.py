@@ -1,22 +1,27 @@
-
 from __future__ import annotations
+
 from functools import lru_cache
 from typing import Literal
+
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
+
     app_name: str = "WAX Prep"
     app_env: Literal["development", "staging", "production", "test"] = "development"
     debug: bool = False
     log_level: str = "INFO"
     secret_key: str = Field(default="change-me-in-production")
+
     database_url: str = "postgresql+asyncpg://wax:wax@localhost:5432/wax"
     database_url_sync: str = "postgresql://wax:wax@localhost:5432/wax"
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_echo: bool = False
+
     primary_provider: str = "openai"
     primary_api_key: str = ""
     primary_base_url: str = ""
@@ -31,6 +36,13 @@ class Settings(BaseSettings):
     memory_provider: str = "none"
     memory_api_key: str = ""
     memory_model: str = "gpt-4o-mini"
+
+    # Optional multimodal provider (same OpenAI-compatible shape) — only used when AI asks
+    multimodal_provider: str = "none"
+    multimodal_api_key: str = ""
+    multimodal_base_url: str = ""
+    multimodal_model: str = "gpt-4o-mini"
+
     whatsapp_enabled: bool = False
     whatsapp_verify_token: str = ""
     whatsapp_access_token: str = ""
@@ -40,18 +52,26 @@ class Settings(BaseSettings):
     telegram_enabled: bool = False
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
+
     terminal_enabled: bool = True
-    terminal_timeout_seconds: int = 30
-    terminal_max_output_bytes: int = 100_000
+    terminal_timeout_seconds: int = 45
+    terminal_max_output_bytes: int = 150_000
     terminal_workdir: str = "/tmp/wax-terminal"
     terminal_python: str = "python3"
+    workspace_root: str = "/tmp/wax-workspaces"
+    workspace_max_file_bytes: int = 25_000_000
+    workspace_ttl_hours: int = 72
+
     work_poll_interval_seconds: float = 1.0
     work_stale_seconds: int = 300
     work_max_retries: int = 3
     scheduler_poll_interval_seconds: float = 5.0
     delivery_max_retries: int = 5
+    delivery_pace_seconds: float = 0.55
+
     whatsapp_max_message_chars: int = 3500
     telegram_max_message_chars: int = 4000
+
     enable_structured_logging: bool = True
     webhook_signature_required: bool = True
 
@@ -65,6 +85,7 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.app_env == "production"
+
 
 @lru_cache
 def get_settings() -> Settings:

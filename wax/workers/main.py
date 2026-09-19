@@ -21,6 +21,7 @@ from wax.db.session import session_scope
 from wax.intelligence.tutor import TutorService
 from wax.delivery.retry import DeliveryRetryService
 from wax.memory.consolidation import MemoryConsolidationService
+from wax.terminal.cleanup import cleanup_old_files
 from wax.observability.logging import get_logger, setup_logging, work_id_var
 
 setup_logging()
@@ -228,6 +229,11 @@ async def recovery_loop() -> None:
                     logger.info("deliveries_retried", count=retried)
                 # Periodic memory consolidation (every ~10 cycles)
                 cycle += 1
+                if cycle % 30 == 0:
+                    try:
+                        cleanup_old_files()
+                    except Exception:
+                        logger.exception("workspace_cleanup_error")
                 if cycle % 10 == 0:
                     from wax.db.models import Principal
                     from sqlalchemy import select
