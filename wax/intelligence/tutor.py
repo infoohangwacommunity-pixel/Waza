@@ -95,6 +95,11 @@ AVAILABLE_TOOLS = [
     ToolSpec(
         
     ToolSpec(
+        name="forget_memory",
+        description="Deactivate a specific memory when the learner asks to forget something.",
+        parameters={"type": "object", "properties": {"memory_id": {"type": "string"}}, "required": ["memory_id"]},
+    ),
+    ToolSpec(
         name="inspect_memories",
         description="List what is currently remembered about this learner (for transparency when they ask).",
         parameters={"type": "object", "properties": {"limit": {"type": "number"}}, "required": []},

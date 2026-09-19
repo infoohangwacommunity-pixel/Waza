@@ -249,3 +249,19 @@ async def handle_manage_goal(
     return {"ok": True, "goal_id": str(g.id), "status": g.status}
 
 
+
+
+async def handle_forget_memory(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.memory.service import MemoryService
+
+    principal_id = ctx.get("principal_id")
+    memory_id = args.get("memory_id")
+    if not principal_id or not memory_id:
+        return {"ok": False, "error": "memory_id_required"}
+    ok = await MemoryService(session).forget(principal_id, memory_id)
+    return {"ok": ok, "memory_id": memory_id}
+
+
+HANDLERS["forget_memory"] = handle_forget_memory
