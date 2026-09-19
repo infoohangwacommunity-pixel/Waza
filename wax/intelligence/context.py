@@ -170,6 +170,51 @@ class ContextAssembler:
         lines = [f"- {g.title}" + (f": {g.description}" if g.description else "") for g in goals]
         return "\n--- Active goals ---\n" + "\n".join(lines) + "\n--- End goals ---\n"
 
+
+    async def _knowledge_snapshot(self, principal_id, limit: int = 10) -> str:
+        if not principal_id:
+            return ""
+        try:
+            from wax.knowledge.graph import KnowledgeGraphService
+            snap = await KnowledgeGraphService(self.session).learner_snapshot(
+                principal_id, limit=limit
+            )
+        except Exception:
+            return ""
+        if not snap:
+            return ""
+        lines = [
+            f"- {s['concept']}: status={s['status']} mastery={s['mastery']:.2f} conf={s['confidence']:.2f}"
+            for s in snap
+        ]
+        return (
+            "\n--- Concept understanding (personalized graph) ---\n"
+            + "\n".join(lines)
+            + "\n--- End concepts ---\n"
+        )
+
+    async def _hypothesis_snapshot(self, principal_id, limit: int = 8) -> str:
+        if not principal_id:
+            return ""
+        try:
+            from wax.memory.evidence import EvidenceService
+            hyps = await EvidenceService(self.session).active_hypotheses(
+                principal_id, limit=limit
+            )
+        except Exception:
+            return ""
+        if not hyps:
+            return ""
+        lines = [
+            f"- [{h['status']}] conf={h['confidence']:.2f}: {h['claim'][:160]}"
+            for h in hyps
+        ]
+        return (
+            "\n--- Current hypotheses about this learner (not facts) ---\n"
+            + "\n".join(lines)
+            + "\nTreat as tentative. Prefer evidence over assumption.\n--- End hypotheses ---\n"
+        )
+
     async def maybe_refresh_conversation_summary(
         self, conversation_id, recent: list[dict[str, str]]
     ) -> None:

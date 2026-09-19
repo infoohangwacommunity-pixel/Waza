@@ -244,6 +244,24 @@ class EvidenceService:
         await self.session.flush()
         hyp.memory_id = mem.id
         await self.session.flush()
+        # Unify with concept state when claim_key looks like a concept
+        if hyp.claim_key.startswith("concept:"):
+            try:
+                from wax.knowledge.graph import KnowledgeGraphService
+                label = hyp.claim_key.split(":", 1)[1]
+                await KnowledgeGraphService(self.session).update_learner_state(
+                    hyp.principal_id,
+                    label,
+                    mastery_delta=0.05,
+                    status="partial" if hyp.confidence < 0.7 else "applied",
+                    evidence_item={
+                        "source": "confirmed_hypothesis",
+                        "hypothesis_id": str(hyp.id),
+                        "confidence": hyp.confidence,
+                    },
+                )
+            except Exception:
+                pass
         logger.info("hypothesis_promoted_to_memory", hypothesis_id=str(hyp.id))
         return mem
 

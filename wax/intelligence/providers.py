@@ -206,21 +206,65 @@ class AnthropicProvider(IntelligenceProvider):
             "Content-Type": "application/json",
         }
         system = None
-        messages = []
+        messages: list[dict[str, Any]] = []
         for m in request.messages:
             if m.role == "system":
-                system = m.content
+                system = (system + "\n" + m.content) if system else m.content
+            elif m.role == "tool":
+                # Anthropic tool result
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": m.tool_call_id or "tool",
+                                "content": m.content or "",
+                            }
+                        ],
+                    }
+                )
+            elif m.role == "assistant" and m.tool_calls:
+                blocks: list[dict[str, Any]] = []
+                if m.content:
+                    blocks.append({"type": "text", "text": m.content})
+                for tc in m.tool_calls:
+                    fn = tc.get("function") or {}
+                    import json as _json
+                    raw_args = fn.get("arguments") or "{}"
+                    try:
+                        parsed = _json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+                    except Exception:
+                        parsed = {"raw": raw_args}
+                    blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc.get("id") or "tool",
+                            "name": fn.get("name") or tc.get("name") or "tool",
+                            "input": parsed if isinstance(parsed, dict) else {"value": parsed},
+                        }
+                    )
+                messages.append({"role": "assistant", "content": blocks})
             else:
-                messages.append({"role": m.role, "content": m.content})
+                messages.append({"role": m.role if m.role in ("user", "assistant") else "user", "content": m.content or ""})
 
         body: dict[str, Any] = {
             "model": self.model,
-            "messages": messages,
+            "messages": messages or [{"role": "user", "content": "Hello"}],
             "max_tokens": request.max_tokens if request.max_tokens is not None else 4096,
             "temperature": request.temperature if request.temperature is not None else 0.7,
         }
         if system:
             body["system"] = system
+        if request.tools:
+            body["tools"] = [
+                {
+                    "name": t.name,
+                    "description": t.description or "",
+                    "input_schema": t.parameters or {"type": "object", "properties": {}},
+                }
+                for t in request.tools
+            ]
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -255,12 +299,27 @@ class AnthropicProvider(IntelligenceProvider):
             text = "".join(
                 block.get("text", "") for block in content_blocks if block.get("type") == "text"
             )
+            tool_calls = []
+            for block in content_blocks:
+                if block.get("type") == "tool_use":
+                    import json as _json
+                    tool_calls.append(
+                        {
+                            "id": block.get("id"),
+                            "type": "function",
+                            "function": {
+                                "name": block.get("name"),
+                                "arguments": _json.dumps(block.get("input") or {}),
+                            },
+                        }
+                    )
             return CompletionResponse(
                 content=text or None,
                 finish_reason=data.get("stop_reason"),
                 model=data.get("model"),
                 raw=data,
                 provider=self.name,
+                tool_calls=tool_calls,
             )
         except (KeyError, TypeError) as e:
             raise ProviderError(
@@ -328,7 +387,7 @@ class IntelligenceService:
             mem_provider,
             mem_key,
             settings.memory_model,
-            settings.primary_base_url,
+            getattr(settings, "memory_base_url", None) or settings.primary_base_url,
             60.0,
         )
 
@@ -357,7 +416,13 @@ class IntelligenceService:
         last_error: Exception | None = None
         for provider in providers:
             try:
-                return await self._with_retry(provider, request)
+                if use_memory_model and provider is self.memory_model:
+                    retries = getattr(settings, "memory_max_retries", 1)
+                elif provider is self.fallback:
+                    retries = getattr(settings, "fallback_max_retries", 2)
+                else:
+                    retries = getattr(settings, "primary_max_retries", 2)
+                return await self._with_retry(provider, request, retries=retries)
             except ProviderError as e:
                 last_error = e
                 logger.warning(
@@ -374,11 +439,11 @@ class IntelligenceService:
         )
 
     async def _with_retry(
-        self, provider: IntelligenceProvider, request: CompletionRequest
+        self, provider: IntelligenceProvider, request: CompletionRequest, retries: int | None = None
     ) -> CompletionResponse:
         @retry(
             retry=retry_if_exception_type(ProviderError),
-            stop=stop_after_attempt(max(1, settings.primary_max_retries)),
+            stop=stop_after_attempt(max(1, retries if retries is not None else getattr(settings, 'primary_max_retries', 2))),
             wait=wait_exponential_jitter(initial=1, max=15),
             reraise=True,
         )

@@ -135,9 +135,14 @@ async def process_memory_work(session, work: Work) -> None:
                         evidence_type="explicit",
                         description=f"Learner reported difficulty: {user_text[:240]}",
                         claim_key="signal:reported_difficulty",
-                        payload={"supports": True, "text": user_text[:500]},
+                        payload={
+                            "supports": True,
+                            "text": user_text[:500],
+                            "scope": "this_turn",
+                            "not_yet_durable_preference": True,
+                        },
                         assistance_level="unknown",
-                        weight=0.7,
+                        weight=0.45,  # single turn — do not over-weight
                         directness=0.9,
                         source="explicit",
                         observation_id=getattr(obs, "id", None),
@@ -149,8 +154,13 @@ async def process_memory_work(session, work: Work) -> None:
                         evidence_type="explicit",
                         description=f"Possible teaching preference: {user_text[:240]}",
                         claim_key="preference:teaching_style",
-                        payload={"supports": True, "text": user_text[:500]},
-                        weight=0.6,
+                        payload={
+                            "supports": True,
+                            "text": user_text[:500],
+                            "scope": "this_turn",
+                            "candidate_preference": True,
+                        },
+                        weight=0.4,  # needs repetition before durable belief
                         source="explicit",
                         observation_id=getattr(obs, "id", None),
                         work_id=work.id,

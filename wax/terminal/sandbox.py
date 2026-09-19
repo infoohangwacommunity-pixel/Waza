@@ -109,6 +109,14 @@ async def run_sandboxed(
     cwd.mkdir(parents=True, exist_ok=True)
     env = _scrub_env({"HOME": str(cwd)})
 
+    require = bool(getattr(settings, "terminal_require_sandbox", False))
+    if require and not _has_bwrap():
+        return SandboxResult(
+            False, "", "", None, 0,
+            error="sandbox_required_but_bwrap_unavailable",
+            isolation="none",
+        )
+
     # Prefer bubblewrap isolation
     if _has_bwrap():
         bwrap_argv = [

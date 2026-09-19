@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     primary_model: str = "gpt-4o-mini"
     primary_timeout_seconds: float = 60.0
     primary_max_retries: int = 2
+    fallback_max_retries: int = 2
+    memory_max_retries: int = 1
     fallback_provider: str = "none"
     fallback_api_key: str = ""
     fallback_base_url: str = ""
@@ -36,6 +38,7 @@ class Settings(BaseSettings):
     memory_provider: str = "none"
     memory_api_key: str = ""
     memory_model: str = "gpt-4o-mini"
+    memory_base_url: str = ""  # defaults to primary_base_url if empty
     embedding_model: str = "text-embedding-3-small"
 
     # Optional multimodal provider (same OpenAI-compatible shape) — only used when AI asks
@@ -68,6 +71,7 @@ class Settings(BaseSettings):
     s3_region: str = "auto"
     terminal_cpu_seconds: int = 20
     terminal_memory_bytes: int = 536870912
+    terminal_require_sandbox: bool = False  # True in production via env
 
     work_poll_interval_seconds: float = 1.0
     work_stale_seconds: int = 300

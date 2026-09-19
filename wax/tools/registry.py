@@ -165,17 +165,59 @@ async def execute_tool(
     arguments: str | dict | None,
     ctx: dict[str, Any],
 ) -> dict[str, Any]:
+    """Execute tool. Side-effecting tools are idempotent per work+args hash."""
+    import hashlib
+    import json
+    from wax.db.models import Work
+
     handler = HANDLERS.get(name)
     if not handler:
         return {"ok": False, "error": f"unknown_tool:{name}"}
     args = parse_tool_args(arguments)
+    side_effect = name in {
+        "schedule_followup",
+        "schedule_continuous",
+        "create_artifact",
+        "create_assessment",
+        "write_workspace_file",
+        "start_activity",
+        "manage_goal",
+    }
+    args_hash = hashlib.sha256(
+        json.dumps({"name": name, "args": args}, sort_keys=True, default=str).encode()
+    ).hexdigest()[:24]
+    work_id = ctx.get("work_id")
+
+    if side_effect and work_id:
+        work = await session.get(Work, work_id)
+        if work is not None:
+            meta = dict(work.result_payload or {})
+            done = dict(meta.get("_tool_idem") or {})
+            if args_hash in done:
+                logger.info("tool_idempotent_hit", tool=name, hash=args_hash)
+                return done[args_hash]
+
     try:
         outcome = await handler(session, args, ctx)
-        logger.info("tool_executed", tool=name, ok=outcome.get("ok"))
+        if side_effect and work_id:
+            work = await session.get(Work, work_id)
+            if work is not None:
+                meta = dict(work.result_payload or {})
+                done = dict(meta.get("_tool_idem") or {})
+                done[args_hash] = outcome if isinstance(outcome, dict) else {"ok": True}
+                meta["_tool_idem"] = done
+                work.result_payload = meta
+                await session.flush()
+        logger.info(
+            "tool_executed",
+            tool=name,
+            ok=outcome.get("ok") if isinstance(outcome, dict) else None,
+        )
         return outcome
     except Exception as e:
         logger.exception("tool_failed", tool=name)
         return {"ok": False, "error": str(e)}
+
 
 
 async def handle_inspect_memories(
