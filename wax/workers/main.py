@@ -67,19 +67,30 @@ async def process_message_response(session, work: Work) -> None:
 
 
 async def _attempt_deliveries(session, work_id) -> None:
+    from wax.delivery.senders import deliver as channel_deliver
     stmt = select(Delivery).where(
         Delivery.work_id == work_id, Delivery.status == "pending"
     )
     result = await session.execute(stmt)
     for delivery in result.scalars().all():
         try:
-            delivery.status = "delivered"
-            delivery.delivered_at = datetime.now(timezone.utc)
-            delivery.external_message_id = f"sim-{uuid4().hex[:12]}"
+            outcome = await channel_deliver(
+                delivery.channel, delivery.target_external_id, delivery.content
+            )
+            if outcome.get("status") in ("ok", "skipped"):
+                delivery.status = "delivered"
+                delivery.delivered_at = datetime.now(timezone.utc)
+                delivery.external_message_id = f"out-{uuid4().hex[:12]}"
+                delivery.metadata_ = {**(delivery.metadata_ or {}), "outcome": outcome}
+            else:
+                delivery.status = "failed"
+                delivery.error = str(outcome)
+                delivery.attempt += 1
             logger.info(
-                "delivery_completed",
+                "delivery_attempted",
                 delivery_id=str(delivery.id),
                 channel=delivery.channel,
+                status=delivery.status,
             )
         except Exception as e:
             delivery.status = "failed"
