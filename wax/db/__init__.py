@@ -1,2 +1,42 @@
-from wax.db.base import Base
+from wax.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin, utcnow
+from wax.db.models import (
+    Principal,
+    InterfaceIdentity,
+    Conversation,
+    Message,
+    InboundEvent,
+    Work,
+    Execution,
+    ToolExecution,
+    Delivery,
+    Memory,
+    LearningObservation,
+    Goal,
+    Artifact,
+    ScheduledAction,
+)
 from wax.db.session import get_engine, get_session_factory, session_scope
+
+__all__ = [
+    "Base",
+    "TimestampMixin",
+    "UUIDPrimaryKeyMixin",
+    "utcnow",
+    "Principal",
+    "InterfaceIdentity",
+    "Conversation",
+    "Message",
+    "InboundEvent",
+    "Work",
+    "Execution",
+    "ToolExecution",
+    "Delivery",
+    "Memory",
+    "LearningObservation",
+    "Goal",
+    "Artifact",
+    "ScheduledAction",
+    "get_engine",
+    "get_session_factory",
+    "session_scope",
+]
