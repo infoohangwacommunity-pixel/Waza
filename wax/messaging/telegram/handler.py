@@ -19,8 +19,9 @@ from wax.db.models import (
     Work,
 )
 from wax.db.session import session_scope
-from wax.observability.logging import get_logger
+from wax.messaging.normalization import normalize_telegram_update
 from wax.messaging.telegram.client import send_typing
+from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -38,15 +39,15 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
     except json.JSONDecodeError:
         return {"status": "invalid_json"}
 
-    message = payload.get("message") or payload.get("edited_message")
-    if not message:
+    normalized = normalize_telegram_update(payload)
+    if not normalized:
         return {"status": "ignored"}
 
-    external_id = str(message.get("message_id"))
-    chat = message.get("chat", {})
-    from_user = message.get("from", {})
-    chat_id = str(chat.get("id"))
-    text = message.get("text") or message.get("caption") or "[non-text message]"
+    external_id = normalized.external_event_id
+    chat_id = normalized.external_user_id
+    text = normalized.text
+    content_type = normalized.content_type
+    media_id = normalized.media_id
 
     async with session_scope() as session:
         stmt = (
@@ -54,9 +55,9 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
             .values(
                 id=uuid.uuid4(),
                 channel="telegram",
-                external_event_id=f"{chat_id}:{external_id}",
+                external_event_id=external_id,
                 event_type="message",
-                payload=message,
+                payload=payload.get("message") or payload,
                 processed=False,
             )
             .on_conflict_do_nothing(index_elements=["channel", "external_event_id"])
@@ -67,8 +68,20 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
         if not inserted:
             return {"status": "duplicate"}
 
+        from_user = (payload.get("message") or {}).get("from") or {}
         principal, _ = await _resolve_identity(session, chat_id, from_user)
         conversation = await _get_or_create_conversation(session, principal.id, "telegram")
+
+        local_media_path = None
+        if media_id:
+            try:
+                from wax.messaging.media import fetch_telegram_media
+
+                fetched = await fetch_telegram_media(media_id, principal.id)
+                if fetched.get("ok"):
+                    local_media_path = fetched.get("path")
+            except Exception:
+                logger.exception("telegram_media_fetch_failed")
 
         msg = Message(
             id=uuid.uuid4(),
@@ -78,8 +91,13 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
             direction="inbound",
             role="user",
             content=text,
-            external_id=f"{chat_id}:{external_id}",
-            metadata_={"raw": message},
+            external_id=external_id,
+            metadata_={
+                "raw": payload.get("message"),
+                "content_type": content_type,
+                "media_id": media_id,
+                "local_media_path": local_media_path,
+            },
         )
         session.add(msg)
 
@@ -94,9 +112,12 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
             input_payload={
                 "channel": "telegram",
                 "message_id": str(msg.id),
-                "external_id": f"{chat_id}:{external_id}",
+                "external_id": external_id,
                 "text": text,
                 "target_external_id": chat_id,
+                "content_type": content_type,
+                "media_id": media_id,
+                "local_media_path": local_media_path,
             },
         )
         session.add(work)
@@ -107,10 +128,10 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
             event.work_id = work.id
 
     try:
-            await send_typing(chat_id)
-        except Exception:
-            pass
-        return {"status": "ok"}
+        await send_typing(chat_id)
+    except Exception:
+        pass
+    return {"status": "ok"}
 
 
 async def _resolve_identity(session, chat_id: str, from_user: dict):
@@ -157,7 +178,9 @@ async def _get_or_create_conversation(session, principal_id, channel: str):
     conv = result.scalar_one_or_none()
     if conv:
         return conv
-    conv = Conversation(id=uuid.uuid4(), principal_id=principal_id, channel=channel, status="active")
+    conv = Conversation(
+        id=uuid.uuid4(), principal_id=principal_id, channel=channel, status="active"
+    )
     session.add(conv)
     await session.flush()
     return conv

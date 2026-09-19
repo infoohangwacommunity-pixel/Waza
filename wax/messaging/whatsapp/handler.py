@@ -85,26 +85,34 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                     principal, _ = await _resolve_identity(session, wa_id, contacts.get(wa_id))
                     conversation = await _get_or_create_conversation(session, principal.id, "whatsapp")
 
-                    text = ""
-                    msg_type = msg.get("type")
-                    if msg_type == "text":
-                        text = msg.get("text", {}).get("body", "")
-                    elif msg_type == "interactive":
-                        inter = msg.get("interactive") or {}
-                        if inter.get("type") == "button_reply":
-                            br = inter.get("button_reply") or {}
-                            text = br.get("title") or br.get("id") or "[button]"
-                        elif inter.get("type") == "list_reply":
-                            lr = inter.get("list_reply") or {}
-                            text = lr.get("title") or lr.get("id") or "[list selection]"
-                        else:
-                            text = "[interactive message]"
-                    elif msg_type == "button":
-                        # template quick-reply style
-                        btn = msg.get("button") or {}
-                        text = btn.get("text") or btn.get("payload") or "[button]"
+                    from wax.messaging.normalization import normalize_whatsapp_message
+                    normalized = normalize_whatsapp_message(msg, contacts)
+                    if normalized:
+                        text = normalized.text
+                        content_type = normalized.content_type
+                        media_id = normalized.media_id
+                        interactive_id = normalized.interactive_id
                     else:
-                        text = f"[{msg_type} message]"
+                        text = ""
+                        content_type = msg.get("type") or "text"
+                        media_id = None
+                        interactive_id = None
+                        msg_type = msg.get("type")
+                        if msg_type == "text":
+                            text = msg.get("text", {}).get("body", "")
+                        else:
+                            text = f"[{msg_type} message]"
+
+                    # Eagerly place media in workspace when present (AI still decides how to inspect)
+                    local_media_path = None
+                    if media_id and principal.id:
+                        try:
+                            from wax.messaging.media import fetch_whatsapp_media
+                            fetched = await fetch_whatsapp_media(media_id, principal.id)
+                            if fetched.get("ok"):
+                                local_media_path = fetched.get("path")
+                        except Exception:
+                            local_media_path = None
 
                     message = Message(
                         id=uuid.uuid4(),
@@ -115,7 +123,13 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                         role="user",
                         content=text,
                         external_id=external_id,
-                        metadata_={"raw": msg},
+                        metadata_={
+                            "raw": msg,
+                            "content_type": content_type,
+                            "media_id": media_id,
+                            "local_media_path": local_media_path,
+                            "interactive_id": interactive_id,
+                        },
                     )
                     session.add(message)
 
@@ -133,6 +147,10 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                             "external_id": external_id,
                             "text": text,
                             "target_external_id": wa_id,
+                            "content_type": content_type,
+                            "media_id": media_id,
+                            "local_media_path": local_media_path,
+                            "interactive_id": interactive_id,
                         },
                     )
                     session.add(work)

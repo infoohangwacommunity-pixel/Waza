@@ -147,6 +147,49 @@ AVAILABLE_TOOLS = [
             "required": ["choices"],
         },
     ),
+
+    ToolSpec(
+        name="fetch_inbound_media",
+        description="Download a WhatsApp/Telegram media file into the local AI workspace. Prefer this over multimodal APIs when local inspection is enough.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string"},
+                "media_id": {"type": "string"},
+                "filename": {"type": "string"},
+            },
+            "required": ["channel", "media_id"],
+        },
+    ),
+    ToolSpec(
+        name="list_workspace",
+        description="List files in the learner workspace (default subdir: media).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "subdir": {"type": "string"},
+                "limit": {"type": "number"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="inspect_media",
+        description="Locally inspect a file path (type, dimensions, OCR for images, ffprobe for AV, text extract for PDF). Prefer this before expensive multimodal model calls.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="workspace_command",
+        description="Run one allowed command inside the workspace (file, ffprobe, tesseract, python3, etc.).",
+        parameters={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    ),
 ]
 
 
@@ -197,14 +240,29 @@ class TutorService:
         for m in recent:
             role = "assistant" if m["role"] == "assistant" else "user"
             llm_messages.append(ChatMessage(role=role, content=m["content"]))
+        media_note = ""
+        if payload.get("media_id"):
+            media_note = (
+                f"\n\n[System: inbound media available. channel={channel} "
+                f"content_type={payload.get('content_type')} media_id={payload.get('media_id')}. "
+                f"You can fetch_inbound_media then inspect_media.]"
+            )
+        if payload.get("local_media_path"):
+            media_note += f"\n[System: media already on disk at {payload.get('local_media_path')}]"
+        user_content = user_text + media_note
         if not recent or recent[-1].get("content") != user_text:
-            llm_messages.append(ChatMessage(role="user", content=user_text))
+            llm_messages.append(ChatMessage(role="user", content=user_content))
+        elif media_note:
+            llm_messages.append(ChatMessage(role="user", content=user_content))
         await assembler.maybe_refresh_conversation_summary(conversation_id, recent)
 
         tool_ctx = {
             "principal_id": principal_id,
             "work_id": work.id,
             "conversation_id": conversation_id,
+            "channel": channel,
+            "media_id": payload.get("media_id"),
+            "content_type": payload.get("content_type"),
         }
 
         # Tool loop: up to a few rounds so the model can act then respond

@@ -92,7 +92,11 @@ async def handle_run_python(
     if not code.strip():
         return {"ok": False, "error": "empty_code"}
     terminal = get_terminal()
-    result = await terminal.run_python(code)
+    result = await terminal.run_python(
+        code,
+        principal_id=ctx.get("principal_id"),
+        work_id=ctx.get("work_id"),
+    )
     return {
         "ok": result.success,
         "stdout": result.stdout[:8000],
@@ -100,6 +104,7 @@ async def handle_run_python(
         "exit_code": result.exit_code,
         "duration_ms": result.duration_ms,
         "error": result.error,
+        "cwd": result.cwd,
     }
 
 
@@ -265,3 +270,89 @@ async def handle_forget_memory(
 
 
 HANDLERS["forget_memory"] = handle_forget_memory
+
+
+async def handle_fetch_inbound_media(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Download channel media into the principal workspace."""
+    from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
+
+    principal_id = ctx.get("principal_id")
+    channel = (args.get("channel") or ctx.get("channel") or "").lower()
+    media_id = args.get("media_id")
+    if not principal_id or not media_id:
+        return {"ok": False, "error": "principal_and_media_id_required"}
+    if channel == "whatsapp":
+        return await fetch_whatsapp_media(media_id, principal_id, args.get("filename"))
+    if channel == "telegram":
+        return await fetch_telegram_media(media_id, principal_id, args.get("filename"))
+    return {"ok": False, "error": f"unsupported_channel:{channel}"}
+
+
+async def handle_list_workspace(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.terminal.workspace import principal_workspace, list_files
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    sub = (args.get("subdir") or "media").strip().lstrip("/")
+    base = principal_workspace(principal_id)
+    path = base / sub if sub else base
+    if not str(path.resolve()).startswith(str(base.resolve())):
+        return {"ok": False, "error": "path_escape"}
+    files = list_files(path, limit=int(args.get("limit") or 40))
+    return {"ok": True, "cwd": str(path), "files": files}
+
+
+async def handle_inspect_media(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.terminal.executor import get_terminal
+
+    path = args.get("path")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    terminal = get_terminal()
+    result = await terminal.inspect_media_file(path, principal_id=ctx.get("principal_id"))
+    return {
+        "ok": result.success,
+        "stdout": result.stdout[:8000],
+        "stderr": result.stderr[:1500],
+        "error": result.error,
+        "cwd": result.cwd,
+    }
+
+
+async def handle_workspace_command(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Run one allowed command inside the learner workspace."""
+    from wax.terminal.executor import get_terminal
+
+    line = (args.get("command") or "").strip()
+    if not line:
+        return {"ok": False, "error": "command_required"}
+    terminal = get_terminal()
+    result = await terminal.run_shell_line(
+        line,
+        principal_id=ctx.get("principal_id"),
+        work_id=ctx.get("work_id"),
+    )
+    return {
+        "ok": result.success,
+        "stdout": result.stdout[:8000],
+        "stderr": result.stderr[:2000],
+        "exit_code": result.exit_code,
+        "error": result.error,
+        "cwd": result.cwd,
+    }
+
+
+HANDLERS["fetch_inbound_media"] = handle_fetch_inbound_media
+HANDLERS["list_workspace"] = handle_list_workspace
+HANDLERS["inspect_media"] = handle_inspect_media
+HANDLERS["workspace_command"] = handle_workspace_command
+
