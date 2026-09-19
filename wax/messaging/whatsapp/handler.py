@@ -22,6 +22,7 @@ from wax.db.models import (
 )
 from wax.db.session import session_scope
 from wax.observability.logging import get_logger
+from wax.messaging.whatsapp.client import send_typing_and_read
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -85,10 +86,25 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                     conversation = await _get_or_create_conversation(session, principal.id, "whatsapp")
 
                     text = ""
-                    if msg.get("type") == "text":
+                    msg_type = msg.get("type")
+                    if msg_type == "text":
                         text = msg.get("text", {}).get("body", "")
+                    elif msg_type == "interactive":
+                        inter = msg.get("interactive") or {}
+                        if inter.get("type") == "button_reply":
+                            br = inter.get("button_reply") or {}
+                            text = br.get("title") or br.get("id") or "[button]"
+                        elif inter.get("type") == "list_reply":
+                            lr = inter.get("list_reply") or {}
+                            text = lr.get("title") or lr.get("id") or "[list selection]"
+                        else:
+                            text = "[interactive message]"
+                    elif msg_type == "button":
+                        # template quick-reply style
+                        btn = msg.get("button") or {}
+                        text = btn.get("text") or btn.get("payload") or "[button]"
                     else:
-                        text = f"[{msg.get('type')} message]"
+                        text = f"[{msg_type} message]"
 
                     message = Message(
                         id=uuid.uuid4(),
@@ -125,6 +141,12 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                     if event:
                         event.processed = True
                         event.work_id = work.id
+                    
+                    # Show typing indicator while worker thinks (best-effort)
+                    try:
+                        await send_typing_and_read(external_id)
+                    except Exception:
+                        pass
                     processed += 1
 
     return {"status": "ok", "processed": processed}

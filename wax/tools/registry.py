@@ -103,10 +103,42 @@ async def handle_run_python(
     }
 
 
+async def handle_present_choices(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Tutor requests interactive choices for the current channel.
+    Does not send itself — returns structured data for the delivery layer.
+    """
+    style = (args.get("style") or "buttons").lower()
+    choices_raw = args.get("choices") or []
+    choices = []
+    for i, c in enumerate(choices_raw[:10]):
+        if isinstance(c, str):
+            choices.append({"id": f"opt_{i}", "title": c[:20], "description": None})
+        elif isinstance(c, dict):
+            choices.append(
+                {
+                    "id": str(c.get("id") or f"opt_{i}")[:256],
+                    "title": str(c.get("title") or c.get("label") or f"Option {i}")[:20],
+                    "description": (c.get("description") or None),
+                }
+            )
+    if not choices:
+        return {"ok": False, "error": "no_choices"}
+    return {
+        "ok": True,
+        "style": "list" if style == "list" and len(choices) > 3 else "buttons",
+        "choices": choices,
+        "list_button_label": (args.get("list_button_label") or "Options")[:20],
+        "prompt": args.get("prompt") or "",
+    }
+
 HANDLERS: dict[str, ToolHandler] = {
     "schedule_followup": handle_schedule_followup,
     "create_artifact": handle_create_artifact,
     "run_python": handle_run_python,
+    "present_choices": handle_present_choices,
 }
 
 

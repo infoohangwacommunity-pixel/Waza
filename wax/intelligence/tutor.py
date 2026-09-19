@@ -24,6 +24,7 @@ from wax.intelligence.providers import (
 from wax.memory.service import MemoryService
 from wax.observability.logging import get_logger
 from wax.tools.registry import execute_tool
+from wax.delivery.presentation import platform_context_block, InteractiveChoice, PresentableResponse
 
 logger = get_logger(__name__)
 
@@ -89,6 +90,35 @@ AVAILABLE_TOOLS = [
             "required": ["code"],
         },
     ),
+
+    ToolSpec(
+        name="present_choices",
+        description=(
+            "Offer the learner a small set of clear choices as interactive buttons (or a list). "
+            "Use only when a genuine choice helps (e.g. Continue / Try another way / I'm done). "
+            "Do NOT use for every message. Do NOT build rigid menus. Max 3 for buttons, more for list."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "style": {"type": "string", "description": "buttons or list"},
+                "prompt": {"type": "string", "description": "Optional short prompt for the interactive bubble"},
+                "list_button_label": {"type": "string"},
+                "choices": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                            "description": {"type": "string"},
+                        },
+                    },
+                },
+            },
+            "required": ["choices"],
+        },
+    ),
 ]
 
 
@@ -136,6 +166,7 @@ class TutorService:
 
         system = (
             TUTOR_SYSTEM
+            + platform_context_block(channel)
             + "\n\n--- What WAX currently understands about this learner ---\n"
             + memory_summary
             + "\n--- End of learner understanding ---\n"
@@ -157,6 +188,7 @@ class TutorService:
         # Tool loop: up to a few rounds so the model can act then respond
         reply_text = ""
         tool_notes: list[str] = []
+        interactive_payload: dict | None = None
         max_rounds = 3
         for _ in range(max_rounds):
             response = await self.intelligence.complete(
@@ -184,6 +216,8 @@ class TutorService:
                     tc_id = tc.get("id") or str(uuid4())
                     outcome = await execute_tool(self.session, name, args, tool_ctx)
                     tool_notes.append(f"{name}:{outcome.get('ok')}")
+                    if name == "present_choices" and outcome.get("ok"):
+                        interactive_payload = outcome
                     llm_messages.append(
                         ChatMessage(
                             role="tool",
@@ -254,6 +288,7 @@ class TutorService:
             "delivery_id": str(delivery_id) if delivery_id else None,
             "memories_used": len(relevant_memories),
             "tools": tool_notes,
+            "interactive": interactive_payload,
         }
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:

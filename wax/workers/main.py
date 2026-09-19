@@ -44,6 +44,7 @@ async def process_message_response(session, work: Work) -> None:
             "reply_preview": (result.get("reply") or "")[:400],
             "memories_used": result.get("memories_used", 0),
             "tools": result.get("tools") or [],
+            "interactive": result.get("interactive"),
         }
         await session.flush()
         logger.info(
@@ -107,8 +108,13 @@ async def _attempt_deliveries(session, work_id) -> None:
     result = await session.execute(stmt)
     for delivery in result.scalars().all():
         try:
+            wrow = await session.get(Work, work_id)
+            interactive = (wrow.result_payload or {}).get("interactive") if wrow else None
             outcome = await channel_deliver(
-                delivery.channel, delivery.target_external_id, delivery.content
+                delivery.channel,
+                delivery.target_external_id,
+                delivery.content,
+                interactive=interactive,
             )
             if outcome.get("status") in ("ok", "skipped"):
                 delivery.status = "delivered"
