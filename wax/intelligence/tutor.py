@@ -23,6 +23,7 @@ from wax.intelligence.providers import (
 )
 from wax.memory.service import MemoryService
 from wax.intelligence.session_continuity import SessionContinuityService
+from wax.memory.observations import ObservationService
 from wax.observability.logging import get_logger
 from wax.tools.registry import execute_tool
 from wax.delivery.presentation import InteractiveChoice, PresentableResponse
@@ -258,6 +259,49 @@ AVAILABLE_TOOLS = [
             "required": ["reason", "hours_from_now"],
         },
     ),
+
+    ToolSpec(
+        name="start_activity",
+        description="Start a durable activity (practice, assessment, timed session). Survives disconnects. Not a fixed quiz mode.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "objective": {"type": "string"},
+                "duration_minutes": {"type": "number"},
+                "notes": {"type": "string"},
+            },
+            "required": ["kind", "objective"],
+        },
+    ),
+    ToolSpec(
+        name="complete_activity",
+        description="Mark a durable activity completed with optional outcome.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string"},
+                "outcome": {"type": "object"},
+            },
+            "required": ["activity_id"],
+        },
+    ),
+    ToolSpec(
+        name="update_concept_state",
+        description="Update evidence about how well the learner understands a concept (open graph, not fixed curriculum).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "concept": {"type": "string"},
+                "mastery_delta": {"type": "number"},
+                "status": {"type": "string"},
+                "note": {"type": "string"},
+                "related_concept": {"type": "string"},
+                "relation_type": {"type": "string"},
+            },
+            "required": ["concept"],
+        },
+    ),
 ]
 
 
@@ -429,6 +473,18 @@ class TutorService:
                 ],
                 source_work_id=work.id,
             )
+
+            try:
+                await ObservationService(self.session).record(
+                    principal_id=principal_id,
+                    kind="tutor_turn",
+                    content=(user_text[:200] + " → " + reply_text[:200]),
+                    weight=0.4,
+                    conversation_id=conversation_id,
+                    work_id=work.id,
+                )
+            except Exception:
+                pass
             try:
                 await SessionContinuityService(self.session).maybe_digest(
                     principal_id=principal_id,

@@ -288,6 +288,14 @@ class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     embedding: Mapped[Optional[list[float]]] = mapped_column(JSONB, nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    last_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    validity_status: Mapped[str] = mapped_column(
+        String(40), default="active"
+    )  # active | historical | uncertain | expired | superseded | contradicted
+    contradiction_of_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
     principal: Mapped["Principal"] = relationship(back_populates="memories")
@@ -392,4 +400,147 @@ class ScheduledAction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     executed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Concept(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Node in a dynamic knowledge graph — not a hardcoded curriculum tree.
+    Concepts emerge from interaction and knowledge sources.
+    """
+
+    __tablename__ = "concepts"
+    __table_args__ = (
+        Index("ix_concept_key", "key", unique=True),
+        Index("ix_concept_domain", "domain_key"),
+    )
+
+    key: Mapped[str] = mapped_column(String(500), nullable=False)
+    label: Mapped[str] = mapped_column(String(500), nullable=False)
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    domain_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class ConceptRelation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Edges: prerequisite_of, related_to, example_of, depends_on,
+    commonly_confused_with, demonstrated_by, etc. — open vocabulary.
+    """
+
+    __tablename__ = "concept_relations"
+    __table_args__ = (
+        Index("ix_crel_from", "from_concept_id"),
+        Index("ix_crel_to", "to_concept_id"),
+        Index("ix_crel_type", "relation_type"),
+    )
+
+    from_concept_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False
+    )
+    to_concept_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False
+    )
+    relation_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    strength: Mapped[float] = mapped_column(Float, default=0.5)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class LearnerConceptState(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Personalized knowledge-graph state for one person against one concept.
+    mastery is hypothesis + evidence, not a permanent label.
+    """
+
+    __tablename__ = "learner_concept_states"
+    __table_args__ = (
+        Index("ix_lcs_principal", "principal_id"),
+        Index("ix_lcs_concept", "concept_id"),
+        Index("ix_lcs_principal_concept", "principal_id", "concept_id", unique=True),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    concept_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("concepts.id", ondelete="CASCADE"), nullable=False
+    )
+    # open status strings: unfamiliar | partial | theoretical | applied | mastered | rusty | ...
+    status: Mapped[str] = mapped_column(String(40), default="unfamiliar")
+    mastery: Mapped[float] = mapped_column(Float, default=0.0)
+    confidence: Mapped[float] = mapped_column(Float, default=0.2)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    last_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Activity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Durable learning activity (assessment, practice session, long task).
+    General — not QuizMode. State survives disconnects and restarts.
+    """
+
+    __tablename__ = "activities"
+    __table_args__ = (
+        Index("ix_activity_principal", "principal_id"),
+        Index("ix_activity_status", "status"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)  # assessment | practice | session | other
+    objective: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="active")
+    # queued | active | waiting | paused | completed | failed | cancelled | expired
+    started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    expected_duration_seconds: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    content: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    progress: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    outcome: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Observation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Raw observations from interactions — not all become durable memories.
+    Feeds consolidation and learner-understanding updates.
+    """
+
+    __tablename__ = "observations"
+    __table_args__ = (
+        Index("ix_obs_principal", "principal_id"),
+        Index("ix_obs_kind", "kind"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    weight: Mapped[float] = mapped_column(Float, default=0.5)
+    promoted_to_memory: Mapped[bool] = mapped_column(Boolean, default=False)
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")

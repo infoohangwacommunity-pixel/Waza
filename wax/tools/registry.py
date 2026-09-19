@@ -506,3 +506,82 @@ async def handle_schedule_continuous(
 HANDLERS["write_workspace_file"] = handle_write_workspace_file
 HANDLERS["read_workspace_file"] = handle_read_workspace_file
 HANDLERS["schedule_continuous"] = handle_schedule_continuous
+
+
+async def handle_start_activity(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.work.activities import ActivityService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    duration = args.get("duration_seconds") or args.get("duration_minutes")
+    if duration is not None and args.get("duration_minutes") and not args.get("duration_seconds"):
+        duration = int(float(args["duration_minutes"]) * 60)
+    elif duration is not None:
+        duration = int(float(duration))
+    act = await ActivityService(session).start(
+        principal_id=principal_id,
+        kind=(args.get("kind") or "practice")[:80],
+        objective=args.get("objective"),
+        duration_seconds=duration,
+        content={"items": args.get("items") or [], "notes": args.get("notes")},
+        conversation_id=ctx.get("conversation_id"),
+        work_id=ctx.get("work_id"),
+    )
+    return {
+        "ok": True,
+        "activity_id": str(act.id),
+        "kind": act.kind,
+        "status": act.status,
+        "ends_at": act.ends_at.isoformat() if act.ends_at else None,
+    }
+
+
+async def handle_complete_activity(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.work.activities import ActivityService
+
+    aid = args.get("activity_id")
+    if not aid:
+        return {"ok": False, "error": "activity_id_required"}
+    act = await ActivityService(session).complete(aid, outcome=args.get("outcome") or {})
+    if not act:
+        return {"ok": False, "error": "not_found"}
+    return {"ok": True, "activity_id": str(act.id), "status": act.status}
+
+
+async def handle_update_concept_state(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.knowledge.graph import KnowledgeGraphService
+
+    principal_id = ctx.get("principal_id")
+    label = args.get("concept") or args.get("concept_label")
+    if not principal_id or not label:
+        return {"ok": False, "error": "concept_required"}
+    kg = KnowledgeGraphService(session)
+    state = await kg.update_learner_state(
+        principal_id,
+        label,
+        mastery_delta=float(args.get("mastery_delta") or 0.0),
+        status=args.get("status"),
+        note=args.get("note"),
+        evidence_item={"source": "tutor_tool"},
+    )
+    if args.get("related_concept") and args.get("relation_type"):
+        await kg.relate(label, args["related_concept"], args["relation_type"])
+    return {
+        "ok": True,
+        "concept": label,
+        "mastery": state.mastery,
+        "status": state.status,
+        "confidence": state.confidence,
+    }
+
+
+HANDLERS["start_activity"] = handle_start_activity
+HANDLERS["complete_activity"] = handle_complete_activity
+HANDLERS["update_concept_state"] = handle_update_concept_state

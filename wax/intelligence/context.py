@@ -76,13 +76,14 @@ class ContextAssembler:
 
         learning_block = await self._learning_snapshot(principal_id)
         goals_block = await self._active_goals(principal_id)
+        knowledge_block = await self._knowledge_snapshot(principal_id)
         recent = await self._recent_messages(conversation_id, limit=18)
         summary_block = await self._conversation_summary(conversation_id)
 
         assembled = AssembledContext(
             system_prefix=system_prefix,
             memory_block=memory_block + summary_block,
-            learning_block=learning_block,
+            learning_block=learning_block + knowledge_block,
             goals_block=goals_block,
             recent_messages=recent,
             memories_used=memories_used,
