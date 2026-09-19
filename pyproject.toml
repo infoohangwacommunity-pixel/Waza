@@ -1,40 +1,29 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.build_meta"
-
 [project]
 name = "wax-prep"
-version = "0.1.0"
-description = "WAX Prep — The tutor that actually knows you"
+version = "0.2.0"
+description = "WAX Prep — the tutor that actually knows you"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.110",
-    "uvicorn[standard]>=0.27",
-    "sqlalchemy[asyncio]>=2.0",
-    "alembic>=1.13",
-    "asyncpg>=0.29",
-    "psycopg2-binary>=2.9",
-    "pydantic>=2.6",
-    "pydantic-settings>=2.2",
-    "httpx>=0.27",
-    "python-multipart>=0.0.9",
-    "structlog>=24.1",
-    "tenacity>=8.2",
-    "orjson>=3.9",
-    "greenlet>=3.0",
-    "python-dotenv>=1.0",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "sqlalchemy[asyncio]>=2.0",
+  "asyncpg>=0.29",
+  "alembic>=1.13",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  "httpx>=0.27",
+  "tenacity>=8.2",
+  "structlog>=24.1",
+  "python-multipart>=0.0.9",
 ]
-
-[project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
 
 [project.scripts]
 wax-api = "wax.api.main:run"
 wax-worker = "wax.workers.main:run"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["wax*"]
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
 
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+[tool.setuptools.packages.find]
+include = ["wax*"]

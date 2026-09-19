@@ -77,14 +77,21 @@ async def whatsapp_verify(request: Request) -> Response:
 @app.post("/webhooks/whatsapp")
 async def whatsapp_inbound(request: Request) -> JSONResponse:
     from wax.messaging.whatsapp.handler import handle_whatsapp_webhook
+    from wax.security.webhooks import verify_whatsapp_signature
 
     body = await request.body()
     headers = dict(request.headers)
+    if settings.webhook_signature_required and settings.whatsapp_app_secret:
+        sig = headers.get("x-hub-signature-256") or headers.get("X-Hub-Signature-256")
+        if not verify_whatsapp_signature(settings.whatsapp_app_secret, body, sig):
+            logger.warning("whatsapp_signature_invalid")
+            return JSONResponse(content={"status": "invalid_signature"}, status_code=403)
     try:
         result = await handle_whatsapp_webhook(body, headers)
         return JSONResponse(content=result, status_code=200)
     except Exception as e:
         logger.error("whatsapp_webhook_error", error=str(e))
+        # Always 200 to WhatsApp after accept-path errors to avoid endless retries on our bugs
         return JSONResponse(content={"status": "error"}, status_code=200)
 
 

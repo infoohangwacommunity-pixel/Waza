@@ -14,6 +14,11 @@ from wax.db.models import (
     Goal,
     Artifact,
     ScheduledAction,
+    Concept,
+    ConceptRelation,
+    LearnerConceptState,
+    Activity,
+    Observation,
 )
 from wax.db.session import get_engine, get_session_factory, session_scope
 
@@ -36,6 +41,11 @@ __all__ = [
     "Goal",
     "Artifact",
     "ScheduledAction",
+    "Concept",
+    "ConceptRelation",
+    "LearnerConceptState",
+    "Activity",
+    "Observation",
     "get_engine",
     "get_session_factory",
     "session_scope",

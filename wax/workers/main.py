@@ -72,27 +72,49 @@ async def process_message_response(session, work: Work) -> None:
 
 
 async def process_scheduled_action(session, work: Work) -> None:
-    """Scheduled follow-ups still go through intelligence when useful."""
+    """Scheduled follow-ups go through intelligence, then durable delivery."""
+    from uuid import UUID
     from wax.scheduler.service import SchedulerService
+    from wax.domain.identity import primary_channel_target
+    from wax.db.models import ScheduledAction, Delivery
+
     tutor = TutorService(session)
     try:
         result = await tutor.handle_scheduled_action(work)
+        reply = (result.get("reply") or "").strip()
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
-        work.result_payload = {"reply_preview": (result.get("reply") or "")[:400]}
-        # Create delivery if we know a channel target from principal identities later;
-        # for now complete the work and mark related scheduled action done.
+        work.result_payload = {"reply_preview": reply[:400]}
+
         action_id = (work.input_payload or {}).get("scheduled_action_id")
         if action_id:
-            from wax.db.models import ScheduledAction
-            from uuid import UUID
             try:
                 action = await session.get(ScheduledAction, UUID(str(action_id)))
             except Exception:
                 action = await session.get(ScheduledAction, action_id)
             if action:
-                sched = SchedulerService(session)
-                await sched.complete(action, result={"reply": result.get("reply")})
+                await SchedulerService(session).complete(
+                    action, result={"reply": reply}
+                )
+
+        if work.principal_id and reply:
+            target = await primary_channel_target(session, work.principal_id)
+            if target:
+                channel, external_id = target
+                delivery = Delivery(
+                    id=uuid4(),
+                    work_id=work.id,
+                    principal_id=work.principal_id,
+                    channel=channel,
+                    target_external_id=external_id,
+                    content=reply,
+                    status="pending",
+                    idempotency_key=f"sched-delivery:{work.id}",
+                )
+                session.add(delivery)
+                await session.flush()
+                await _attempt_deliveries(session, work.id)
+
         await session.flush()
         logger.info("scheduled_action_completed", work_id=str(work.id))
     except Exception as e:
@@ -223,6 +245,22 @@ async def recovery_loop() -> None:
                     await sched.mark_executing(action)
                     await sched.create_work_for_action(action)
                     logger.info("scheduled_action_enqueued", action_id=str(action.id))
+                # Expire timed activities that ran out
+                try:
+                    from wax.db.models import Activity
+                    now = datetime.now(timezone.utc)
+                    exp = await session.execute(
+                        select(Activity).where(
+                            Activity.status == "active",
+                            Activity.ends_at.is_not(None),
+                            Activity.ends_at < now,
+                        ).limit(20)
+                    )
+                    for act in exp.scalars().all():
+                        act.status = "expired"
+                    await session.flush()
+                except Exception:
+                    logger.exception("activity_expiry_error")
                 # Delivery retries
                 retried = await DeliveryRetryService(session).process_batch(limit=10)
                 if retried:

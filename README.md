@@ -2,56 +2,48 @@
 
 **The tutor that actually knows you.**
 
-Persistent adaptive tutoring over **WhatsApp** and **Telegram**.
+Persistent adaptive tutoring on **WhatsApp** and **Telegram**.
 
-## Philosophy
+## What this is
 
-- No hardcoded subjects, exams, or quiz modes
-- Intelligence decides; software provides durable mechanisms
-- Memory evolves with the learner
-- Terminal is the AI workspace (media on disk, local inspect first)
-- No internal cost counters that refuse to help
+A person messages WAX. WAX learns who they are as a learner over time, remembers what matters, and helps them move forward.
 
-## Quick start (developer)
+No subject menus. No exam modes. No built-in curriculum library.  
+Materials come from the learner (chat, photos, uploads) or are created together in conversation.
+
+## Run
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
-# edit .env — set DATABASE_URL and PRIMARY_API_KEY
+cp .env.example .env   # set DATABASE_URL, PRIMARY_API_KEY, WhatsApp and/or Telegram
 
-# migrate
-alembic upgrade head
+# schema
+python scripts/bootstrap_db.py
+# or: alembic upgrade head
 
-# API (webhooks)
+# terminal 1 — webhooks
 uvicorn wax.api.main:app --host 0.0.0.0 --port 8000
 
-# worker (tutor + delivery + scheduler)
+# terminal 2 — tutor worker
 python -m wax.workers.main
 ```
 
+Point WhatsApp / Telegram webhooks at:
+
+- `POST /webhooks/whatsapp`
+- `POST /webhooks/telegram`
+
+Health: `GET /health` · `GET /ready` · `GET /health/detail`
+
 ## Architecture (short)
 
-1. Webhook accepts message fast (idempotent)
-2. Durable `Work` is queued
-3. Worker claims work
-4. Context assembler loads memories / goals / recent turns
-5. Tutor model reasons (+ tools)
-6. Delivery to WhatsApp/Telegram (chunked, optional buttons)
-7. Memory extraction runs isolated after the reply
+Webhook accepts fast → durable Work → worker runs tutor (memory + tools) → delivery → memory extract.
 
-### Media path
+See `docs/architecture.md` and `docs/BLUEPRINT_ALIGNMENT.md`.
 
-Photo/audio/video → download to workspace → `inspect_media` (OCR/ffprobe/pdf) → optional `describe_image` only if needed.
+## Philosophy
 
-## Channels
-
-- WhatsApp Cloud API (typing, reply buttons, lists, media)
-- Telegram Bot API (typing, keyboards, media)
-
-## Safety
-
-- Webhook signature verification
-- Terminal allowlist + path bounds
-- Secrets never passed into terminal env
-- Delivery retries without losing completed tutoring work
+Deterministic software guarantees reality (DB, queue, delivery).  
+Intelligence interprets and decides.  
+Memory is the product continuity — not a chatbot history dump.
