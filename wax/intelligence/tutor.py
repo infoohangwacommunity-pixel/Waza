@@ -53,7 +53,7 @@ Respond as a real tutor who is actually paying attention to this person.
 AVAILABLE_TOOLS = [
     ToolSpec(
         name="schedule_followup",
-        description="Schedule a future follow-up for this learner when a later action would help.",
+        description="Schedule a future follow-up when a later check-in would help this person.",
         parameters={
             "type": "object",
             "properties": {
@@ -65,8 +65,21 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="schedule_continuous",
+        description="Schedule several future follow-ups (e.g. over a few days). Use only when the person wants ongoing support.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "message_hint": {"type": "string"},
+                "hours_from_now": {"type": "array", "items": {"type": "number"}},
+            },
+            "required": ["reason", "hours_from_now"],
+        },
+    ),
+    ToolSpec(
         name="create_artifact",
-        description="Create a durable artifact (notes, practice, summary, guide) the learner can return to.",
+        description="Save notes or practice the two of you created together so they can return to it later.",
         parameters={
             "type": "object",
             "properties": {
@@ -78,144 +91,31 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
-        name="run_python",
-        description="Run a short Python snippet for calculation, generation, or analysis. Prefer small, focused code.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string", "description": "Python source to execute"},
-            },
-            "required": ["code"],
-        },
-    ),
-
-    ToolSpec(
-        name="forget_memory",
-        description="Deactivate a specific memory when the learner asks to forget something.",
-        parameters={"type": "object", "properties": {"memory_id": {"type": "string"}}, "required": ["memory_id"]},
-    ),
-    ToolSpec(
-        name="inspect_memories",
-        description="List what is currently remembered about this learner (for transparency when they ask).",
-        parameters={"type": "object", "properties": {"limit": {"type": "number"}}, "required": []},
-    ),
-    ToolSpec(
-        name="manage_goal",
-        description="Create or update a goal this person stated or implied.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "goal_id": {"type": "string"},
-                "priority": {"type": "number"},
-            },
-            "required": ["action"],
-        },
-    ),
-
-        name="present_choices",
-        description=(
-            "Offer the learner a small set of clear choices as interactive buttons (or a list). "
-            "Use only when a genuine choice helps (e.g. Continue / Try another way / I'm done). "
-            "Do NOT use for every message. Do NOT build rigid menus. Max 3 for buttons, more for list."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "style": {"type": "string", "description": "buttons or list"},
-                "prompt": {"type": "string", "description": "Optional short prompt for the interactive bubble"},
-                "list_button_label": {"type": "string"},
-                "choices": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "title": {"type": "string"},
-                            "description": {"type": "string"},
-                        },
-                    },
-                },
-            },
-            "required": ["choices"],
-        },
-    ),
-
-    ToolSpec(
-        name="fetch_inbound_media",
-        description="Download a WhatsApp/Telegram media file into the local AI workspace. Prefer this over multimodal APIs when local inspection is enough.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "channel": {"type": "string"},
-                "media_id": {"type": "string"},
-                "filename": {"type": "string"},
-            },
-            "required": ["channel", "media_id"],
-        },
-    ),
-    ToolSpec(
-        name="list_workspace",
-        description="List files in the learner workspace (default subdir: media).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "subdir": {"type": "string"},
-                "limit": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="inspect_media",
-        description="Locally inspect a file path (type, dimensions, OCR for images, ffprobe for AV, text extract for PDF). Prefer this before expensive multimodal model calls.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="workspace_command",
-        description="Run one allowed command inside the workspace (file, ffprobe, tesseract, python3, etc.).",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-    ),
-
-    ToolSpec(
-        name="describe_image",
-        description="Multimodal model description of a local image path. Use ONLY if inspect_media/OCR was insufficient.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "question": {"type": "string"},
-            },
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
         name="list_artifacts",
-        description="List durable artifacts previously created for this learner.",
+        description="List artifacts previously saved for this person.",
         parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
     ),
     ToolSpec(
         name="read_artifact",
-        description="Read the content of a previously created artifact by id.",
+        description="Read a saved artifact by id.",
         parameters={
             "type": "object",
             "properties": {"artifact_id": {"type": "string"}},
             "required": ["artifact_id"],
         },
     ),
-
+    ToolSpec(
+        name="run_python",
+        description="Run a short Python snippet when calculation or generation helps.",
+        parameters={
+            "type": "object",
+            "properties": {"code": {"type": "string"}},
+            "required": ["code"],
+        },
+    ),
     ToolSpec(
         name="write_workspace_file",
-        description="Write a text/code file into the local AI workspace so you can build multi-step work.",
+        description="Write a file in the workspace for multi-step work.",
         parameters={
             "type": "object",
             "properties": {
@@ -228,7 +128,7 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="read_workspace_file",
-        description="Read a file previously written in the workspace.",
+        description="Read a file from the workspace.",
         parameters={
             "type": "object",
             "properties": {"path": {"type": "string"}},
@@ -236,26 +136,99 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
-        name="schedule_continuous",
-        description="Schedule multiple future follow-ups (hours from now). Use for reminders or ongoing multi-day help. You decide the cadence — nothing is forced.",
+        name="list_workspace",
+        description="List files in the workspace (default: media).",
+        parameters={
+            "type": "object",
+            "properties": {"subdir": {"type": "string"}, "limit": {"type": "number"}},
+        },
+    ),
+    ToolSpec(
+        name="fetch_inbound_media",
+        description="Download media the learner sent into the workspace.",
         parameters={
             "type": "object",
             "properties": {
-                "reason": {"type": "string"},
-                "message_hint": {"type": "string"},
-                "hours_from_now": {
-                    "type": "array",
-                    "items": {"type": "number"},
-                    "description": "e.g. [24, 48, 72] for three daily follow-ups",
-                },
+                "channel": {"type": "string"},
+                "media_id": {"type": "string"},
+                "filename": {"type": "string"},
             },
-            "required": ["reason", "hours_from_now"],
+            "required": ["channel", "media_id"],
         },
     ),
-
+    ToolSpec(
+        name="inspect_media",
+        description="Inspect a local media file (type, OCR, etc.) when the learner sent a photo or document.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="workspace_command",
+        description="Run one allowed command in the workspace.",
+        parameters={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
+        },
+    ),
+    ToolSpec(
+        name="describe_image",
+        description="Optional vision description of a local image — only if simpler inspection is not enough.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "question": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="present_choices",
+        description="Optional quick choices as buttons when a real choice helps. Not a permanent menu.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "style": {"type": "string"},
+                "prompt": {"type": "string"},
+                "list_button_label": {"type": "string"},
+                "choices": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["choices"],
+        },
+    ),
+    ToolSpec(
+        name="forget_memory",
+        description="Forget something when the learner asks.",
+        parameters={
+            "type": "object",
+            "properties": {"memory_id": {"type": "string"}},
+            "required": ["memory_id"],
+        },
+    ),
+    ToolSpec(
+        name="inspect_memories",
+        description="Show what is remembered when the learner asks.",
+        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
+    ),
+    ToolSpec(
+        name="manage_goal",
+        description="Track a goal this person stated or implied.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "goal_id": {"type": "string"},
+                "priority": {"type": "number"},
+            },
+            "required": ["action"],
+        },
+    ),
     ToolSpec(
         name="start_activity",
-        description="Start a durable activity (practice, assessment, timed session). Survives disconnects. Not a fixed quiz mode.",
+        description="Start a durable practice or timed session if useful — not a fixed course mode.",
         parameters={
             "type": "object",
             "properties": {
@@ -269,7 +242,7 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="complete_activity",
-        description="Mark a durable activity completed with optional outcome.",
+        description="Complete a durable activity.",
         parameters={
             "type": "object",
             "properties": {
@@ -281,7 +254,7 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="update_concept_state",
-        description="Optionally record evidence about a concept this person is working on — only from their interaction, not from a content library.",
+        description="Optionally note how this person is doing with a concept they are working on.",
         parameters={
             "type": "object",
             "properties": {
@@ -296,6 +269,7 @@ AVAILABLE_TOOLS = [
         },
     ),
 ]
+
 
 
 class TutorService:
