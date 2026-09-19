@@ -429,37 +429,29 @@ class TutorService:
             await self.session.flush()
             delivery_id = delivery.id
 
+        # Memory is durable Work — never blocks learner response latency
         if principal_id:
-            await self.memory.extract_and_store(
-                principal_id=principal_id,
-                conversation_id=str(conversation_id) if conversation_id else None,
-                recent_messages=recent
-                + [
-                    {"role": "user", "content": user_text},
-                    {"role": "assistant", "content": reply_text},
-                ],
-                source_work_id=work.id,
-            )
-
             try:
-                await ObservationService(self.session).record(
-                    principal_id=principal_id,
-                    kind="tutor_turn",
-                    content=(user_text[:200] + " → " + reply_text[:200]),
-                    weight=0.4,
-                    conversation_id=conversation_id,
-                    work_id=work.id,
-                )
-            except Exception:
-                pass
-            try:
-                await SessionContinuityService(self.session).maybe_digest(
+                mem_work = Work(
+                    id=uuid4(),
                     principal_id=principal_id,
                     conversation_id=conversation_id,
-                    every_n=20,
+                    kind="memory_process",
+                    status="queued",
+                    priority=80,
+                    objective="Post-turn memory extraction and continuity",
+                    input_payload={
+                        "source_work_id": str(work.id),
+                        "conversation_id": str(conversation_id) if conversation_id else None,
+                        "user_text": user_text[:2000],
+                        "reply_text": reply_text[:2000],
+                        "recent": recent[-8:] if recent else [],
+                    },
                 )
+                self.session.add(mem_work)
+                await self.session.flush()
             except Exception:
-                pass
+                logger.exception("memory_work_enqueue_failed")
 
         return {
             "reply": reply_text,

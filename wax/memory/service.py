@@ -401,6 +401,51 @@ class MemoryService:
                     pass
             return {}
 
+    
+    async def _find_similar_memory(self, principal_id, content: str, memory_type: str):
+        """Dedup before insert — reinforce instead of duplicate."""
+        from sqlalchemy import select
+        from wax.db.models import Memory
+        from wax.memory.embeddings import embed_one, cosine_similarity
+        stmt = (
+            select(Memory)
+            .where(
+                Memory.principal_id == principal_id,
+                Memory.is_active.is_(True),
+                Memory.memory_type == memory_type,
+            )
+            .order_by(Memory.updated_at.desc())
+            .limit(30)
+        )
+        result = await self.session.execute(stmt)
+        candidates = list(result.scalars().all())
+        content_l = (content or "").lower().strip()
+        for m in candidates:
+            if (m.content or "").lower().strip() == content_l:
+                return m
+            # simple token overlap
+            a = set(content_l.split())
+            b = set((m.content or "").lower().split())
+            if a and b and len(a & b) / max(1, len(a | b)) > 0.72:
+                return m
+        # embedding similarity if available
+        try:
+            qv = await embed_one(content)
+            if qv:
+                best = None
+                best_sim = 0.88
+                for m in candidates:
+                    if m.embedding:
+                        sim = cosine_similarity(qv, list(m.embedding))
+                        if sim > best_sim:
+                            best_sim = sim
+                            best = m
+                if best:
+                    return best
+        except Exception:
+            pass
+        return None
+
     async def _store_memory(
         self,
         principal_id,
@@ -436,6 +481,16 @@ class MemoryService:
             expires_at=expires_at,
             tags=item.get("tags") or [],
         )
+        memory_type = item.get("memory_type", "semantic")
+        importance = float(item.get("importance", 0.5))
+        similar = await self._find_similar_memory(principal_id, content, memory_type)
+        if similar:
+            similar.confidence = min(1.0, (similar.confidence or 0.5) + 0.05)
+            similar.importance = max(similar.importance or 0.5, importance)
+            similar.evidence = list(similar.evidence or []) + [{"kind": "reinforcement"}]
+            similar.last_observed_at = datetime.now(timezone.utc)
+            await self.session.flush()
+            return similar
         self.session.add(mem)
         await self.session.flush()
         try:

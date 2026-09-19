@@ -91,3 +91,21 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+def validate_production_settings(settings: Settings | None = None) -> None:
+    """Fail closed when APP_ENV=production and critical config is missing/unsafe."""
+    s = settings or get_settings()
+    if s.app_env != "production":
+        return
+    problems: list[str] = []
+    if not s.secret_key or s.secret_key in ("change-me-in-production", "change-me"):
+        problems.append("SECRET_KEY must be set to a strong value in production")
+    if "localhost" in (s.database_url or "") and "asyncpg" in (s.database_url or ""):
+        # allow if explicitly using remote - only flag pure localhost defaults
+        if s.database_url.endswith("@localhost:5432/wax"):
+            problems.append("DATABASE_URL appears to be the development default")
+    if not s.primary_api_key and s.primary_provider not in ("none", ""):
+        problems.append("PRIMARY_API_KEY is required in production when a provider is configured")
+    if problems:
+        raise RuntimeError("Production configuration invalid: " + "; ".join(problems))

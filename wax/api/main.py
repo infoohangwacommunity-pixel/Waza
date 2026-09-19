@@ -1,7 +1,8 @@
 """
 WAX Prep API — FastAPI application.
 
-Webhook endpoints acknowledge quickly and enqueue durable work.
+Webhook endpoints accept durably and return 200 only when accepted or duplicate.
+Persistence failure → 5xx so providers retry.
 """
 
 from __future__ import annotations
@@ -12,7 +13,7 @@ from typing import Any
 from fastapi import FastAPI, Request, Response, status
 from fastapi.responses import JSONResponse
 
-from wax.config import get_settings
+from wax.config import get_settings, validate_production_settings
 from wax.db.session import get_engine
 from wax.observability.logging import get_logger, setup_logging
 
@@ -23,7 +24,8 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("wax_prep_starting", env=settings.app_env)
+    validate_production_settings(settings)
+    logger.info("wax_prep_starting", env=settings.app_env, version="0.2.0")
     yield
     engine = get_engine()
     await engine.dispose()
@@ -33,14 +35,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="WAX Prep",
     description="The tutor that actually knows you.",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
 
 @app.get("/health")
 async def health() -> dict[str, Any]:
-    return {"status": "ok", "service": "wax-prep", "env": settings.app_env}
+    return {"status": "ok", "service": "wax-prep", "env": settings.app_env, "version": "0.2.0"}
 
 
 @app.get("/ready")
@@ -62,6 +64,25 @@ async def ready() -> JSONResponse:
     return JSONResponse(status_code=code, content={"ready": overall, "checks": checks})
 
 
+@app.get("/health/detail")
+async def health_detail():
+    from wax.terminal.workspace import workspace_root
+
+    root = workspace_root()
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "env": settings.app_env,
+        "version": "0.2.0",
+        "whatsapp_enabled": settings.whatsapp_enabled,
+        "telegram_enabled": settings.telegram_enabled,
+        "terminal_enabled": settings.terminal_enabled,
+        "workspace_root": str(root),
+        "primary_provider": settings.primary_provider,
+        "fallback_provider": settings.fallback_provider,
+    }
+
+
 @app.get("/webhooks/whatsapp")
 async def whatsapp_verify(request: Request) -> Response:
     params = request.query_params
@@ -76,37 +97,36 @@ async def whatsapp_verify(request: Request) -> Response:
 
 @app.post("/webhooks/whatsapp")
 async def whatsapp_inbound(request: Request) -> JSONResponse:
-    from wax.messaging.whatsapp.handler import handle_whatsapp_webhook
-    from wax.security.webhooks import verify_whatsapp_signature
+    from wax.messaging.whatsapp.handler import WebhookAcceptError, handle_whatsapp_webhook
 
     body = await request.body()
     headers = dict(request.headers)
-    if settings.webhook_signature_required and settings.whatsapp_app_secret:
-        sig = headers.get("x-hub-signature-256") or headers.get("X-Hub-Signature-256")
-        if not verify_whatsapp_signature(settings.whatsapp_app_secret, body, sig):
-            logger.warning("whatsapp_signature_invalid")
-            return JSONResponse(content={"status": "invalid_signature"}, status_code=403)
     try:
         result = await handle_whatsapp_webhook(body, headers)
         return JSONResponse(content=result, status_code=200)
+    except WebhookAcceptError as e:
+        logger.warning("whatsapp_accept_error", status=e.status, http=e.http_status)
+        return JSONResponse(content={"status": e.status}, status_code=e.http_status)
     except Exception as e:
         logger.error("whatsapp_webhook_error", error=str(e))
-        # Always 200 to WhatsApp after accept-path errors to avoid endless retries on our bugs
-        return JSONResponse(content={"status": "error"}, status_code=200)
+        return JSONResponse(content={"status": "error"}, status_code=503)
 
 
 @app.post("/webhooks/telegram")
 async def telegram_inbound(request: Request) -> JSONResponse:
-    from wax.messaging.telegram.handler import handle_telegram_webhook
+    from wax.messaging.telegram.handler import WebhookAcceptError, handle_telegram_webhook
 
     body = await request.body()
     headers = dict(request.headers)
     try:
         result = await handle_telegram_webhook(body, headers)
         return JSONResponse(content=result, status_code=200)
+    except WebhookAcceptError as e:
+        logger.warning("telegram_accept_error", status=e.status, http=e.http_status)
+        return JSONResponse(content={"status": e.status}, status_code=e.http_status)
     except Exception as e:
         logger.error("telegram_webhook_error", error=str(e))
-        return JSONResponse(content={"status": "error"}, status_code=200)
+        return JSONResponse(content={"status": "error"}, status_code=503)
 
 
 @app.get("/")
@@ -114,30 +134,11 @@ async def root() -> dict[str, str]:
     return {
         "name": "WAX Prep",
         "motto": "The tutor that actually knows you.",
-        "docs": "/docs",
+        "version": "0.2.0",
     }
 
 
 def run() -> None:
     import uvicorn
+
     uvicorn.run("wax.api.main:app", host="0.0.0.0", port=8000, reload=False)
-
-
-@app.get("/health/detail")
-async def health_detail():
-    from wax.config import get_settings
-    from wax.terminal.workspace import workspace_root
-    s = get_settings()
-    root = workspace_root()
-    return {
-        "status": "ok",
-        "app": s.app_name,
-        "env": s.app_env,
-        "whatsapp_enabled": s.whatsapp_enabled,
-        "telegram_enabled": s.telegram_enabled,
-        "terminal_enabled": s.terminal_enabled,
-        "workspace_root": str(root),
-        "primary_provider": s.primary_provider,
-        "fallback_provider": s.fallback_provider,
-    }
-

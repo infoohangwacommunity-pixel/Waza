@@ -544,3 +544,68 @@ class Observation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     promoted_to_memory: Mapped[bool] = mapped_column(Boolean, default=False)
     structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Misconception(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Evidence-backed incorrect mental model for a specific learner."""
+
+    __tablename__ = "misconceptions"
+    __table_args__ = (
+        Index("ix_misc_principal", "principal_id"),
+        Index("ix_misc_resolved", "principal_id", "resolved"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    concept_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, default=0.4)
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    first_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    resolved: Mapped[bool] = mapped_column(Boolean, default=False)
+    resolution_evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class KnowledgeSource(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Learner-provided material (not product curriculum)."""
+
+    __tablename__ = "knowledge_sources"
+    __table_args__ = (Index("ix_ks_principal", "principal_id"),)
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)  # pdf|image|text|document|other
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    storage_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    content_type: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    status: Mapped[str] = mapped_column(String(40), default="pending")
+    # pending | extracted | ready | failed
+    text_extract: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class DocumentChunk(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Chunk of a learner-owned knowledge source for retrieval."""
+
+    __tablename__ = "document_chunks"
+    __table_args__ = (
+        Index("ix_chunk_source", "knowledge_source_id"),
+        Index("ix_chunk_principal", "principal_id"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    knowledge_source_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("knowledge_sources.id", ondelete="CASCADE"), nullable=False
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[Optional[list[float]]] = mapped_column(JSONB, nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")

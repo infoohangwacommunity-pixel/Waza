@@ -1,4 +1,4 @@
-"""WhatsApp webhook — accept fast, create durable work, return."""
+"""WhatsApp webhook — accept only. No AI, media download, or delivery inside the DB transaction."""
 
 from __future__ import annotations
 
@@ -21,16 +21,25 @@ from wax.db.models import (
     Work,
 )
 from wax.db.session import session_scope
+from wax.messaging.normalization import normalize_whatsapp_message
 from wax.observability.logging import get_logger
-from wax.messaging.whatsapp.client import send_typing_and_read
 
 logger = get_logger(__name__)
 settings = get_settings()
 
 
+class WebhookAcceptError(Exception):
+    """Raised when the event could not be durably accepted."""
+
+    def __init__(self, status: str, http_status: int = 500):
+        self.status = status
+        self.http_status = http_status
+        super().__init__(status)
+
+
 def _verify_signature(body: bytes, signature_header: str | None) -> bool:
     if not settings.whatsapp_app_secret:
-        return True
+        return not settings.webhook_signature_required
     if not signature_header or not signature_header.startswith("sha256="):
         return False
     expected = hmac.new(
@@ -40,134 +49,135 @@ def _verify_signature(body: bytes, signature_header: str | None) -> bool:
 
 
 async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[str, Any]:
+    """
+    RECEIVE → verify → parse → normalize → atomic dedupe → persist → Work → COMMIT.
+    Returns status dict. Raises WebhookAcceptError if durability fails.
+    """
     if settings.webhook_signature_required and not _verify_signature(
         body, headers.get("x-hub-signature-256")
     ):
         logger.warning("whatsapp_invalid_signature")
-        return {"status": "invalid_signature"}
+        raise WebhookAcceptError("invalid_signature", 403)
 
     try:
         payload = json.loads(body)
     except json.JSONDecodeError:
-        return {"status": "invalid_json"}
+        raise WebhookAcceptError("invalid_json", 400)
 
     processed = 0
-    async with session_scope() as session:
-        for entry in payload.get("entry", []):
-            for change in entry.get("changes", []):
-                value = change.get("value", {})
-                contacts = {c.get("wa_id"): c for c in value.get("contacts", [])}
-                for msg in value.get("messages", []):
-                    external_id = msg.get("id")
-                    if not external_id:
-                        continue
+    duplicates = 0
+    try:
+        async with session_scope() as session:
+            for entry in payload.get("entry", []):
+                for change in entry.get("changes", []):
+                    value = change.get("value", {})
+                    contacts = {c.get("wa_id"): c for c in value.get("contacts", [])}
+                    for msg in value.get("messages", []):
+                        external_id = msg.get("id")
+                        if not external_id:
+                            continue
 
-                    stmt = (
-                        insert(InboundEvent)
-                        .values(
-                            id=uuid.uuid4(),
-                            channel="whatsapp",
-                            external_event_id=external_id,
-                            event_type=msg.get("type", "text"),
-                            payload=msg,
-                            processed=False,
+                        stmt = (
+                            insert(InboundEvent)
+                            .values(
+                                id=uuid.uuid4(),
+                                channel="whatsapp",
+                                external_event_id=external_id,
+                                event_type=msg.get("type", "text"),
+                                payload=msg,
+                                processed=False,
+                            )
+                            .on_conflict_do_nothing(
+                                index_elements=["channel", "external_event_id"]
+                            )
+                            .returning(InboundEvent.id)
                         )
-                        .on_conflict_do_nothing(index_elements=["channel", "external_event_id"])
-                        .returning(InboundEvent.id)
-                    )
-                    result = await session.execute(stmt)
-                    inserted = result.scalar_one_or_none()
-                    if not inserted:
-                        logger.info("whatsapp_duplicate_ignored", external_id=external_id)
-                        continue
+                        result = await session.execute(stmt)
+                        inserted = result.scalar_one_or_none()
+                        if not inserted:
+                            duplicates += 1
+                            logger.info("whatsapp_duplicate_ignored", external_id=external_id)
+                            continue
 
-                    wa_id = msg.get("from")
-                    principal, _ = await _resolve_identity(session, wa_id, contacts.get(wa_id))
-                    conversation = await _get_or_create_conversation(session, principal.id, "whatsapp")
+                        wa_id = msg.get("from")
+                        principal, _ = await _resolve_identity(
+                            session, wa_id, contacts.get(wa_id)
+                        )
+                        conversation = await _get_or_create_conversation(
+                            session, principal.id, "whatsapp"
+                        )
 
-                    from wax.messaging.normalization import normalize_whatsapp_message
-                    normalized = normalize_whatsapp_message(msg, contacts)
-                    if normalized:
-                        text = normalized.text
-                        content_type = normalized.content_type
-                        media_id = normalized.media_id
-                        interactive_id = normalized.interactive_id
-                    else:
-                        text = ""
-                        content_type = msg.get("type") or "text"
-                        media_id = None
-                        interactive_id = None
-                        msg_type = msg.get("type")
-                        if msg_type == "text":
-                            text = msg.get("text", {}).get("body", "")
+                        normalized = normalize_whatsapp_message(msg, contacts)
+                        if normalized:
+                            text = normalized.text
+                            content_type = normalized.content_type
+                            media_id = normalized.media_id
+                            interactive_id = normalized.interactive_id
                         else:
-                            text = f"[{msg_type} message]"
+                            content_type = msg.get("type") or "text"
+                            media_id = None
+                            interactive_id = None
+                            if content_type == "text":
+                                text = (msg.get("text") or {}).get("body", "")
+                            else:
+                                text = f"[{content_type} message]"
 
-                    # Eagerly place media in workspace when present (AI still decides how to inspect)
-                    local_media_path = None
-                    if media_id and principal.id:
-                        try:
-                            from wax.messaging.media import fetch_whatsapp_media
-                            fetched = await fetch_whatsapp_media(media_id, principal.id)
-                            if fetched.get("ok"):
-                                local_media_path = fetched.get("path")
-                        except Exception:
-                            local_media_path = None
+                        # Media id recorded only — worker downloads asynchronously
+                        message = Message(
+                            id=uuid.uuid4(),
+                            conversation_id=conversation.id,
+                            principal_id=principal.id,
+                            channel="whatsapp",
+                            direction="inbound",
+                            role="user",
+                            content=text,
+                            external_id=external_id,
+                            metadata_={
+                                "content_type": content_type,
+                                "media_id": media_id,
+                                "interactive_id": interactive_id,
+                            },
+                        )
+                        session.add(message)
 
-                    message = Message(
-                        id=uuid.uuid4(),
-                        conversation_id=conversation.id,
-                        principal_id=principal.id,
-                        channel="whatsapp",
-                        direction="inbound",
-                        role="user",
-                        content=text,
-                        external_id=external_id,
-                        metadata_={
-                            "raw": msg,
-                            "content_type": content_type,
-                            "media_id": media_id,
-                            "local_media_path": local_media_path,
-                            "interactive_id": interactive_id,
-                        },
-                    )
-                    session.add(message)
+                        work = Work(
+                            id=uuid.uuid4(),
+                            principal_id=principal.id,
+                            conversation_id=conversation.id,
+                            kind="message_response",
+                            status="queued",
+                            priority=50,
+                            objective="Respond to inbound WhatsApp message",
+                            input_payload={
+                                "channel": "whatsapp",
+                                "message_id": str(message.id),
+                                "external_id": external_id,
+                                "text": text,
+                                "target_external_id": wa_id,
+                                "content_type": content_type,
+                                "media_id": media_id,
+                                "interactive_id": interactive_id,
+                            },
+                        )
+                        session.add(work)
 
-                    work = Work(
-                        id=uuid.uuid4(),
-                        principal_id=principal.id,
-                        conversation_id=conversation.id,
-                        kind="message_response",
-                        status="queued",
-                        priority=50,
-                        objective="Respond to inbound WhatsApp message",
-                        input_payload={
-                            "channel": "whatsapp",
-                            "message_id": str(message.id),
-                            "external_id": external_id,
-                            "text": text,
-                            "target_external_id": wa_id,
-                            "content_type": content_type,
-                            "media_id": media_id,
-                            "local_media_path": local_media_path,
-                            "interactive_id": interactive_id,
-                        },
-                    )
-                    session.add(work)
+                        event = await session.get(InboundEvent, inserted)
+                        if event:
+                            event.processed = True
+                            event.work_id = work.id
+                        processed += 1
+            # session_scope commits on exit
+    except WebhookAcceptError:
+        raise
+    except Exception as e:
+        logger.exception("whatsapp_accept_failed")
+        raise WebhookAcceptError("persistence_failed", 503) from e
 
-                    event = await session.get(InboundEvent, inserted)
-                    if event:
-                        event.processed = True
-                        event.work_id = work.id
-                    
-                    # Show typing indicator while worker thinks (best-effort)
-                    try:
-                        await send_typing_and_read(external_id)
-                    except Exception:
-                        pass
-                    processed += 1
-
-    return {"status": "ok", "processed": processed}
+    return {
+        "status": "ok",
+        "processed": processed,
+        "duplicates": duplicates,
+    }
 
 
 async def _resolve_identity(session, wa_id: str | None, contact: dict | None):
@@ -183,10 +193,10 @@ async def _resolve_identity(session, wa_id: str | None, contact: dict | None):
         principal = await session.get(Principal, identity.principal_id)
         return principal, identity
 
-    principal = Principal(
-        id=uuid.uuid4(),
-        display_name=(contact or {}).get("profile", {}).get("name"),
-    )
+    name = None
+    if contact:
+        name = (contact.get("profile") or {}).get("name")
+    principal = Principal(id=uuid.uuid4(), display_name=name)
     session.add(principal)
     await session.flush()
     identity = InterfaceIdentity(
@@ -194,7 +204,7 @@ async def _resolve_identity(session, wa_id: str | None, contact: dict | None):
         principal_id=principal.id,
         channel="whatsapp",
         external_id=wa_id,
-        display_name=principal.display_name,
+        display_name=name,
         is_primary=True,
     )
     session.add(identity)
@@ -217,7 +227,9 @@ async def _get_or_create_conversation(session, principal_id, channel: str):
     conv = result.scalar_one_or_none()
     if conv:
         return conv
-    conv = Conversation(id=uuid.uuid4(), principal_id=principal_id, channel=channel, status="active")
+    conv = Conversation(
+        id=uuid.uuid4(), principal_id=principal_id, channel=channel, status="active"
+    )
     session.add(conv)
     await session.flush()
     return conv

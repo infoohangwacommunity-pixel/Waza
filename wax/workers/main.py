@@ -38,6 +38,25 @@ def _handle_signal(*_):
 
 async def process_message_response(session, work: Work) -> None:
     """Full AI tutor path — every learner message passes through intelligence."""
+    # Optional async media fetch before tutor (still outside webhook)
+    payload = work.input_payload or {}
+    if payload.get("media_id") and not payload.get("local_media_path"):
+        try:
+            from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
+            channel = payload.get("channel")
+            if channel == "whatsapp":
+                fetched = await fetch_whatsapp_media(payload["media_id"], work.principal_id)
+            elif channel == "telegram":
+                fetched = await fetch_telegram_media(payload["media_id"], work.principal_id)
+            else:
+                fetched = {}
+            if fetched.get("ok"):
+                payload = {**payload, "local_media_path": fetched.get("path")}
+                work.input_payload = payload
+                await session.flush()
+        except Exception:
+            logger.exception("media_prepare_inline_failed")
+
     tutor = TutorService(session)
     try:
         result = await tutor.handle_message(work)
@@ -69,6 +88,90 @@ async def process_message_response(session, work: Work) -> None:
             work.completed_at = datetime.now(timezone.utc)
         await session.flush()
 
+
+
+
+
+async def process_memory_work(session, work: Work) -> None:
+    """Post-turn memory — never blocks learner-facing reply."""
+    from wax.memory.service import MemoryService
+    from wax.memory.observations import ObservationService
+    from wax.intelligence.session_continuity import SessionContinuityService
+
+    payload = work.input_payload or {}
+    principal_id = work.principal_id
+    conversation_id = payload.get("conversation_id") or work.conversation_id
+    recent = list(payload.get("recent") or [])
+    user_text = payload.get("user_text") or ""
+    reply_text = payload.get("reply_text") or ""
+    recent = recent + [
+        {"role": "user", "content": user_text},
+        {"role": "assistant", "content": reply_text},
+    ]
+    try:
+        if principal_id:
+            await MemoryService(session).extract_and_store(
+                principal_id=principal_id,
+                conversation_id=str(conversation_id) if conversation_id else None,
+                recent_messages=recent,
+                source_work_id=payload.get("source_work_id"),
+            )
+            try:
+                await ObservationService(session).record(
+                    principal_id=principal_id,
+                    kind="tutor_turn",
+                    content=(user_text[:200] + " → " + reply_text[:200]),
+                    weight=0.4,
+                    conversation_id=conversation_id,
+                    work_id=work.id,
+                )
+            except Exception:
+                pass
+            try:
+                await SessionContinuityService(session).maybe_digest(
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                    every_n=20,
+                )
+            except Exception:
+                pass
+        work.status = "completed"
+        work.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+    except Exception as e:
+        logger.exception("memory_work_failed", work_id=str(work.id))
+        work.error = str(e)
+        work.error_class = "memory_failure"
+        work.status = "failed"
+        work.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+
+
+async def process_media_prepare(session, work: Work) -> None:
+    """Async media download into workspace — never in webhook."""
+    from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
+
+    payload = work.input_payload or {}
+    channel = payload.get("channel")
+    media_id = payload.get("media_id")
+    principal_id = work.principal_id
+    try:
+        if channel == "whatsapp" and media_id and principal_id:
+            result = await fetch_whatsapp_media(media_id, principal_id)
+        elif channel == "telegram" and media_id and principal_id:
+            result = await fetch_telegram_media(media_id, principal_id)
+        else:
+            result = {"ok": False, "error": "no_media"}
+        work.status = "completed"
+        work.completed_at = datetime.now(timezone.utc)
+        work.result_payload = result
+        await session.flush()
+    except Exception as e:
+        work.error = str(e)
+        work.error_class = "media_failure"
+        work.status = "failed"
+        work.completed_at = datetime.now(timezone.utc)
+        await session.flush()
 
 
 async def process_scheduled_action(session, work: Work) -> None:
@@ -219,6 +322,10 @@ async def worker_loop(worker_id: str) -> None:
                     continue
                 if work.kind == "message_response":
                     await process_message_response(session, work)
+                elif work.kind == "memory_process":
+                    await process_memory_work(session, work)
+                elif work.kind == "media_prepare":
+                    await process_media_prepare(session, work)
                 elif work.kind == "scheduled_action":
                     await process_scheduled_action(session, work)
                 else:
