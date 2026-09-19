@@ -158,12 +158,11 @@ class EvidenceService:
             hyp.supporting_evidence_ids = list(hyp.supporting_evidence_ids or []) + [
                 str(evidence.id)
             ]
-            hyp.confidence = max(0.0, min(0.99, hyp.confidence + delta))
         else:
             hyp.contradicting_evidence_ids = list(hyp.contradicting_evidence_ids or []) + [
                 str(evidence.id)
             ]
-            hyp.confidence = max(0.0, min(0.99, hyp.confidence - abs(delta)))
+        hyp.confidence = self._apply_odds_update(hyp.confidence, evidence, supports)
 
         hyp.last_updated_at = now
         # Lifecycle transitions
@@ -185,26 +184,40 @@ class EvidenceService:
         return hyp
 
     def _confidence_delta(self, evidence: Evidence, supports: bool = True) -> float:
-        """Bayesian-flavored step — not a mastery score."""
-        base = 0.06 * evidence.weight
-        base *= 0.5 + 0.5 * evidence.directness
-        base *= 0.5 + 0.5 * evidence.independence
-        base *= 0.5 + 0.5 * evidence.specificity
-        if evidence.evidence_type == "explicit":
-            base *= 1.4
-        elif evidence.evidence_type == "independent_success":
-            base *= 1.5
-        elif evidence.evidence_type == "transfer":
-            base *= 1.6
-        elif evidence.evidence_type == "persistence":
-            base *= 1.3
-        elif evidence.evidence_type == "self_report":
-            base *= 0.7
-        elif evidence.evidence_type == "tutor_intervention":
-            base *= 0.5
+        """Likelihood-ratio style step toward Bayesian update (still a heuristic)."""
+        # Likelihood ratio strength from quality signals
+        lr = 1.0 + 0.35 * evidence.weight
+        lr *= 0.6 + 0.4 * evidence.directness
+        lr *= 0.6 + 0.4 * evidence.independence
+        lr *= 0.6 + 0.4 * evidence.specificity
+        type_mult = {
+            "explicit": 1.3,
+            "independent_success": 1.45,
+            "transfer": 1.55,
+            "persistence": 1.25,
+            "demonstration": 1.35,
+            "self_report": 0.75,
+            "tutor_intervention": 0.55,
+            "performance": 1.0,
+        }.get(evidence.evidence_type, 1.0)
+        lr *= type_mult
         if evidence.assistance_level in ("heavily_assisted", "answer_revealed"):
-            base *= 0.4
-        return base if supports else -base
+            lr = 1.0 + (lr - 1.0) * 0.35
+        # Convert LR to additive delta on probability scale around mid confidence
+        # delta ≈ (lr-1)/(lr+1) * scale
+        strength = (lr - 1.0) / (lr + 1.0)
+        delta = 0.18 * strength
+        return delta if supports else -delta
+
+    def _apply_odds_update(self, prior: float, evidence: Evidence, supports: bool) -> float:
+        """Odds-form Bayesian update: posterior = normalize(prior_odds * LR)."""
+        p = max(0.02, min(0.98, prior))
+        odds = p / (1.0 - p)
+        lr = 1.0 + abs(self._confidence_delta(evidence, supports=True)) * 8.0
+        if not supports:
+            lr = 1.0 / max(lr, 1.01)
+        new_odds = odds * lr
+        return max(0.02, min(0.98, new_odds / (1.0 + new_odds)))
 
     def _build_rationale(self, hyp: Hypothesis) -> str:
         s = len(hyp.supporting_evidence_ids or [])

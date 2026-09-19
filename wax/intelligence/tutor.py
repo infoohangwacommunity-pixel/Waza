@@ -268,6 +268,75 @@ AVAILABLE_TOOLS = [
             "required": ["concept"],
         },
     ),
+
+    ToolSpec(
+        name="create_assessment",
+        description="Create a durable practice/assessment (optional timer). Not a fixed quiz mode.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "objective": {"type": "string"},
+                "timed": {"type": "boolean"},
+                "duration_minutes": {"type": "number"},
+                "one_at_a_time": {"type": "boolean"},
+                "items": {"type": "array", "items": {"type": "object"}},
+            },
+            "required": ["title", "items"],
+        },
+    ),
+    ToolSpec(
+        name="submit_assessment_answer",
+        description="Record an assessment answer and advance.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "attempt_id": {"type": "string"},
+                "item_id": {"type": "string"},
+                "response_text": {"type": "string"},
+            },
+            "required": ["attempt_id", "item_id", "response_text"],
+        },
+    ),
+    ToolSpec(
+        name="record_evidence",
+        description="Record observable evidence. Do not invent scores.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "evidence_type": {"type": "string"},
+                "description": {"type": "string"},
+                "claim_key": {"type": "string"},
+                "assistance_level": {"type": "string"},
+                "payload": {"type": "object"},
+                "weight": {"type": "number"},
+            },
+            "required": ["evidence_type", "description"],
+        },
+    ),
+    ToolSpec(
+        name="form_hypothesis",
+        description="Form a candidate hypothesis about the learner (not a fact).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "claim_key": {"type": "string"},
+                "claim": {"type": "string"},
+                "confidence": {"type": "number"},
+                "rationale": {"type": "string"},
+            },
+            "required": ["claim_key", "claim"],
+        },
+    ),
+    ToolSpec(
+        name="why_we_believe",
+        description="Explain the evidence behind a claim about the learner.",
+        parameters={
+            "type": "object",
+            "properties": {"claim_key": {"type": "string"}},
+            "required": ["claim_key"],
+        },
+    ),
 ]
 
 

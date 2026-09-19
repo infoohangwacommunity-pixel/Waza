@@ -165,49 +165,20 @@ class AssessmentService:
                 (item.structured or {}).get("skill_key")
             )
             if not concept:
-                # Derive a soft concept label from prompt, not item UUID
                 concept = "task:" + (item.prompt or "item")[:60].lower().replace(" ", "_")
-            claim = f"concept:{concept}" if not str(concept).startswith("concept:") else str(concept)
-            supports = bool(is_correct) if is_correct is not None else True
-            await EvidenceService(self.session).record(
-                principal_id=attempt.principal_id,
-                evidence_type="performance" if is_correct is not None else "self_report",
-                description=(
-                    f"Assessment on '{concept}': correct={is_correct}; "
-                    f"answer={(response_text or '')[:120]}"
-                ),
-                claim_key=claim,
-                payload={
-                    "supports": supports if is_correct is not None else True,
-                    "item_id": str(item_id),
-                    "concept_key": concept,
-                    "is_correct": is_correct,
-                    "score": score,
-                    "scope": "task",
-                },
-                assistance_level="independent",
-                weight=0.65 if is_correct is not None else 0.4,
-                directness=0.8,
-                independence=0.85,
-                source="assessment",
-                assessment_response_id=resp.id,
-            )
-            # Unify into LearnerConceptState
             try:
-                from wax.knowledge.graph import KnowledgeGraphService
-                delta = 0.08 if is_correct else -0.06
-                if is_correct is None:
-                    delta = 0.0
-                await KnowledgeGraphService(self.session).update_learner_state(
-                    attempt.principal_id,
-                    str(concept).replace("concept:", "")[:200],
-                    mastery_delta=delta,
-                    status=None,
-                    evidence_item={
-                        "source": "assessment",
-                        "is_correct": is_correct,
-                        "response_id": str(resp.id),
-                    },
+                from wax.memory.learning_state import LearningStateService
+                await LearningStateService(self.session).apply_performance(
+                    principal_id=attempt.principal_id,
+                    concept_key=str(concept),
+                    is_correct=is_correct,
+                    assistance_level="independent",
+                    description=(
+                        f"Assessment on '{concept}': correct={is_correct}; "
+                        f"answer={(response_text or '')[:120]}"
+                    ),
+                    source="assessment",
+                    assessment_response_id=resp.id,
                 )
             except Exception:
                 pass
