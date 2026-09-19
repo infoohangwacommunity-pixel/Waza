@@ -97,6 +97,7 @@ async def process_memory_work(session, work: Work) -> None:
     from wax.memory.service import MemoryService
     from wax.memory.observations import ObservationService
     from wax.intelligence.session_continuity import SessionContinuityService
+    from wax.memory.evidence import EvidenceService
 
     payload = work.input_payload or {}
     principal_id = work.principal_id
@@ -117,7 +118,7 @@ async def process_memory_work(session, work: Work) -> None:
                 source_work_id=payload.get("source_work_id"),
             )
             try:
-                await ObservationService(session).record(
+                obs = await ObservationService(session).record(
                     principal_id=principal_id,
                     kind="tutor_turn",
                     content=(user_text[:200] + " → " + reply_text[:200]),
@@ -125,8 +126,37 @@ async def process_memory_work(session, work: Work) -> None:
                     conversation_id=conversation_id,
                     work_id=work.id,
                 )
+                # Selective evidence from explicit learner statements (not every sentence)
+                ev = EvidenceService(session)
+                lower = (user_text or "").lower()
+                if any(x in lower for x in ("i don't understand", "i dont understand", "i'm confused", "i am confused")):
+                    await ev.record(
+                        principal_id=principal_id,
+                        evidence_type="explicit",
+                        description=f"Learner reported difficulty: {user_text[:240]}",
+                        claim_key="signal:reported_difficulty",
+                        payload={"supports": True, "text": user_text[:500]},
+                        assistance_level="unknown",
+                        weight=0.7,
+                        directness=0.9,
+                        source="explicit",
+                        observation_id=getattr(obs, "id", None),
+                        work_id=work.id,
+                    )
+                if any(x in lower for x in ("i prefer", "works better when", "show me", "real-life", "example")):
+                    await ev.record(
+                        principal_id=principal_id,
+                        evidence_type="explicit",
+                        description=f"Possible teaching preference: {user_text[:240]}",
+                        claim_key="preference:teaching_style",
+                        payload={"supports": True, "text": user_text[:500]},
+                        weight=0.6,
+                        source="explicit",
+                        observation_id=getattr(obs, "id", None),
+                        work_id=work.id,
+                    )
             except Exception:
-                pass
+                logger.exception("evidence_extraction_failed")
             try:
                 await SessionContinuityService(session).maybe_digest(
                     principal_id=principal_id,

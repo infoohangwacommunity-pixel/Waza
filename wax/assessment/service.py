@@ -20,6 +20,7 @@ from wax.db.models import (
 )
 from wax.observability.logging import get_logger
 from wax.work.activities import ActivityService
+from wax.memory.evidence import EvidenceService
 
 logger = get_logger(__name__)
 
@@ -158,6 +159,33 @@ class AssessmentService:
         )
         self.session.add(resp)
         await self.session.flush()
+        # Objective performance evidence (not a invented mastery score)
+        try:
+            claim = f"assessment_item:{item_id}"
+            supports = bool(is_correct) if is_correct is not None else True
+            await EvidenceService(self.session).record(
+                principal_id=attempt.principal_id,
+                evidence_type="performance" if is_correct is not None else "self_report",
+                description=(
+                    f"Assessment response: correct={is_correct}; "
+                    f"answer={(response_text or '')[:120]}"
+                ),
+                claim_key=claim,
+                payload={
+                    "supports": supports if is_correct is not None else True,
+                    "item_id": str(item_id),
+                    "is_correct": is_correct,
+                    "score": score,
+                },
+                assistance_level="independent",
+                weight=0.65 if is_correct is not None else 0.4,
+                directness=0.8,
+                independence=0.85,
+                source="assessment",
+                assessment_response_id=resp.id,
+            )
+        except Exception:
+            pass
         return resp
 
     async def complete_attempt(self, attempt_id) -> AssessmentAttempt:

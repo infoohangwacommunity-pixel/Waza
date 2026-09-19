@@ -709,3 +709,94 @@ class AssessmentResponse(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     feedback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Evidence(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Observable basis for a claim — not an AI-invented score.
+
+    Evidence types (open vocabulary, infrastructure taxonomy):
+    explicit | performance | explanation | demonstration | correction |
+    repetition | persistence | transfer | self_report | tutor_intervention |
+    independent_success | behavioral
+    """
+
+    __tablename__ = "evidence"
+    __table_args__ = (
+        Index("ix_evidence_principal", "principal_id"),
+        Index("ix_evidence_kind", "evidence_type"),
+        Index("ix_evidence_claim", "claim_key"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    evidence_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    claim_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    # e.g. "concept:fraction-addition" or "preference:visual-examples"
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    # Objective facts when possible: task, expected, actual, context
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    assistance_level: Mapped[str] = mapped_column(
+        String(40), default="unknown"
+    )  # independent | hint | guided | partially_solved | heavily_assisted | answer_revealed | unknown
+    weight: Mapped[float] = mapped_column(Float, default=0.5)
+    # quality signals
+    directness: Mapped[float] = mapped_column(Float, default=0.5)
+    independence: Mapped[float] = mapped_column(Float, default=0.5)
+    specificity: Mapped[float] = mapped_column(Float, default=0.5)
+    source: Mapped[str] = mapped_column(String(50), default="observed")
+    # explicit | observed | system | assessment
+    observation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("observations.id", ondelete="SET NULL"), nullable=True
+    )
+    message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    assessment_response_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("assessment_responses.id", ondelete="SET NULL"), nullable=True
+    )
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Hypothesis(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    A claim about the learner — never treated as fact until confirmed.
+
+    Lifecycle: candidate → active → confirmed → superseded | contradicted | expired | forgotten
+    """
+
+    __tablename__ = "hypotheses"
+    __table_args__ = (
+        Index("ix_hyp_principal", "principal_id"),
+        Index("ix_hyp_status", "status"),
+        Index("ix_hyp_claim", "claim_key"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    claim_key: Mapped[str] = mapped_column(String(500), nullable=False)
+    claim: Mapped[str] = mapped_column(Text, nullable=False)
+    # Specific claim e.g. "can solve linear equations independently"
+    status: Mapped[str] = mapped_column(String(40), default="candidate")
+    confidence: Mapped[float] = mapped_column(Float, default=0.3)
+    # Why we believe this
+    rationale: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    supporting_evidence_ids: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    contradicting_evidence_ids: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    first_formed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    superseded_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("hypotheses.id", ondelete="SET NULL"), nullable=True
+    )
+    memory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
+    # Linked durable memory only when justified
+    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")

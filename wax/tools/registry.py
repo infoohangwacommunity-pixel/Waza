@@ -676,3 +676,64 @@ async def handle_submit_assessment_answer(
 
 HANDLERS["create_assessment"] = handle_create_assessment
 HANDLERS["submit_assessment_answer"] = handle_submit_assessment_answer
+
+
+async def handle_why_we_believe(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.memory.evidence import EvidenceService
+    principal_id = ctx.get("principal_id")
+    claim_key = args.get("claim_key")
+    if not principal_id or not claim_key:
+        return {"ok": False, "error": "claim_key_required"}
+    return await EvidenceService(session).why_we_believe(principal_id, claim_key)
+
+
+async def handle_record_evidence(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Record objective evidence — never invent a score as evidence."""
+    from wax.memory.evidence import EvidenceService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    ev = await EvidenceService(session).record(
+        principal_id=principal_id,
+        evidence_type=args.get("evidence_type") or "performance",
+        description=args.get("description") or "",
+        claim_key=args.get("claim_key"),
+        payload=args.get("payload") or {},
+        assistance_level=args.get("assistance_level") or "unknown",
+        weight=float(args.get("weight") or 0.5),
+        source=args.get("source") or "observed",
+        work_id=ctx.get("work_id"),
+    )
+    return {"ok": True, "evidence_id": str(ev.id), "claim_key": ev.claim_key}
+
+
+async def handle_form_hypothesis(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.memory.evidence import EvidenceService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    hyp = await EvidenceService(session).form_hypothesis(
+        principal_id=principal_id,
+        claim_key=args.get("claim_key") or "claim:general",
+        claim=args.get("claim") or "",
+        initial_confidence=float(args.get("confidence") or 0.3),
+        rationale=args.get("rationale"),
+    )
+    return {
+        "ok": True,
+        "hypothesis_id": str(hyp.id),
+        "status": hyp.status,
+        "confidence": hyp.confidence,
+        "note": "Hypothesis is candidate/active — not stored as fact until confirmed by evidence",
+    }
+
+
+HANDLERS["why_we_believe"] = handle_why_we_believe
+HANDLERS["record_evidence"] = handle_record_evidence
+HANDLERS["form_hypothesis"] = handle_form_hypothesis
