@@ -90,8 +90,16 @@ class Settings(BaseSettings):
     @field_validator("database_url", mode="before")
     @classmethod
     def normalize_database_url(cls, v: str) -> str:
-        if isinstance(v, str) and v.startswith("postgres://"):
-            return v.replace("postgres://", "postgresql+asyncpg://", 1)
+        """Railway/Heroku provide postgres(ql):// — app + Alembic use asyncpg."""
+        if not isinstance(v, str) or not v:
+            return v
+        # Already has an explicit driver
+        if v.startswith("postgresql+") or v.startswith("postgres+"):
+            return v
+        if v.startswith("postgres://"):
+            return "postgresql+asyncpg://" + v[len("postgres://") :]
+        if v.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + v[len("postgresql://") :]
         return v
 
     @property

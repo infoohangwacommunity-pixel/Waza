@@ -9,7 +9,13 @@ from wax.db.base import Base
 import wax.db.models  # noqa: F401
 
 config = context.config
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+url = get_settings().database_url
+# Ensure async driver for Alembic (Railway URLs are often postgresql:// → psycopg2 by default)
+if url.startswith("postgres://"):
+    url = "postgresql+asyncpg://" + url[len("postgres://"):]
+elif url.startswith("postgresql://"):
+    url = "postgresql+asyncpg://" + url[len("postgresql://"):]
+config.set_main_option("sqlalchemy.url", url)
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 target_metadata = Base.metadata
