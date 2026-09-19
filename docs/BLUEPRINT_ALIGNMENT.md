@@ -1,35 +1,30 @@
 # Blueprint alignment (living)
 
-Checked against the full WAX Prep blueprint. Memory is priority.
+## North star
+Persistent adaptive tutor. Person → understanding → help. No educational hardcoding.
 
-## Present and strong
-- Person-first (Principal), not Student table as center
-- Layered memory: extract, hybrid retrieve, embeddings, confidence, evidence, expire, supersede, forget
-- Memory consolidation (async), isolation on failure
-- Long-session continuity: rolling summary + episodic digests
-- Context assembler (not full history dump)
-- Tutor + memory roles (primary vs smaller model path)
-- WhatsApp/Telegram adapters only own transport
-- Fast webhook accept → durable Work → worker
-- Delivery retries separate from tutoring success
-- Scheduler tutor-decided (not 7pm student rule)
-- Terminal as hands + AI workspace (media local-first)
-- Goals lifecycle, artifacts generic
-- Provider primary/fallback
-- No cost gate on teaching
+## Hard rules from product owner
+- Do **not** control the AI with cold scripts, menus, or forced flows
+- Do **not** ship curriculum, syllabi, or built-in learning content
+- Learning materials come from **the learner** (chat, uploads, photos) or are **created together** in the moment
+- Personal knowledge graph / memory only — never a product content library
 
-## Added in this pass (blueprint gaps)
-- Memory validity_status, last_confirmed_at, last_observed_at, contradiction_of_id
-- Concept + ConceptRelation + LearnerConceptState (personalized knowledge graph)
-- Activity durable states (assessment/practice/session — not QuizMode)
-- Observation table + pipeline (observations ≠ auto-memories)
-- Tools: start/complete activity, update_concept_state
-- Context includes concept understanding snapshot
+## Present
+- Principal (person), not Student-centered schema
+- Layered memory, embeddings, consolidation, long-session digests
+- Natural tutor prompt (no subject/exam modes)
+- WhatsApp / Telegram transport only in adapters
+- Terminal / workspace as open hands
+- Durable activities & goals as mechanisms, not courses
+- Concept state emerges from interaction with **this** person
 
-## Still ahead (build order, not ignored)
-- Richer timed activity interaction loop (question-by-question durable)
-- Knowledge source ingestion (PDFs as artifacts + retrieval)
-- Stronger evidence weighting rules in consolidation
-- Synthetic learner journey tests
-- Voice channel later
-- Object storage for large blobs at scale
+## Explicitly not building
+- Curriculum packs
+- Syllabus databases
+- Stock PDF libraries
+- Subject → chapter trees as product content
+- Forced onboarding questionnaires
+
+## Infrastructure still fair game
+Memory quality, delivery reliability, terminal, scheduling, observability —
+so the AI can work naturally and remember the person.
