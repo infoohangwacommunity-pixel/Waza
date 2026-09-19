@@ -209,9 +209,20 @@ class ContextAssembler:
             f"- [{h['status']}] conf={h['confidence']:.2f}: {h['claim'][:160]}"
             for h in hyps
         ]
+        research_hint = ""
+        try:
+            from wax.memory.research_loop import ResearchLoopService
+            prop = await ResearchLoopService(self.session).propose_next_test(principal_id)
+            if prop:
+                research_hint = (
+                    f"\nOptional next check (do not force): {prop.get('suggestion', '')[:240]}\n"
+                )
+        except Exception:
+            pass
         return (
             "\n--- Current hypotheses about this learner (not facts) ---\n"
             + "\n".join(lines)
+            + research_hint
             + "\nTreat as tentative. Prefer evidence over assumption.\n--- End hypotheses ---\n"
         )
 

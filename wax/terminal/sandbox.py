@@ -2,11 +2,12 @@
 Terminal sandbox — strongest isolation available on the host.
 
 Order of preference:
-1. bubblewrap (bwrap) if installed
-2. unshare network + resource limits
-3. restricted subprocess (allowlist, workspace cwd, scrubbed env)
+1. docker (if WAX_TERMINAL_DOCKER=1 or terminal_require_sandbox + docker present)
+2. bubblewrap (bwrap)
+3. unshare + rlimits (dev only unless require_sandbox is false)
 
 Never inject app secrets into the child environment.
+Multi-tenant: each principal gets a dedicated workspace directory.
 """
 
 from __future__ import annotations
@@ -55,24 +56,16 @@ def _scrub_env(extra: dict[str, str] | None = None) -> dict[str, str]:
     }
     if extra:
         env.update(extra)
-    # Explicitly strip anything secret-like from parent
-    for k in list(os.environ.keys()):
-        lk = k.lower()
-        if any(x in lk for x in ("key", "secret", "token", "password", "credential", "database")):
-            continue  # never copy
     return env
 
 
 def _preexec_limits():
-    """Apply CPU/memory limits in child (best-effort)."""
     try:
-        # CPU seconds
         cpu = int(getattr(settings, "terminal_cpu_seconds", 20) or 20)
         resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
     except Exception:
         pass
     try:
-        # Address space ~512MB default
         mem = int(getattr(settings, "terminal_memory_bytes", 512 * 1024 * 1024) or 512 * 1024 * 1024)
         resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
     except Exception:
@@ -89,6 +82,16 @@ def _preexec_limits():
 
 def _has_bwrap() -> bool:
     return shutil.which("bwrap") is not None
+
+
+def _has_docker() -> bool:
+    return shutil.which("docker") is not None
+
+
+def _want_docker() -> bool:
+    if os.environ.get("WAX_TERMINAL_DOCKER", "").lower() in ("1", "true", "yes"):
+        return True
+    return bool(getattr(settings, "terminal_use_docker", False))
 
 
 async def run_sandboxed(
@@ -108,16 +111,34 @@ async def run_sandboxed(
     max_output = max_output or int(settings.terminal_max_output_bytes)
     cwd.mkdir(parents=True, exist_ok=True)
     env = _scrub_env({"HOME": str(cwd)})
-
     require = bool(getattr(settings, "terminal_require_sandbox", False))
-    if require and not _has_bwrap():
-        return SandboxResult(
-            False, "", "", None, 0,
-            error="sandbox_required_but_bwrap_unavailable",
-            isolation="none",
+
+    # 1) Docker isolation (strong multi-tenant boundary when available)
+    if _want_docker() and _has_docker():
+        image = os.environ.get("WAX_TERMINAL_IMAGE", "python:3.12-slim")
+        # Mount only the principal workspace; no network; drop caps; read-only root
+        docker_argv = [
+            "docker", "run", "--rm",
+            "--network", "none",
+            "--read-only",
+            "--tmpfs", "/tmp:rw,size=64m",
+            "--memory", str(int(getattr(settings, "terminal_memory_bytes", 512 * 1024 * 1024))),
+            "--cpus", "0.5",
+            "--pids-limit", "64",
+            "--security-opt", "no-new-privileges",
+            "--cap-drop", "ALL",
+            "-v", f"{cwd.resolve()}:/workspace:rw",
+            "-w", "/workspace",
+            "-e", "HOME=/workspace",
+            "-e", "LANG=C.UTF-8",
+            image,
+            *argv,
+        ]
+        return await _exec(
+            docker_argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output, isolation="docker"
         )
 
-    # Prefer bubblewrap isolation
+    # 2) bubblewrap
     if _has_bwrap():
         bwrap_argv = [
             "bwrap",
@@ -125,7 +146,6 @@ async def run_sandboxed(
             "--ro-bind", "/bin", "/bin",
             "--ro-bind", "/lib", "/lib",
             "--ro-bind-try", "/lib64", "/lib64",
-            "--ro-bind-try", "/etc/resolv.conf", "/etc/resolv.conf",
             "--bind", str(cwd), str(cwd),
             "--chdir", str(cwd),
             "--unshare-net",
@@ -141,17 +161,21 @@ async def run_sandboxed(
             "--",
             *argv,
         ]
-        return await _exec(bwrap_argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output, isolation="bwrap")
+        return await _exec(
+            bwrap_argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output, isolation="bwrap"
+        )
 
-    # Fallback: restricted subprocess + rlimits
+    if require:
+        return SandboxResult(
+            False, "", "", None, 0,
+            error="sandbox_required_but_unavailable (install bwrap or enable docker)",
+            isolation="none",
+        )
+
+    # 3) Dev fallback: rlimits only
     return await _exec(
-        argv,
-        cwd=cwd,
-        env=env,
-        timeout=timeout,
-        max_output=max_output,
-        isolation="rlimits",
-        preexec=_preexec_limits,
+        argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output,
+        isolation="rlimits", preexec=_preexec_limits,
     )
 
 
@@ -171,10 +195,10 @@ async def _exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd),
-            env=env,
+            cwd=str(cwd) if isolation != "docker" else None,
+            env=env if isolation != "docker" else None,
             limit=max_output,
-            preexec_fn=preexec,
+            preexec_fn=preexec if isolation == "rlimits" else None,
         )
         try:
             stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -191,16 +215,15 @@ async def _exec(
         stdout = (stdout_b or b"")[:max_output].decode("utf-8", errors="replace")
         stderr = (stderr_b or b"")[:max_output].decode("utf-8", errors="replace")
         return SandboxResult(
-            proc.returncode == 0,
-            stdout,
-            stderr,
-            proc.returncode,
+            proc.returncode == 0, stdout, stderr, proc.returncode,
             int((time.monotonic() - start) * 1000),
-            isolation=isolation,
-            cwd=str(cwd),
+            isolation=isolation, cwd=str(cwd),
         )
     except FileNotFoundError as e:
         return SandboxResult(False, "", "", None, 0, error=f"binary_missing:{e}", isolation=isolation)
     except Exception as e:
         logger.exception("sandbox_exec_failed")
-        return SandboxResult(False, "", "", None, int((time.monotonic() - start) * 1000), error=str(e), isolation=isolation)
+        return SandboxResult(
+            False, "", "", None, int((time.monotonic() - start) * 1000),
+            error=str(e), isolation=isolation,
+        )

@@ -49,3 +49,19 @@ Product curriculum, QuizMode/JAMBMode, cost budgets, forced onboarding forms.
 - Optional timer + durable Activity linkage
 - One-at-a-time item flow for WhatsApp/Telegram
 - Still **not** QuizMode / fixed curriculum
+
+## Continued (fbca47d → next)
+
+### Migrations
+- 001/002: `create_all(checkfirst=True)` documented for greenfield
+- 003/004: explicit DDL for evidence/hypotheses/assessments
+- 005: ensure full schema with checkfirst for catch-up installs
+
+### Terminal isolation
+- Prefer docker (`WAX_TERMINAL_DOCKER=1` / `terminal_use_docker`) with `--network none`, `--read-only`, cap-drop, memory/pids limits
+- Then bwrap; rlimits only if sandbox not required
+
+### Research loop
+- `ResearchLoopService`: propose_next_test, schedule_hypothesis_recheck, record_test_outcome
+- Context may surface optional next check (non-forcing)
+- Tools: propose_learning_check, schedule_hypothesis_recheck

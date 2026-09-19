@@ -800,4 +800,39 @@ HANDLERS.update({
     "why_we_believe": handle_why_we_believe,
     "record_evidence": handle_record_evidence,
     "form_hypothesis": handle_form_hypothesis,
+    "propose_learning_check": handle_propose_learning_check,
+    "schedule_hypothesis_recheck": handle_schedule_hypothesis_recheck,
 })
+
+
+async def handle_propose_learning_check(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.memory.research_loop import ResearchLoopService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    prop = await ResearchLoopService(session).propose_next_test(principal_id)
+    return {"ok": True, "proposal": prop}
+
+
+async def handle_schedule_hypothesis_recheck(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.memory.research_loop import ResearchLoopService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    action = await ResearchLoopService(session).schedule_hypothesis_recheck(
+        principal_id=principal_id,
+        hypothesis_id=args.get("hypothesis_id"),
+        delay_hours=float(args.get("delay_hours") or 24),
+        message_hint=args.get("message_hint"),
+    )
+    if not action:
+        return {"ok": False, "error": "could_not_schedule"}
+    return {"ok": True, "scheduled_action_id": str(action.id), "execute_at": action.execute_at.isoformat() if getattr(action, "execute_at", None) else None}
+
+
+HANDLERS["propose_learning_check"] = handle_propose_learning_check
+HANDLERS["schedule_hypothesis_recheck"] = handle_schedule_hypothesis_recheck

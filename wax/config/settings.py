@@ -72,6 +72,7 @@ class Settings(BaseSettings):
     terminal_cpu_seconds: int = 20
     terminal_memory_bytes: int = 536870912
     terminal_require_sandbox: bool = False  # True in production via env
+    terminal_use_docker: bool = False  # prefer docker run --network none
 
     work_poll_interval_seconds: float = 1.0
     work_stale_seconds: int = 300

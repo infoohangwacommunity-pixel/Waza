@@ -337,6 +337,25 @@ AVAILABLE_TOOLS = [
             "required": ["claim_key"],
         },
     ),
+
+    ToolSpec(
+        name="propose_learning_check",
+        description="Suggest a light next check for an uncertain hypothesis about this learner. Do not spam.",
+        parameters={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="schedule_hypothesis_recheck",
+        description="Schedule a durable later re-check of a hypothesis.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "hypothesis_id": {"type": "string"},
+                "delay_hours": {"type": "number"},
+                "message_hint": {"type": "string"},
+            },
+            "required": ["hypothesis_id"],
+        },
+    ),
 ]
 
 
