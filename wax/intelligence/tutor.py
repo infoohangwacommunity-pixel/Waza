@@ -22,6 +22,7 @@ from wax.intelligence.providers import (
     get_intelligence,
 )
 from wax.memory.service import MemoryService
+from wax.intelligence.session_continuity import SessionContinuityService
 from wax.observability.logging import get_logger
 from wax.tools.registry import execute_tool
 from wax.delivery.presentation import InteractiveChoice, PresentableResponse
@@ -217,6 +218,46 @@ AVAILABLE_TOOLS = [
             "required": ["artifact_id"],
         },
     ),
+
+    ToolSpec(
+        name="write_workspace_file",
+        description="Write a text/code file into the local AI workspace so you can build multi-step work.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string"},
+                "content": {"type": "string"},
+                "subdir": {"type": "string"},
+            },
+            "required": ["filename", "content"],
+        },
+    ),
+    ToolSpec(
+        name="read_workspace_file",
+        description="Read a file previously written in the workspace.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="schedule_continuous",
+        description="Schedule multiple future follow-ups (hours from now). Use for reminders or ongoing multi-day help. You decide the cadence — nothing is forced.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "message_hint": {"type": "string"},
+                "hours_from_now": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "description": "e.g. [24, 48, 72] for three daily follow-ups",
+                },
+            },
+            "required": ["reason", "hours_from_now"],
+        },
+    ),
 ]
 
 
@@ -388,6 +429,14 @@ class TutorService:
                 ],
                 source_work_id=work.id,
             )
+            try:
+                await SessionContinuityService(self.session).maybe_digest(
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                    every_n=20,
+                )
+            except Exception:
+                pass
 
         return {
             "reply": reply_text,

@@ -32,6 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.config import get_settings
 from wax.db.models import LearningObservation, Memory
 from wax.intelligence.providers import ChatMessage, CompletionRequest, get_intelligence
+from wax.memory.embeddings import embed_one, cosine_similarity
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -217,29 +218,37 @@ class MemoryService:
         tokens = [t for t in re.split(r"\W+", query_lower) if len(t) > 2]
         goal_lower = (active_goal_hint or "").lower()
 
+        query_vec = None
+        try:
+            query_vec = await embed_one(query)
+        except Exception:
+            query_vec = None
+
         scored: list[tuple[float, Memory]] = []
         for m in candidates:
-            score = m.importance * 0.45 + m.confidence * 0.25
+            score = m.importance * 0.35 + m.confidence * 0.20
             content_lower = m.content.lower()
-            # keyword overlap
-            hits = sum(1 for t in tokens if t in content_lower)
-            score += min(0.35, hits * 0.08)
-            # tag match
+            hits = sum(1 for tok in tokens if tok in content_lower)
+            score += min(0.30, hits * 0.07)
             for tag in m.tags or []:
                 if tag.lower() in query_lower:
-                    score += 0.12
-            # goal relevance
-            if goal_lower and any(t in content_lower for t in goal_lower.split() if len(t) > 3):
-                score += 0.15
-            # recency boost (last 14 days)
+                    score += 0.10
+            if goal_lower and any(tok in content_lower for tok in goal_lower.split() if len(tok) > 3):
+                score += 0.12
             age_hours = (now - (m.updated_at or m.created_at)).total_seconds() / 3600
             if age_hours < 24:
-                score += 0.12
+                score += 0.10
             elif age_hours < 24 * 14:
-                score += 0.06
-            # type priority for teaching
+                score += 0.05
             if m.memory_type in ("learning", "preference", "goal"):
                 score += 0.05
+            # Semantic boost when embeddings exist
+            if query_vec and m.embedding:
+                try:
+                    sim = cosine_similarity(query_vec, list(m.embedding))
+                    score += max(0.0, sim) * 0.45
+                except Exception:
+                    pass
             scored.append((score, m))
 
         scored.sort(key=lambda x: x[0], reverse=True)
@@ -428,6 +437,14 @@ class MemoryService:
             tags=item.get("tags") or [],
         )
         self.session.add(mem)
+        await self.session.flush()
+        try:
+            vec = await embed_one(content)
+            if vec:
+                mem.embedding = vec
+                await self.session.flush()
+        except Exception:
+            pass
         return mem
 
     async def _upsert_learning_observation(

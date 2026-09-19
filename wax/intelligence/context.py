@@ -76,12 +76,12 @@ class ContextAssembler:
 
         learning_block = await self._learning_snapshot(principal_id)
         goals_block = await self._active_goals(principal_id)
-        recent = await self._recent_messages(conversation_id, limit=14)
+        recent = await self._recent_messages(conversation_id, limit=18)
+        summary_block = await self._conversation_summary(conversation_id)
 
-        # Budget: trim oldest recent messages first if needed
         assembled = AssembledContext(
             system_prefix=system_prefix,
-            memory_block=memory_block,
+            memory_block=memory_block + summary_block,
             learning_block=learning_block,
             goals_block=goals_block,
             recent_messages=recent,
@@ -106,6 +106,18 @@ class ContextAssembler:
         for m in ctx.recent_messages:
             parts.append(m.get("content") or "")
         return sum(len(p) for p in parts)
+
+    async def _conversation_summary(self, conversation_id) -> str:
+        if not conversation_id:
+            return ""
+        conv = await self.session.get(Conversation, conversation_id)
+        if not conv or not conv.summary:
+            return ""
+        return (
+            "\n--- Earlier conversation summary (long-session continuity) ---\n"
+            + conv.summary[:2500]
+            + "\n--- End summary ---\n"
+        )
 
     async def _recent_messages(self, conversation_id, limit: int = 14) -> list[dict[str, str]]:
         if not conversation_id:

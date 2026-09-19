@@ -426,3 +426,83 @@ async def handle_read_artifact(
 HANDLERS["describe_image"] = handle_describe_image
 HANDLERS["list_artifacts"] = handle_list_artifacts
 HANDLERS["read_artifact"] = handle_read_artifact
+
+
+async def handle_write_workspace_file(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Write a text file into the learner workspace for the AI to build on."""
+    from wax.terminal.workspace import principal_workspace, safe_write_bytes
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    filename = (args.get("filename") or "note.txt").strip()
+    content = args.get("content") or ""
+    subdir = (args.get("subdir") or "out").strip().lstrip("/") or "out"
+    base = principal_workspace(principal_id)
+    dest_dir = base / subdir
+    if not str(dest_dir.resolve()).startswith(str(base.resolve())):
+        return {"ok": False, "error": "path_escape"}
+    path = safe_write_bytes(dest_dir, filename, content.encode("utf-8"))
+    return {"ok": True, "path": str(path), "size": path.stat().st_size}
+
+
+async def handle_read_workspace_file(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from pathlib import Path
+    from wax.terminal.workspace import principal_workspace
+
+    principal_id = ctx.get("principal_id")
+    path = args.get("path")
+    if not principal_id or not path:
+        return {"ok": False, "error": "path_required"}
+    base = principal_workspace(principal_id)
+    p = Path(path)
+    if not p.is_file():
+        return {"ok": False, "error": "not_found"}
+    if not str(p.resolve()).startswith(str(base.resolve())):
+        return {"ok": False, "error": "path_escape"}
+    data = p.read_text(encoding="utf-8", errors="replace")
+    return {"ok": True, "path": str(p), "content": data[:30000]}
+
+
+async def handle_schedule_continuous(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Schedule a series of follow-ups (e.g. daily reminders, multi-day practice).
+    Not a hardcoded student routine — tutor decides cadence and content hints.
+    """
+    from wax.scheduler.service import SchedulerService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    hours_list = args.get("hours_from_now") or args.get("delays_hours") or [24]
+    if isinstance(hours_list, (int, float)):
+        hours_list = [hours_list]
+    reason = args.get("reason") or "ongoing follow-up"
+    hint = args.get("message_hint") or reason
+    sched = SchedulerService(session)
+    created = []
+    for h in list(hours_list)[:12]:
+        try:
+            hours = float(h)
+        except (TypeError, ValueError):
+            continue
+        action = await sched.schedule_in_hours(
+            principal_id=principal_id,
+            action_type="tutor_followup",
+            hours=max(0.05, hours),
+            reason=reason,
+            payload={"message_hint": hint, "series": True},
+        )
+        created.append({"id": str(action.id), "hours": hours, "at": action.execute_at.isoformat()})
+    return {"ok": True, "scheduled": created, "count": len(created)}
+
+
+HANDLERS["write_workspace_file"] = handle_write_workspace_file
+HANDLERS["read_workspace_file"] = handle_read_workspace_file
+HANDLERS["schedule_continuous"] = handle_schedule_continuous

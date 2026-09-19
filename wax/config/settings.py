@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     memory_provider: str = "none"
     memory_api_key: str = ""
     memory_model: str = "gpt-4o-mini"
+    embedding_model: str = "text-embedding-3-small"
 
     # Optional multimodal provider (same OpenAI-compatible shape) — only used when AI asks
     multimodal_provider: str = "none"
