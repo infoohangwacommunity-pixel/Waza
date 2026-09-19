@@ -66,6 +66,39 @@ async def process_message_response(session, work: Work) -> None:
         await session.flush()
 
 
+
+async def process_scheduled_action(session, work: Work) -> None:
+    """Scheduled follow-ups still go through intelligence when useful."""
+    from wax.scheduler.service import SchedulerService
+    tutor = TutorService(session)
+    try:
+        result = await tutor.handle_scheduled_action(work)
+        work.status = "completed"
+        work.completed_at = datetime.now(timezone.utc)
+        work.result_payload = {"reply_preview": (result.get("reply") or "")[:400]}
+        # Create delivery if we know a channel target from principal identities later;
+        # for now complete the work and mark related scheduled action done.
+        action_id = (work.input_payload or {}).get("scheduled_action_id")
+        if action_id:
+            from wax.db.models import ScheduledAction
+            from uuid import UUID
+            try:
+                action = await session.get(ScheduledAction, UUID(str(action_id)))
+            except Exception:
+                action = await session.get(ScheduledAction, action_id)
+            if action:
+                sched = SchedulerService(session)
+                await sched.complete(action, result={"reply": result.get("reply")})
+        await session.flush()
+        logger.info("scheduled_action_completed", work_id=str(work.id))
+    except Exception as e:
+        logger.exception("scheduled_action_failed", work_id=str(work.id))
+        work.error = str(e)
+        work.error_class = "execution_failure"
+        work.status = "failed"
+        work.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+
 async def _attempt_deliveries(session, work_id) -> None:
     from wax.delivery.senders import deliver as channel_deliver
     stmt = select(Delivery).where(
@@ -155,6 +188,8 @@ async def worker_loop(worker_id: str) -> None:
                     continue
                 if work.kind == "message_response":
                     await process_message_response(session, work)
+                elif work.kind == "scheduled_action":
+                    await process_scheduled_action(session, work)
                 else:
                     work.status = "failed"
                     work.error = f"Unknown work kind: {work.kind}"
@@ -171,9 +206,17 @@ async def recovery_loop() -> None:
         try:
             async with session_scope() as session:
                 await recover_orphans(session)
+                # Due scheduled actions → durable work
+                from wax.scheduler.service import SchedulerService
+                sched = SchedulerService(session)
+                due = await sched.due_actions(limit=10)
+                for action in due:
+                    await sched.mark_executing(action)
+                    await sched.create_work_for_action(action)
+                    logger.info("scheduled_action_enqueued", action_id=str(action.id))
         except Exception:
             logger.exception("recovery_error")
-        await asyncio.sleep(60)
+        await asyncio.sleep(max(5.0, settings.scheduler_poll_interval_seconds))
 
 
 async def main() -> None:

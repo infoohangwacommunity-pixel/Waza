@@ -1,26 +1,20 @@
 """
 WAX Prep Tutor Intelligence.
 
-The primary experience the learner has.
-
-- Assembles context intelligently (not dump everything)
-- Reasons with the primary model
-- Supports tool use (terminal, schedule, artifacts)
-- Updates memory after the turn (isolated)
-- Adapts to the person over time
-
+Context assembly → AI (every learner message) → tools → delivery → memory.
 No hardcoded subjects, exams, or modes.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wax.db.models import Conversation, Message, Work
+from wax.db.models import Conversation, Delivery, Message, Work
 from wax.intelligence.providers import (
     ChatMessage,
     CompletionRequest,
@@ -29,6 +23,7 @@ from wax.intelligence.providers import (
 )
 from wax.memory.service import MemoryService
 from wax.observability.logging import get_logger
+from wax.tools.registry import execute_tool
 
 logger = get_logger(__name__)
 
@@ -38,16 +33,18 @@ TUTOR_SYSTEM = """You are WAX Prep — the tutor that actually knows the learner
 You are not a rigid educational app. You are a persistent, adaptive learning companion.
 
 Core principles:
-- Meet the learner where they are. Never assume they are a "student" of a particular type.
-- Learn about them organically through conversation. Never dump questionnaires.
-- Adapt explanation depth, pace, examples, challenge level, and style to this specific person.
-- Use the memories provided about this learner when relevant.
+- Meet the learner where they are. Never assume they are a particular type of student.
+- Learn about them organically. Never dump questionnaires.
+- Adapt depth, pace, examples, challenge, and style to this person.
+- Use the memories provided when relevant.
 - Prefer natural conversation over forms or menus.
-- When useful you may: explain, ask a diagnostic question, give an example, create a short practice, challenge, summarize, or plan a follow-up.
+- When useful: explain, ask a diagnostic question, give an example, create practice, challenge, summarize, schedule a follow-up, or create a durable artifact.
 - If you do not remember something clearly, say so honestly. Never invent memories.
 - Help the person learn and progress — not merely answer the latest message.
-- Keep messages readable for messaging platforms: concise when appropriate, well structured when longer. Avoid giant walls of text.
+- Keep messages readable for messaging platforms.
 - Never mention internal system details, costs, tokens, or budgets.
+
+You may use tools when they materially help. Do not use tools for ordinary conversation.
 
 You have access to relevant memories about this learner (provided below).
 Respond as a warm, intelligent, patient tutor.
@@ -57,28 +54,39 @@ Respond as a warm, intelligent, patient tutor.
 AVAILABLE_TOOLS = [
     ToolSpec(
         name="schedule_followup",
-        description="Schedule a future reminder or learning follow-up for this learner. Use when a future action would materially help.",
+        description="Schedule a future follow-up for this learner when a later action would help.",
         parameters={
             "type": "object",
             "properties": {
-                "reason": {"type": "string", "description": "Why this follow-up is useful"},
-                "delay_hours": {"type": "number", "description": "Hours from now to execute"},
-                "message_hint": {"type": "string", "description": "What the follow-up should roughly say"},
+                "reason": {"type": "string"},
+                "delay_hours": {"type": "number"},
+                "message_hint": {"type": "string"},
             },
             "required": ["reason", "delay_hours"],
         },
     ),
     ToolSpec(
         name="create_artifact",
-        description="Create a durable study artifact (notes, practice set, summary, guide) the learner can return to later.",
+        description="Create a durable artifact (notes, practice, summary, guide) the learner can return to.",
         parameters={
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "description": "notes|practice|summary|guide|other"},
+                "kind": {"type": "string"},
                 "title": {"type": "string"},
-                "content": {"type": "string", "description": "Full content of the artifact"},
+                "content": {"type": "string"},
             },
             "required": ["kind", "title", "content"],
+        },
+    ),
+    ToolSpec(
+        name="run_python",
+        description="Run a short Python snippet for calculation, generation, or analysis. Prefer small, focused code.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "code": {"type": "string", "description": "Python source to execute"},
+            },
+            "required": ["code"],
         },
     ),
 ]
@@ -90,21 +98,7 @@ class TutorService:
         self.intelligence = get_intelligence()
         self.memory = MemoryService(session)
 
-    async def handle_message(
-        self,
-        work: Work,
-    ) -> dict[str, Any]:
-        """
-        Full tutor turn:
-        1. Load conversation history
-        2. Retrieve relevant memories
-        3. Assemble context
-        4. Call intelligence (every learner message goes through AI)
-        5. Optionally run tools
-        6. Persist outbound message
-        7. Create delivery
-        8. Extract memory (isolated)
-        """
+    async def handle_message(self, work: Work) -> dict[str, Any]:
         payload = work.input_payload or {}
         principal_id = work.principal_id
         conversation_id = work.conversation_id
@@ -112,7 +106,6 @@ class TutorService:
         channel = payload.get("channel", "unknown")
         target = payload.get("target_external_id")
 
-        # 1. Recent conversation
         recent: list[dict[str, str]] = []
         if conversation_id:
             stmt = (
@@ -126,24 +119,21 @@ class TutorService:
             for m in msgs:
                 recent.append({"role": m.role, "content": m.content})
 
-        # 2. Advanced memory retrieval
         memory_summary = "No prior memories yet."
-        relevant_memories: list = []
+        relevant_memories = []
         if principal_id:
             relevant_memories = await self.memory.plan_and_retrieve(
                 principal_id, user_text, limit=14
             )
             if relevant_memories:
-                lines = []
-                for m in relevant_memories:
-                    lines.append(
-                        f"- [{m.memory_type}|c={m.confidence:.2f}] {m.content}"
-                    )
+                lines = [
+                    f"- [{m.memory_type}|c={m.confidence:.2f}] {m.content}"
+                    for m in relevant_memories
+                ]
                 memory_summary = "\n".join(lines)
             else:
                 memory_summary = await self.memory.get_active_summary(principal_id)
 
-        # 3. Assemble context
         system = (
             TUTOR_SYSTEM
             + "\n\n--- What WAX currently understands about this learner ---\n"
@@ -158,34 +148,58 @@ class TutorService:
         if not recent or recent[-1].get("content") != user_text:
             llm_messages.append(ChatMessage(role="user", content=user_text))
 
-        # 4. Intelligence call — every meaningful message goes through AI
-        response = await self.intelligence.complete(
-            CompletionRequest(
-                messages=llm_messages,
-                tools=AVAILABLE_TOOLS,
-                temperature=0.7,
-                max_tokens=2048,
-            ),
-            allow_fallback=True,
-        )
+        tool_ctx = {
+            "principal_id": principal_id,
+            "work_id": work.id,
+            "conversation_id": conversation_id,
+        }
 
-        reply_text = (response.content or "").strip()
-        if not reply_text and not response.tool_calls:
+        # Tool loop: up to a few rounds so the model can act then respond
+        reply_text = ""
+        tool_notes: list[str] = []
+        max_rounds = 3
+        for _ in range(max_rounds):
+            response = await self.intelligence.complete(
+                CompletionRequest(
+                    messages=llm_messages,
+                    tools=AVAILABLE_TOOLS,
+                    temperature=0.7,
+                    max_tokens=2048,
+                ),
+                allow_fallback=True,
+            )
+
+            if response.tool_calls:
+                llm_messages.append(
+                    ChatMessage(
+                        role="assistant",
+                        content=response.content or "",
+                        tool_calls=response.tool_calls,
+                    )
+                )
+                for tc in response.tool_calls:
+                    fn = tc.get("function") or {}
+                    name = fn.get("name") or "unknown"
+                    args = fn.get("arguments")
+                    tc_id = tc.get("id") or str(uuid4())
+                    outcome = await execute_tool(self.session, name, args, tool_ctx)
+                    tool_notes.append(f"{name}:{outcome.get('ok')}")
+                    llm_messages.append(
+                        ChatMessage(
+                            role="tool",
+                            content=str(outcome)[:4000],
+                            tool_call_id=tc_id,
+                            name=name,
+                        )
+                    )
+                continue
+
+            reply_text = (response.content or "").strip()
+            break
+
+        if not reply_text:
             reply_text = "I'm here with you. Could you say that again another way?"
 
-        # 5. Simple tool handling (expand later)
-        tool_notes: list[str] = []
-        for tc in response.tool_calls or []:
-            fn = tc.get("function") or {}
-            name = fn.get("name")
-            tool_notes.append(f"tool:{name}")
-            # Full tool execution will be wired to terminal / scheduler / artifacts
-            # For now we acknowledge the intention in metadata
-
-        if tool_notes and not reply_text:
-            reply_text = "I've noted that and will follow through."
-
-        # 6. Persist outbound message
         out_msg_id = None
         if conversation_id and principal_id:
             out_msg = Message(
@@ -202,18 +216,12 @@ class TutorService:
             self.session.add(out_msg)
             await self.session.flush()
             out_msg_id = out_msg.id
-
-            # Update conversation last_message_at
             conv = await self.session.get(Conversation, conversation_id)
             if conv:
-                from datetime import datetime, timezone
                 conv.last_message_at = datetime.now(timezone.utc)
 
-        # 7. Delivery record (actual send is separate)
         delivery_id = None
         if principal_id and target and reply_text:
-            from wax.db.models import Delivery
-
             delivery = Delivery(
                 id=uuid4(),
                 work_id=work.id,
@@ -228,7 +236,6 @@ class TutorService:
             await self.session.flush()
             delivery_id = delivery.id
 
-        # 8. Memory extraction (isolated — never fails the turn)
         if principal_id:
             await self.memory.extract_and_store(
                 principal_id=principal_id,
@@ -248,3 +255,41 @@ class TutorService:
             "memories_used": len(relevant_memories),
             "tools": tool_notes,
         }
+
+    async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
+        """Proactive / scheduled turn — still goes through intelligence when appropriate."""
+        payload = work.input_payload or {}
+        principal_id = work.principal_id
+        action_type = payload.get("action_type", "tutor_followup")
+        reason = payload.get("reason") or ""
+        hint = (payload.get("payload") or {}).get("message_hint") or reason
+
+        memory_summary = ""
+        if principal_id:
+            memory_summary = await self.memory.get_active_summary(principal_id)
+
+        system = (
+            TUTOR_SYSTEM
+            + "\n\nThis is a scheduled follow-up you previously decided was useful.\n"
+            + f"Reason: {reason}\nHint: {hint}\n\n"
+            + "--- Learner understanding ---\n"
+            + (memory_summary or "Sparse history.")
+            + "\nWrite a natural, useful follow-up message. Do not spam. If it no longer seems useful, keep it brief and gentle.\n"
+        )
+
+        response = await self.intelligence.complete(
+            CompletionRequest(
+                messages=[
+                    ChatMessage(role="system", content=system),
+                    ChatMessage(
+                        role="user",
+                        content="Compose the follow-up message for this learner now.",
+                    ),
+                ],
+                temperature=0.6,
+                max_tokens=1024,
+            ),
+            allow_fallback=True,
+        )
+        reply = (response.content or "Just checking in — how is your learning going?").strip()
+        return {"reply": reply, "action_type": action_type}
