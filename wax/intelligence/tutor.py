@@ -66,6 +66,16 @@ Artifacts and files:
 - Only say a file was sent when the delivery layer confirmed it.
 - create_artifact stores the file; channel delivery is separate.
 
+Channel linking:
+- If the learner says they also use WhatsApp or Telegram, ask for the number or chat naturally.
+- Call request_channel_link (OTP). Tell them to open the other app, copy the code, and paste it here.
+- When they paste a 6-digit code, call confirm_channel_link.
+- Only use knowledge questions if OTP delivery failed.
+- Never invent that accounts are linked without a successful confirm.
+
+Mini pages:
+- create_html_page returns page_url when PUBLIC_BASE_URL is set — share that link for browser notes.
+
 Active learning context:
 - Notice what you and the learner were doing before a new request.
 - If the new request is unrelated, you may briefly offer to pause and resume later — do not invent subject bans.
@@ -276,6 +286,37 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+    ToolSpec(
+        name="request_channel_link",
+        description=(
+            "Start linking another channel (WhatsApp/Telegram) to this learner. "
+            "Prefer method=otp: sends a 6-digit code to that number/chat. "
+            "Use method=knowledge only if OTP cannot be delivered. "
+            "For WhatsApp pass the phone digits; for Telegram pass chat id."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "target_channel": {"type": "string"},
+                "target_external_id": {"type": "string"},
+                "method": {"type": "string"},
+                "questions": {"type": "array"},
+            },
+            "required": ["target_channel", "target_external_id"],
+        },
+    ),
+    ToolSpec(
+        name="confirm_channel_link",
+        description="Confirm channel link when the learner pastes the OTP code, or provides knowledge answers.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "code": {"type": "string"},
+                "challenge_id": {"type": "string"},
+                "answers": {"type": "array", "items": {"type": "string"}},
+            },
+        },
+    ),
         name="link_channel_identity",
         description="Link another channel identity (whatsapp/telegram id) to this same learner for continuity.",
         parameters={

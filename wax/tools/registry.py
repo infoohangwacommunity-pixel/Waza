@@ -1309,13 +1309,83 @@ async def handle_create_html_page(
     )
     session.add(art)
     await session.flush()
+    from wax.artifacts.access import make_download_token, public_page_url, public_download_url
+    token = make_download_token(str(art.id), str(principal_id), ttl_seconds=86400 * 7)
+    page_url = public_page_url(str(art.id), token)
+    dl_url = public_download_url(str(art.id), token)
     return {
         "ok": True,
         "artifact_id": str(art.id),
         "uri": uri,
         "title": title,
-        "note": "HTML page stored as artifact. Deliver via redeliver_artifact or share secure URL when available.",
+        "page_url": page_url,
+        "download_url": dl_url,
+        "note": (
+            "Share page_url with the learner so they can open the mini page in a browser. "
+            "Requires PUBLIC_BASE_URL (your Railway web URL). Link expires in 7 days."
+            if page_url
+            else "Set PUBLIC_BASE_URL to your Railway web URL (e.g. https://web-xxx.up.railway.app) to get openable page links."
+        ),
     }
+
+
+async def handle_request_channel_link(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Start OTP (or knowledge) link of another messaging channel to this learner."""
+    from wax.domain.channel_link import request_otp_link, request_knowledge_link
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    target_channel = (args.get("target_channel") or args.get("channel") or "").lower()
+    target_id = args.get("target_external_id") or args.get("phone") or args.get("chat_id") or args.get("number")
+    method = (args.get("method") or "otp").lower()
+    source = (ctx.get("channel") or args.get("source_channel") or "telegram").lower()
+    if method == "knowledge":
+        questions = args.get("questions") or []
+        if isinstance(questions, str):
+            questions = []
+        return await request_knowledge_link(
+            session,
+            principal_id=principal_id,
+            source_channel=source,
+            target_channel=target_channel,
+            target_external_id=str(target_id or ""),
+            questions=list(questions),
+        )
+    return await request_otp_link(
+        session,
+        principal_id=principal_id,
+        source_channel=source,
+        target_channel=target_channel,
+        target_external_id=str(target_id or ""),
+    )
+
+
+async def handle_confirm_channel_link(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Confirm OTP code pasted by the learner, or knowledge answers."""
+    from wax.domain.channel_link import confirm_otp_link, confirm_knowledge_link
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    code = args.get("code") or args.get("otp") or args.get("verification_code")
+    if code:
+        return await confirm_otp_link(
+            session,
+            principal_id=principal_id,
+            code=str(code),
+            challenge_id=args.get("challenge_id"),
+        )
+    if args.get("challenge_id") and args.get("answers"):
+        return await confirm_knowledge_link(
+            session,
+            principal_id=principal_id,
+            challenge_id=str(args["challenge_id"]),
+            answers=list(args.get("answers") or []),
+        )
+    return {"ok": False, "error": "code_or_answers_required"}
 
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
@@ -1339,6 +1409,8 @@ HANDLERS.update({
     "redeliver_artifact": handle_redeliver_artifact,
     "export_learner_data": handle_export_learner_data,
     "link_channel_identity": handle_link_channel_identity,
+    "request_channel_link": handle_request_channel_link,
+    "confirm_channel_link": handle_confirm_channel_link,
     "create_html_page": handle_create_html_page,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,

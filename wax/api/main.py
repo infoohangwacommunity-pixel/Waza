@@ -202,3 +202,39 @@ def run() -> None:
     import uvicorn
 
     uvicorn.run("wax.api.main:app", host="0.0.0.0", port=8000, reload=False)
+
+
+@app.get("/pages/{artifact_id}")
+async def serve_html_page(artifact_id: str, token: str = ""):
+    """Serve branded HTML artifact inline — signed token required (mini page)."""
+    from uuid import UUID
+    from fastapi.responses import HTMLResponse, Response
+    from wax.db.models import Artifact
+    from wax.db.session import session_scope
+    from wax.artifacts.access import verify_download_token
+    from wax.artifacts.storage import read_bytes
+
+    try:
+        aid = UUID(artifact_id)
+    except Exception:
+        return HTMLResponse("<h1>Invalid page</h1>", status_code=400)
+    async with session_scope() as session:
+        art = await session.get(Artifact, aid)
+        if not art:
+            return HTMLResponse("<h1>Not found</h1>", status_code=404)
+        if not token or not verify_download_token(str(art.id), str(art.principal_id), token):
+            return HTMLResponse("<h1>Link expired or invalid</h1>", status_code=403)
+        try:
+            data = read_bytes(art.uri)
+        except Exception:
+            return HTMLResponse("<h1>Page unavailable</h1>", status_code=404)
+        ctype = art.content_type or "text/html; charset=utf-8"
+        if "html" not in ctype and not data[:100].lstrip().lower().startswith(b"<!doctype") and not data[:50].lstrip().lower().startswith(b"<html"):
+            # Non-HTML: force download instead
+            return Response(
+                content=data,
+                media_type=ctype,
+                headers={"Content-Disposition": f'attachment; filename="file"'},
+            )
+        return HTMLResponse(content=data.decode("utf-8", errors="replace"), status_code=200)
+

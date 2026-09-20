@@ -38,9 +38,11 @@ def verify_download_token(artifact_id: str, principal_id: str, token: str) -> bo
 
 
 def public_base_url() -> str:
+    s = get_settings()
     return (
         os.environ.get("PUBLIC_BASE_URL")
         or os.environ.get("WAX_PUBLIC_BASE_URL")
+        or getattr(s, "public_base_url", None)
         or ""
     ).rstrip("/")
 
@@ -50,3 +52,12 @@ def public_download_url(artifact_id: str, token: str) -> str | None:
     if not base:
         return None
     return f"{base}/artifacts/{quote(artifact_id)}/download?token={quote(token)}"
+
+
+
+def public_page_url(artifact_id: str, token: str) -> str | None:
+    """Inline HTML page URL (mini study page in browser)."""
+    base = public_base_url()
+    if not base:
+        return None
+    return f"{base}/pages/{quote(artifact_id)}?token={quote(token)}"

@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
     secret_key: str = Field(default="change-me-in-production")
+    public_base_url: str = ""  # e.g. https://web-production-xxx.up.railway.app
 
     database_url: str = "postgresql+asyncpg://wax:wax@localhost:5432/wax"
     database_url_sync: str = "postgresql://wax:wax@localhost:5432/wax"
