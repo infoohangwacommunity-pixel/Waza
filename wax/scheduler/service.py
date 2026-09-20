@@ -133,6 +133,91 @@ class SchedulerService:
         action.executed_at = datetime.now(timezone.utc)
         await self.session.flush()
 
+
+    async def cancel(self, action_id, *, principal_id=None) -> ScheduledAction | None:
+        action = await self.session.get(ScheduledAction, action_id)
+        if not action:
+            return None
+        if principal_id is not None and action.principal_id != principal_id:
+            return None
+        if action.status not in ("pending", "executing"):
+            return action
+        action.status = "cancelled"
+        meta = dict(action.metadata_ or {})
+        meta["cancelled_at"] = datetime.now(timezone.utc).isoformat()
+        action.metadata_ = meta
+        await self.session.flush()
+        logger.info("action_cancelled", action_id=str(action.id))
+        return action
+
+    async def reschedule(
+        self, action_id, *, execute_at: datetime, principal_id=None
+    ) -> ScheduledAction | None:
+        action = await self.session.get(ScheduledAction, action_id)
+        if not action:
+            return None
+        if principal_id is not None and action.principal_id != principal_id:
+            return None
+        if action.status != "pending":
+            return None
+        if execute_at.tzinfo is None:
+            execute_at = execute_at.replace(tzinfo=timezone.utc)
+        else:
+            execute_at = execute_at.astimezone(timezone.utc)
+        action.execute_at = execute_at
+        await self.session.flush()
+        logger.info(
+            "action_rescheduled",
+            action_id=str(action.id),
+            execute_at=execute_at.isoformat(),
+        )
+        return action
+
+    async def schedule_series(
+        self,
+        *,
+        principal_id,
+        action_type: str,
+        first_at: datetime,
+        interval_hours: float,
+        count: int,
+        reason: str | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> list[ScheduledAction]:
+        """Simple finite recurrence — not a cron engine. Max 30 occurrences."""
+        count = max(1, min(int(count), 30))
+        interval_hours = max(0.1, float(interval_hours))
+        if first_at.tzinfo is None:
+            first_at = first_at.replace(tzinfo=timezone.utc)
+        else:
+            first_at = first_at.astimezone(timezone.utc)
+        actions: list[ScheduledAction] = []
+        for i in range(count):
+            when = first_at + timedelta(hours=interval_hours * i)
+            key = f"{principal_id}:{action_type}:series:{first_at.isoformat()}:{i}"
+            # skip if idempotency key already exists
+            existing = await self.session.execute(
+                select(ScheduledAction).where(ScheduledAction.idempotency_key == key)
+            )
+            if existing.scalar_one_or_none():
+                continue
+            a = await self.schedule(
+                principal_id=principal_id,
+                action_type=action_type,
+                execute_at=when,
+                reason=reason,
+                payload={**(payload or {}), "series_index": i, "series_count": count},
+                idempotency_key=key,
+            )
+            actions.append(a)
+        logger.info(
+            "action_series_scheduled",
+            principal_id=str(principal_id),
+            count=len(actions),
+            interval_hours=interval_hours,
+        )
+        return actions
+
     async def create_work_for_action(self, action: ScheduledAction) -> Work:
         """Turn a due scheduled action into durable Work for the tutor/worker.
 

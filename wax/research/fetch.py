@@ -94,3 +94,41 @@ async def search_stub(query: str) -> dict[str, Any]:
         "results": [],
         "note": "No search provider configured. Use research_fetch with a specific URL, or configure a search API later.",
     }
+
+
+async def search_web(query: str, *, max_results: int = 5) -> dict[str, Any]:
+    """Optional search provider via WAX_SEARCH_URL (GET ?q=). Falls back to stub."""
+    import os
+    base = (os.environ.get("WAX_SEARCH_URL") or "").strip()
+    if not base:
+        return await search_stub(query)
+    q = (query or "").strip()
+    if not q:
+        return {"ok": False, "error": "empty_query"}
+    try:
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.get(base, params={"q": q, "limit": max_results})
+        if resp.status_code >= 400:
+            return {"ok": False, "error": f"search_http_{resp.status_code}"}
+        data = resp.json()
+        results = data if isinstance(data, list) else data.get("results") or data.get("items") or []
+        cleaned = []
+        for r in results[:max_results]:
+            if isinstance(r, dict):
+                cleaned.append(
+                    {
+                        "title": r.get("title") or r.get("name"),
+                        "url": r.get("url") or r.get("link"),
+                        "snippet": (r.get("snippet") or r.get("description") or "")[:500],
+                    }
+                )
+        logger.info("research_search_ok", n=len(cleaned))
+        return {
+            "ok": True,
+            "query": q,
+            "results": cleaned,
+            "note": "World knowledge only — do not auto-write as learner memory.",
+        }
+    except Exception as e:
+        logger.warning("research_search_failed", error=str(e)[:200])
+        return {"ok": False, "error": str(e)[:300]}

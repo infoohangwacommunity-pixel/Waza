@@ -42,6 +42,9 @@ TOOL_META: dict[str, dict[str, Any]] = {
     "record_assessment_timeout": {"risk": "medium", "permissions": [DATABASE_WRITE]},
     "workspace_env": {"risk": "low", "permissions": [READ, WRITE]},
     "check_quiet_hours": {"risk": "low", "permissions": [READ]},
+    "cancel_schedule": {"risk": "medium", "permissions": [SCHEDULE]},
+    "schedule_series": {"risk": "medium", "permissions": [SCHEDULE]},
+    "redeliver_artifact": {"risk": "medium", "permissions": [MESSAGE]},
     "create_assessment": {"risk": "medium", "permissions": [DATABASE_WRITE]},
     "submit_assessment_answer": {"risk": "medium", "permissions": [DATABASE_WRITE]},
 }

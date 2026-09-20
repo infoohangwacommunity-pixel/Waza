@@ -59,6 +59,7 @@ async def process_message_response(session, work: Work) -> None:
 
     tutor = TutorService(session)
     try:
+        await renew_lease(session, work, work.claimed_by or "worker")
         result = await tutor.handle_message(work)
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
@@ -412,6 +413,63 @@ async def claim_next(session, worker_id: str) -> Work | None:
     return work
 
 
+
+async def renew_lease(session, work: Work, worker_id: str) -> None:
+    """Heartbeat while processing — extends lease_until."""
+    now = datetime.now(timezone.utc)
+    if work.claimed_by != worker_id:
+        return
+    meta = dict(work.metadata_ or {})
+    lease_s = int(getattr(settings, "work_stale_seconds", 300) or 300)
+    meta["lease_until"] = (now + timedelta(seconds=lease_s)).isoformat()
+    meta["lease_heartbeat_at"] = now.isoformat()
+    work.metadata_ = meta
+    work.claimed_at = now
+    await session.flush()
+
+
+async def reclaim_stale_works(session, limit: int = 20) -> int:
+    """Re-queue works whose lease expired while status=running."""
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Work)
+        .where(Work.status == "running")
+        .order_by(Work.claimed_at.asc().nullsfirst())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    result = await session.execute(stmt)
+    n = 0
+    for work in result.scalars().all():
+        meta = dict(work.metadata_ or {})
+        lease_s = meta.get("lease_until")
+        stale = False
+        if lease_s:
+            try:
+                until = datetime.fromisoformat(str(lease_s).replace("Z", "+00:00"))
+                if until.tzinfo is None:
+                    until = until.replace(tzinfo=timezone.utc)
+                stale = until < now
+            except Exception:
+                stale = True
+        elif work.claimed_at:
+            age = (now - work.claimed_at).total_seconds()
+            stale = age > float(getattr(settings, "work_stale_seconds", 300) or 300)
+        if not stale:
+            continue
+        work.status = "retrying"
+        work.claimed_by = None
+        work.error = work.error or "lease_expired"
+        work.error_class = "lease_expired"
+        work.next_retry_at = now
+        work.attempt = int(work.attempt or 0) + 1
+        n += 1
+        logger.warning("work_lease_reclaimed", work_id=str(work.id), attempt=work.attempt)
+    if n:
+        await session.flush()
+    return n
+
+
 async def recover_orphans(session) -> int:
     threshold = datetime.now(timezone.utc) - timedelta(seconds=settings.work_stale_seconds)
     stmt = select(Work).where(Work.status == "running", Work.claimed_at < threshold)
@@ -480,6 +538,9 @@ async def recovery_loop() -> None:
                 except Exception:
                     logger.exception("scheduler_failure")
                 try:
+                    n = await reclaim_stale_works(session, limit=20)
+                    if n:
+                        logger.info("stale_works_reclaimed", count=n)
                     from wax.interaction.service import InteractionService
                     expired_ix = await InteractionService(session).expire_due(limit=30)
                     for ix in expired_ix:

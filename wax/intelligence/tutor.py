@@ -266,6 +266,44 @@ AVAILABLE_TOOLS = [
     ToolSpec(
     ToolSpec(
     ToolSpec(
+    ToolSpec(
+        name="cancel_schedule",
+        description="Cancel a pending scheduled action by id.",
+        parameters={
+            "type": "object",
+            "properties": {"scheduled_action_id": {"type": "string"}},
+            "required": ["scheduled_action_id"],
+        },
+    ),
+    ToolSpec(
+        name="schedule_series",
+        description="Schedule a finite series of follow-ups (max 30) at a fixed interval.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "interval_hours": {"type": "number"},
+                "count": {"type": "number"},
+                "delay_hours": {"type": "number"},
+                "first_at": {"type": "string"},
+                "reason": {"type": "string"},
+                "message_hint": {"type": "string"},
+            },
+            "required": ["interval_hours", "reason"],
+        },
+    ),
+    ToolSpec(
+        name="redeliver_artifact",
+        description="Re-send an existing artifact without regenerating its content.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "artifact_id": {"type": "string"},
+                "channel": {"type": "string"},
+                "target_external_id": {"type": "string"},
+            },
+            "required": ["artifact_id"],
+        },
+    ),
         name="record_assessment_timeout",
         description="When a timed assessment item expired, record timeout and get the next item if any.",
         parameters={

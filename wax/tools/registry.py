@@ -1065,8 +1065,8 @@ async def handle_research_fetch(
 async def handle_research_search(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
-    from wax.research.fetch import search_stub
-    return await search_stub(args.get("query") or "")
+    from wax.research.fetch import search_web
+    return await search_web(args.get("query") or "")
 
 
 async def handle_record_assessment_timeout(
@@ -1130,6 +1130,105 @@ async def handle_check_quiet_hours(
     quiet = is_in_quiet_hours(prefs, hhmm)
     return {"ok": True, "quiet_hours": quiet, "local_hhmm": hhmm, "timezone": tz_name}
 
+
+async def handle_cancel_schedule(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.scheduler.service import SchedulerService
+    from uuid import UUID
+    principal_id = ctx.get("principal_id")
+    aid = args.get("scheduled_action_id") or args.get("action_id")
+    if not aid:
+        return {"ok": False, "error": "action_id_required"}
+    try:
+        uid = UUID(str(aid))
+    except Exception:
+        return {"ok": False, "error": "invalid_id"}
+    action = await SchedulerService(session).cancel(uid, principal_id=principal_id)
+    if not action:
+        return {"ok": False, "error": "not_found_or_forbidden"}
+    return {"ok": True, "status": action.status, "action_id": str(action.id)}
+
+
+async def handle_schedule_series(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from datetime import datetime, timezone, timedelta
+    from wax.scheduler.service import SchedulerService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    hours = args.get("interval_hours")
+    count = args.get("count") or 3
+    if hours is None:
+        return {"ok": False, "error": "interval_hours_required"}
+    first_s = args.get("first_at")
+    if first_s:
+        try:
+            first_at = datetime.fromisoformat(str(first_s).replace("Z", "+00:00"))
+        except Exception:
+            return {"ok": False, "error": "invalid_first_at"}
+    else:
+        delay = float(args.get("delay_hours") or 1)
+        first_at = datetime.now(timezone.utc) + timedelta(hours=delay)
+    actions = await SchedulerService(session).schedule_series(
+        principal_id=principal_id,
+        action_type=str(args.get("action_type") or "tutor_followup"),
+        first_at=first_at,
+        interval_hours=float(hours),
+        count=int(count),
+        reason=args.get("reason"),
+        payload={"message_hint": args.get("message_hint")},
+    )
+    return {
+        "ok": True,
+        "count": len(actions),
+        "ids": [str(a.id) for a in actions],
+    }
+
+
+async def handle_redeliver_artifact(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Retry delivery of an existing artifact without regenerating content."""
+    from uuid import UUID
+    from wax.db.models import Artifact, Delivery
+    from wax.artifacts.storage import read_bytes
+
+    principal_id = ctx.get("principal_id")
+    aid = args.get("artifact_id")
+    if not aid or not principal_id:
+        return {"ok": False, "error": "artifact_id_and_principal_required"}
+    try:
+        art = await session.get(Artifact, UUID(str(aid)))
+    except Exception:
+        return {"ok": False, "error": "invalid_id"}
+    if not art or art.principal_id != principal_id:
+        return {"ok": False, "error": "not_found"}
+    channel = (args.get("channel") or ctx.get("channel") or "telegram").lower()
+    target = args.get("target_external_id") or ctx.get("target_external_id")
+    if not target:
+        return {"ok": False, "error": "target_required"}
+    delivery = Delivery(
+        id=__import__("uuid").uuid4(),
+        work_id=ctx.get("work_id"),
+        principal_id=principal_id,
+        channel=channel,
+        target_external_id=str(target),
+        content=f"[artifact:{art.id}]",
+        status="pending",
+        idempotency_key=f"artifact-redeliver:{art.id}:{channel}:{__import__('uuid').uuid4().hex[:8]}",
+        metadata_={"artifact_id": str(art.id), "uri": art.uri},
+    )
+    session.add(delivery)
+    await session.flush()
+    return {
+        "ok": True,
+        "delivery_id": str(delivery.id),
+        "artifact_id": str(art.id),
+        "note": "Queued redelivery of existing artifact bytes — content not regenerated.",
+    }
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1147,6 +1246,9 @@ HANDLERS.update({
     "record_assessment_timeout": handle_record_assessment_timeout,
     "workspace_env": handle_workspace_env,
     "check_quiet_hours": handle_check_quiet_hours,
+    "cancel_schedule": handle_cancel_schedule,
+    "schedule_series": handle_schedule_series,
+    "redeliver_artifact": handle_redeliver_artifact,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,
