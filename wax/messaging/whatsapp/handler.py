@@ -160,11 +160,30 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                             },
                         )
                         session.add(work)
+                        # autoflush=False: INSERT works before assigning inbound_events.work_id
+                        await session.flush()
+
+                        persisted = await session.get(Work, work.id)
+                        if persisted is None:
+                            logger.error(
+                                "whatsapp_work_missing_after_flush",
+                                work_id=str(work.id),
+                                inbound_event_id=str(inserted),
+                                principal_id=str(principal.id),
+                            )
+                            raise WebhookAcceptError("work_persist_failed", 503)
 
                         event = await session.get(InboundEvent, inserted)
                         if event:
                             event.processed = True
                             event.work_id = work.id
+                            logger.info(
+                                "whatsapp_accept_linked",
+                                inbound_event_id=str(inserted),
+                                work_id=str(work.id),
+                                principal_id=str(principal.id),
+                                external_id=external_id,
+                            )
                         processed += 1
             # session_scope commits on exit
     except WebhookAcceptError:
