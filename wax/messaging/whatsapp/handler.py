@@ -122,6 +122,61 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
                             else:
                                 text = f"[{content_type} message]"
 
+                        # Durable interaction consume (button / list reply)
+                        if interactive_id:
+                            from wax.interaction.service import InteractionService
+                            isvc = InteractionService(session)
+                            ix = await isvc.find_by_callback(
+                                interactive_id, principal_id=principal.id
+                            )
+                            if ix is not None:
+                                choice_id = None
+                                choice_title = None
+                                for c in ix.choices or []:
+                                    if c.get("callback_data") == interactive_id or c.get("id") == interactive_id:
+                                        choice_id = c.get("logical_id") or c.get("id")
+                                        choice_title = c.get("title")
+                                        break
+                                outcome = await isvc.consume(
+                                    ix, choice_id=choice_id, principal_id=principal.id
+                                )
+                                event = await session.get(InboundEvent, inserted)
+                                if event:
+                                    event.processed = True
+                                if outcome.get("status") == "already_consumed":
+                                    processed += 1
+                                    continue
+                                if outcome.get("status") == "expired":
+                                    work = await isvc.enqueue_continuation(
+                                        ix, reason="expired_on_tap", choice_id=choice_id
+                                    )
+                                    pl = dict(work.input_payload or {})
+                                    pl["target_external_id"] = wa_id
+                                    pl["channel"] = "whatsapp"
+                                    work.input_payload = pl
+                                    if event:
+                                        event.work_id = work.id
+                                    processed += 1
+                                    continue
+                                if outcome.get("ok"):
+                                    text_choice = choice_title or choice_id or interactive_id
+                                    work = await isvc.enqueue_continuation(
+                                        ix,
+                                        reason="choice",
+                                        choice_id=choice_id,
+                                        text=text_choice,
+                                    )
+                                    pl = dict(work.input_payload or {})
+                                    pl["target_external_id"] = wa_id
+                                    pl["channel"] = "whatsapp"
+                                    work.input_payload = pl
+                                    if event:
+                                        event.work_id = work.id
+                                    await session.flush()
+                                    processed += 1
+                                    continue
+                                # forbidden / other → fall through to normal message path
+
                         # Media id recorded only — worker downloads asynchronously
                         message = Message(
                             id=uuid.uuid4(),

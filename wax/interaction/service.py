@@ -52,12 +52,14 @@ class InteractionService:
             cid = str(c.get("id") or f"opt_{i}")[:128]
             title = str(c.get("title") or c.get("label") or cid)[:64]
             cb = f"ix:{_token()}"[:64]
+            # Platform button id: Telegram uses callback_data; WhatsApp uses id (max 256)
             enriched.append(
                 {
-                    "id": cid,
+                    "id": cb,  # opaque platform id (also works as WA button id)
                     "title": title,
                     "description": c.get("description"),
                     "callback_data": cb,
+                    "logical_id": cid,
                 }
             )
 
@@ -107,6 +109,9 @@ class InteractionService:
         for ix in result.scalars().all():
             for c in ix.choices or []:
                 if c.get("callback_data") == callback_data:
+                    return ix
+                # WhatsApp reply buttons use choice id as the platform id
+                if c.get("id") == callback_data:
                     return ix
             if ix.callback_token == callback_data:
                 return ix
@@ -221,6 +226,18 @@ class InteractionService:
             "source": "interaction",
             "reason": reason,
         }
+        # Link assessment context from activity if present (AI decides next item)
+        if interaction.activity_id:
+            try:
+                from wax.db.models import Activity
+                act = await self.session.get(Activity, interaction.activity_id)
+                if act and isinstance(act.content, dict):
+                    if act.content.get("assessment_id"):
+                        payload["assessment_id"] = str(act.content["assessment_id"])
+                    if act.content.get("attempt_id"):
+                        payload["attempt_id"] = str(act.content["attempt_id"])
+            except Exception:
+                pass
         # Prefer target from metadata if stored
         meta = interaction.metadata_ or {}
         if meta.get("target_external_id"):

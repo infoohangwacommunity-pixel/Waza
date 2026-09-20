@@ -264,6 +264,24 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
     ToolSpec(
+    ToolSpec(
+        name="research_fetch",
+        description="Fetch a public http(s) URL for world knowledge. Result is not learner memory.",
+        parameters={
+            "type": "object",
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
+        },
+    ),
+    ToolSpec(
+        name="research_search",
+        description="Search the web when a search provider is configured; otherwise returns guidance to use research_fetch.",
+        parameters={
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"],
+        },
+    ),
         name="get_current_time",
         description="Get authoritative current UTC and optional learner timezone. Use before scheduling or deadlines.",
         parameters={

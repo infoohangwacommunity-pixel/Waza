@@ -109,13 +109,31 @@ class S3Storage:
 
 
 def get_storage() -> StorageBackend:
-    backend = (
-        os.environ.get("WAX_STORAGE_BACKEND")
-        or getattr(settings, "storage_backend", None)
-        or "local"
-    ).lower()
+    backend = getattr(settings, "effective_storage_backend", None)
+    if callable(backend):
+        backend = settings.effective_storage_backend
+    else:
+        backend = (
+            backend
+            or os.environ.get("WAX_STORAGE_BACKEND")
+            or getattr(settings, "storage_backend", None)
+            or "local"
+        )
+    backend = str(backend).lower()
     if backend == "s3":
-        return S3Storage()
+        try:
+            return S3Storage()
+        except Exception as e:
+            logger.error("s3_storage_init_failed", error=str(e)[:200])
+            if settings.app_env == "production":
+                raise
+            logger.warning("s3_fallback_to_local")
+            return LocalStorage()
+    if settings.app_env == "production":
+        logger.warning(
+            "storage_local_in_production",
+            hint="Set WAX_STORAGE_BACKEND=s3 and WAX_S3_BUCKET for durable artifacts",
+        )
     return LocalStorage()
 
 

@@ -154,6 +154,24 @@ class Settings(BaseSettings):
                 object.__setattr__(self, "fallback_provider", "openai")
 
     @property
+    def effective_storage_backend(self) -> str:
+        """local for dev; s3 when bucket configured (required path for durable prod artifacts)."""
+        import os
+        explicit = (
+            os.environ.get("WAX_STORAGE_BACKEND")
+            or self.storage_backend
+            or "local"
+        ).lower()
+        bucket = (
+            os.environ.get("WAX_S3_BUCKET")
+            or self.s3_bucket
+            or ""
+        ).strip()
+        if explicit == "s3" or (self.app_env == "production" and bucket):
+            return "s3" if bucket else "local"
+        return explicit if explicit in ("local", "s3") else "local"
+
+    @property
     def effective_terminal_require_sandbox(self) -> bool:
         """Production always requires real isolation (docker or bwrap)."""
         if self.app_env == "production":

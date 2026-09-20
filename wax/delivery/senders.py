@@ -30,7 +30,8 @@ def build_presentable(text: str, interactive: dict | None = None) -> Presentable
     style = interactive.get("style") or "buttons"
     choices = [
         InteractiveChoice(
-            id=c.get("id") or f"opt_{i}",
+            # Prefer opaque callback_data so WhatsApp button id matches Interaction lookup
+            id=c.get("callback_data") or c.get("id") or f"opt_{i}",
             title=c.get("title") or f"Option {i}",
             description=c.get("description"),
         )

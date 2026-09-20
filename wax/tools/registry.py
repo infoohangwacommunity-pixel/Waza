@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.db.models import Artifact, ScheduledAction
 from wax.observability.logging import get_logger
+from wax.tools.meta import tool_meta
 from wax.scheduler.service import SchedulerService
 from wax.terminal.executor import get_terminal
 
@@ -237,6 +238,13 @@ async def execute_tool(
     handler = HANDLERS.get(name)
     if not handler:
         return {"ok": False, "error": f"unknown_tool:{name}"}
+    meta = tool_meta(name)
+    logger.info(
+        "tool_invoke",
+        tool=name,
+        risk=meta.get("risk"),
+        permissions=meta.get("permissions"),
+    )
     args = parse_tool_args(arguments)
     side_effect = name in {
         "schedule_followup",
@@ -1043,6 +1051,23 @@ async def handle_set_preference(
     prefs = await update_preferences(session, principal_id, {key: value})
     return {"ok": True, "preferences": prefs}
 
+
+async def handle_research_fetch(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.research.fetch import fetch_url
+    url = (args.get("url") or "").strip()
+    if not url:
+        return {"ok": False, "error": "url_required"}
+    return await fetch_url(url)
+
+
+async def handle_research_search(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.research.fetch import search_stub
+    return await search_stub(args.get("query") or "")
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1055,6 +1080,8 @@ HANDLERS.update({
     "pause_activity": handle_pause_activity,
     "resume_activity": handle_resume_activity,
     "set_preference": handle_set_preference,
+    "research_fetch": handle_research_fetch,
+    "research_search": handle_research_search,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,
