@@ -421,7 +421,6 @@ async def recovery_loop() -> None:
                         logger.exception("workspace_cleanup_error")
                 if cycle % 10 == 0:
                     from wax.db.models import Principal
-                    from sqlalchemy import select
                     result = await session.execute(select(Principal.id).limit(5))
                     for (pid,) in result.all():
                         try:
@@ -433,9 +432,27 @@ async def recovery_loop() -> None:
         await asyncio.sleep(max(5.0, settings.scheduler_poll_interval_seconds))
 
 
+def _log_provider_config() -> None:
+    """Safe startup diagnostics — never log API keys."""
+    key = (settings.primary_api_key or "").strip()
+    placeholder = key in ("", "REPLACE_WITH_YOUR_LLM_API_KEY", "change-me")
+    base = (settings.primary_base_url or "").strip() or "(default)"
+    logger.info(
+        "provider_config",
+        provider_selected=settings.primary_provider,
+        provider_api_key_configured=bool(key) and not placeholder,
+        provider_api_key_looks_placeholder=placeholder,
+        provider_base_url=base,
+        provider_model=settings.primary_model,
+        fallback_provider=settings.fallback_provider,
+        fallback_api_key_configured=bool((settings.fallback_api_key or "").strip()),
+    )
+
+
 async def main() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
+    _log_provider_config()
     tasks = [asyncio.create_task(worker_loop(f"worker-{i}")) for i in range(2)]
     tasks.append(asyncio.create_task(recovery_loop()))
     await asyncio.gather(*tasks)

@@ -115,6 +115,43 @@ class Settings(BaseSettings):
                 return "postgresql+asyncpg://" + v[len("postgresql://") :]
         return v
 
+    def model_post_init(self, __context) -> None:
+        """Apply WAX_LLM_* env aliases when PRIMARY_* is empty or placeholder.
+
+        Railway configs often set WAX_LLM_API_KEY / BASE_URL / MODEL while the app
+        reads PRIMARY_*. Map them once at load time so the worker authenticates.
+        """
+        import os
+
+        def _blank_or_placeholder(v: str) -> bool:
+            s = (v or "").strip()
+            return s in (
+                "",
+                "REPLACE_WITH_YOUR_LLM_API_KEY",
+                "change-me",
+                "REPLACE_IF_USING_FALLBACK",
+                "REPLACE_IF_SEPARATE_MEMORY_KEY",
+            )
+
+        wax_key = (os.environ.get("WAX_LLM_API_KEY") or "").strip()
+        wax_base = (os.environ.get("WAX_LLM_BASE_URL") or "").strip()
+        wax_model = (os.environ.get("WAX_LLM_MODEL") or "").strip()
+
+        if _blank_or_placeholder(self.primary_api_key) and wax_key:
+            object.__setattr__(self, "primary_api_key", wax_key)
+        if not (self.primary_base_url or "").strip() and wax_base:
+            object.__setattr__(self, "primary_base_url", wax_base)
+        if wax_model and (
+            not (self.primary_model or "").strip() or self.primary_model == "gpt-4o-mini"
+        ):
+            object.__setattr__(self, "primary_model", wax_model)
+
+        fb_key = (os.environ.get("WAX_LLM_FALLBACK_1_API_KEY") or "").strip()
+        if _blank_or_placeholder(self.fallback_api_key) and fb_key:
+            object.__setattr__(self, "fallback_api_key", fb_key)
+            if self.fallback_provider in ("none", "", "null"):
+                object.__setattr__(self, "fallback_provider", "openai")
+
     @property
     def effective_terminal_require_sandbox(self) -> bool:
         """Production always requires real isolation (docker or bwrap)."""

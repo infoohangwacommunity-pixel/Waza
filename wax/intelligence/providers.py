@@ -155,7 +155,21 @@ class OpenAICompatibleProvider(IntelligenceProvider):
         if resp.status_code == 429:
             raise ProviderError("Rate limited", ProviderErrorClass.RATE_LIMITED, retryable=True)
         if resp.status_code in (401, 403):
-            raise ProviderError("Auth failure", ProviderErrorClass.AUTH_FAILURE, retryable=False)
+            body_preview = (resp.text or "")[:200].replace("\n", " ")
+            logger.warning(
+                "provider_auth_failure",
+                provider=self.name,
+                status_code=resp.status_code,
+                base_url=self.base_url,
+                model=self.model,
+                body_preview=body_preview,
+                api_key_configured=bool(self.api_key),
+            )
+            raise ProviderError(
+                f"Auth failure status={resp.status_code}",
+                ProviderErrorClass.AUTH_FAILURE,
+                retryable=False,
+            )
         if resp.status_code >= 500:
             raise ProviderError(
                 f"Server error {resp.status_code}", ProviderErrorClass.UNAVAILABLE, retryable=True
@@ -281,7 +295,21 @@ class AnthropicProvider(IntelligenceProvider):
         if resp.status_code == 429:
             raise ProviderError("Rate limited", ProviderErrorClass.RATE_LIMITED, retryable=True)
         if resp.status_code in (401, 403):
-            raise ProviderError("Auth failure", ProviderErrorClass.AUTH_FAILURE, retryable=False)
+            body_preview = (resp.text or "")[:200].replace("\n", " ")
+            logger.warning(
+                "provider_auth_failure",
+                provider=self.name,
+                status_code=resp.status_code,
+                base_url=self.base_url,
+                model=self.model,
+                body_preview=body_preview,
+                api_key_configured=bool(self.api_key),
+            )
+            raise ProviderError(
+                f"Auth failure status={resp.status_code}",
+                ProviderErrorClass.AUTH_FAILURE,
+                retryable=False,
+            )
         if resp.status_code >= 500:
             raise ProviderError(
                 f"Server error {resp.status_code}", ProviderErrorClass.UNAVAILABLE, retryable=True
