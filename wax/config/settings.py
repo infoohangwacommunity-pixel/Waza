@@ -79,6 +79,8 @@ class Settings(BaseSettings):
     allow_code_execution: bool = True
     allow_external_network: bool = True
     allow_html_artifacts: bool = True
+    # When true in production, WORKSPACE_ROOT must exist and be writable (Railway Volume)
+    require_persistent_workspace: bool = False
     work_poll_interval_seconds: float = 1.0
     work_stale_seconds: int = 300
     work_max_retries: int = 3

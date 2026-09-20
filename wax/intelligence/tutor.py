@@ -89,6 +89,19 @@ Buttons:
 
 AVAILABLE_TOOLS = [
     ToolSpec(
+        name="schedule_followup",
+        description="Schedule a future follow-up when a later check-in would help this person.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string"},
+                "delay_hours": {"type": "number"},
+                "message_hint": {"type": "string"},
+            },
+            "required": ["reason", "delay_hours"],
+        },
+    ),
+    ToolSpec(
         name="schedule_at",
         description="Schedule a follow-up at an absolute datetime (ISO 8601). Optional IANA timezone.",
         parameters={
@@ -104,57 +117,8 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
-        name="get_learner_state",
-        description="Read current goals, active/paused activities, pending choices, and upcoming schedule for this learner.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="pause_activity",
-        description="Pause the active learning activity (e.g. to handle an unrelated request). Optional activity_id.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "activity_id": {"type": "string"},
-                "reason": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="resume_activity",
-        description="Resume a paused learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {"activity_id": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="set_preference",
-        description="Store an explicit learner preference (message_length, timezone, language, etc.).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "key": {"type": "string"},
-                "value": {},
-            },
-            "required": ["key", "value"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_followup",
-        description="Schedule a future follow-up when a later check-in would help this person.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
-                "delay_hours": {"type": "number"},
-                "message_hint": {"type": "string"},
-            },
-            "required": ["reason", "delay_hours"],
-        },
-    ),
-    ToolSpec(
         name="schedule_continuous",
-        description="Schedule several future follow-ups (e.g. over a few days). Use only when the person wants ongoing support.",
+        description="Schedule several future follow-ups. Use only when the person wants ongoing support.",
         parameters={
             "type": "object",
             "properties": {
@@ -163,191 +127,6 @@ AVAILABLE_TOOLS = [
                 "hours_from_now": {"type": "array", "items": {"type": "number"}},
             },
             "required": ["reason", "hours_from_now"],
-        },
-    ),
-    ToolSpec(
-        name="create_artifact",
-        description="Create a durable document (notes, study sheet, PDF) for this learner. Use format=pdf when they ask for a PDF. Do not claim the file was sent until delivery succeeds.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string"},
-                "title": {"type": "string"},
-                "content": {"type": "string"},
-                "format": {"type": "string", "description": "txt or pdf"},
-            },
-            "required": ["kind", "title", "content"],
-        },
-    ),
-    ToolSpec(
-        name="list_artifacts",
-        description="List artifacts previously saved for this person.",
-        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
-    ),
-    ToolSpec(
-        name="read_artifact",
-        description="Read a saved artifact by id.",
-        parameters={
-            "type": "object",
-            "properties": {"artifact_id": {"type": "string"}},
-            "required": ["artifact_id"],
-        },
-    ),
-    ToolSpec(
-        name="run_python",
-        description="Run a short Python snippet when calculation or generation helps.",
-        parameters={
-            "type": "object",
-            "properties": {"code": {"type": "string"}},
-            "required": ["code"],
-        },
-    ),
-    ToolSpec(
-        name="write_workspace_file",
-        description="Write a file in the workspace for multi-step work.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "filename": {"type": "string"},
-                "content": {"type": "string"},
-                "subdir": {"type": "string"},
-            },
-            "required": ["filename", "content"],
-        },
-    ),
-    ToolSpec(
-        name="read_workspace_file",
-        description="Read a file from the workspace.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="list_workspace",
-        description="List files in the workspace (default: media).",
-        parameters={
-            "type": "object",
-            "properties": {"subdir": {"type": "string"}, "limit": {"type": "number"}},
-        },
-    ),
-    ToolSpec(
-        name="fetch_inbound_media",
-        description="Download media the learner sent into the workspace.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "channel": {"type": "string"},
-                "media_id": {"type": "string"},
-                "filename": {"type": "string"},
-            },
-            "required": ["channel", "media_id"],
-        },
-    ),
-    ToolSpec(
-        name="inspect_media",
-        description="Inspect a local media file (type, OCR, etc.) when the learner sent a photo or document.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="workspace_command",
-        description="Run one allowed command in the workspace.",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-    ),
-    ToolSpec(
-        name="describe_image",
-        description="Optional vision description of a local image — only if simpler inspection is not enough.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "question": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-    ToolSpec(
-    ToolSpec(
-    ToolSpec(
-    ToolSpec(
-    ToolSpec(
-        name="export_learner_data",
-        description="Export this learner's data package (memories, messages, goals, artifacts) for privacy requests.",
-        parameters={
-            "type": "object",
-            "properties": {"message_limit": {"type": "number"}},
-        },
-    ),
-    ToolSpec(
-    ToolSpec(
-        name="request_channel_link",
-        description=(
-            "Start linking another channel (WhatsApp/Telegram) to this learner. "
-            "Prefer method=otp: sends a 6-digit code to that number/chat. "
-            "Use method=knowledge only if OTP cannot be delivered. "
-            "For WhatsApp pass the phone digits; for Telegram pass chat id."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "target_channel": {"type": "string"},
-                "target_external_id": {"type": "string"},
-                "method": {"type": "string"},
-                "questions": {"type": "array"},
-            },
-            "required": ["target_channel", "target_external_id"],
-        },
-    ),
-    ToolSpec(
-        name="confirm_channel_link",
-        description="Confirm channel link when the learner pastes the OTP code, or provides knowledge answers.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "challenge_id": {"type": "string"},
-                "answers": {"type": "array", "items": {"type": "string"}},
-            },
-        },
-    ),
-        name="link_channel_identity",
-        description="Link another channel identity (whatsapp/telegram id) to this same learner for continuity.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "channel": {"type": "string"},
-                "external_id": {"type": "string"},
-                "display_name": {"type": "string"},
-                "make_primary": {"type": "boolean"},
-            },
-            "required": ["channel", "external_id"],
-        },
-    ),
-    ToolSpec(
-        name="create_html_page",
-        description="Create a simple branded HTML study page artifact from title+content.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "content": {"type": "string"},
-            },
-            "required": ["title", "content"],
-        },
-    ),
-        name="cancel_schedule",
-        description="Cancel a pending scheduled action by id.",
-        parameters={
-            "type": "object",
-            "properties": {"scheduled_action_id": {"type": "string"}},
-            "required": ["scheduled_action_id"],
         },
     ),
     ToolSpec(
@@ -367,8 +146,96 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="cancel_schedule",
+        description="Cancel a pending scheduled action by id.",
+        parameters={
+            "type": "object",
+            "properties": {"scheduled_action_id": {"type": "string"}},
+            "required": ["scheduled_action_id"],
+        },
+    ),
+    ToolSpec(
+        name="get_current_time",
+        description="Get authoritative current UTC and optional learner timezone.",
+        parameters={
+            "type": "object",
+            "properties": {"timezone": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="get_learner_state",
+        description="Read current goals, activities, pending choices, and upcoming schedule.",
+        parameters={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="check_quiet_hours",
+        description="Check whether the learner is currently in quiet hours.",
+        parameters={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="set_preference",
+        description="Store an explicit learner preference (message_length, timezone, language, etc.).",
+        parameters={
+            "type": "object",
+            "properties": {"key": {"type": "string"}, "value": {}},
+            "required": ["key", "value"],
+        },
+    ),
+    ToolSpec(
+        name="present_choices",
+        description="Show interactive choices when helpful. Optional expires_in_seconds for timed choices.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "style": {"type": "string"},
+                "prompt": {"type": "string"},
+                "list_button_label": {"type": "string"},
+                "choices": {"type": "array"},
+                "expires_in_seconds": {"type": "number"},
+            },
+            "required": ["choices"],
+        },
+    ),
+    ToolSpec(
+        name="create_artifact",
+        description="Create a durable document (notes, study sheet, PDF). format=txt or pdf.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+                "format": {"type": "string"},
+            },
+            "required": ["kind", "title", "content"],
+        },
+    ),
+    ToolSpec(
+        name="create_html_page",
+        description="Create a branded HTML study page; returns page_url when PUBLIC_BASE_URL is set.",
+        parameters={
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["title", "content"],
+        },
+    ),
+    ToolSpec(
+        name="list_artifacts",
+        description="List artifacts saved for this person.",
+        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
+    ),
+    ToolSpec(
+        name="read_artifact",
+        description="Read a saved artifact by id.",
+        parameters={
+            "type": "object",
+            "properties": {"artifact_id": {"type": "string"}},
+            "required": ["artifact_id"],
+        },
+    ),
+    ToolSpec(
         name="redeliver_artifact",
-        description="Re-send an existing artifact without regenerating its content.",
+        description="Re-send an existing artifact without regenerating content.",
         parameters={
             "type": "object",
             "properties": {
@@ -379,20 +246,50 @@ AVAILABLE_TOOLS = [
             "required": ["artifact_id"],
         },
     ),
-        name="record_assessment_timeout",
-        description="When a timed assessment item expired, record timeout and get the next item if any.",
+    ToolSpec(
+        name="run_python",
+        description="Run a short Python snippet when calculation or generation helps.",
         parameters={
             "type": "object",
-            "properties": {
-                "attempt_id": {"type": "string"},
-                "item_id": {"type": "string"},
-            },
-            "required": ["attempt_id"],
+            "properties": {"code": {"type": "string"}},
+            "required": ["code"],
+        },
+    ),
+    ToolSpec(
+        name="write_workspace_file",
+        description="Write a file in the workspace for multi-step work.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
+            "required": ["path", "content"],
+        },
+    ),
+    ToolSpec(
+        name="read_workspace_file",
+        description="Read a workspace file.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="list_workspace",
+        description="List files in the learner workspace.",
+        parameters={"type": "object", "properties": {"path": {"type": "string"}}},
+    ),
+    ToolSpec(
+        name="workspace_command",
+        description="Run one allowed command in the workspace.",
+        parameters={
+            "type": "object",
+            "properties": {"command": {"type": "string"}},
+            "required": ["command"],
         },
     ),
     ToolSpec(
         name="workspace_env",
-        description="Get or update this learner workspace environment manifest (packages/tools).",
+        description="Get or update workspace environment manifest (packages/tools).",
         parameters={
             "type": "object",
             "properties": {
@@ -404,12 +301,200 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
-        name="check_quiet_hours",
-        description="Check whether the learner is currently in quiet hours based on preferences.",
+        name="fetch_inbound_media",
+        description="Fetch inbound media from the messaging channel into the workspace.",
         parameters={"type": "object", "properties": {}},
     ),
+    ToolSpec(
+        name="inspect_media",
+        description="Inspect a local media file (type, OCR) when the learner sent a photo or document.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="describe_image",
+        description="Optional vision description of a local image.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}, "question": {"type": "string"}},
+            "required": ["path"],
+        },
+    ),
+    ToolSpec(
+        name="inspect_memories",
+        description="Inspect active memories for this learner.",
+        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
+    ),
+    ToolSpec(
+        name="forget_memory",
+        description="Forget something when the learner asks.",
+        parameters={
+            "type": "object",
+            "properties": {"memory_id": {"type": "string"}, "query": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="manage_goal",
+        description="Create or update a learning goal.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "title": {"type": "string"},
+                "goal_id": {"type": "string"},
+                "status": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="start_activity",
+        description="Start a durable learning activity.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "objective": {"type": "string"},
+                "duration_seconds": {"type": "number"},
+            },
+            "required": ["kind"],
+        },
+    ),
+    ToolSpec(
+        name="complete_activity",
+        description="Complete an activity.",
+        parameters={
+            "type": "object",
+            "properties": {"activity_id": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="pause_activity",
+        description="Pause the active learning activity.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="resume_activity",
+        description="Resume a paused learning activity.",
+        parameters={
+            "type": "object",
+            "properties": {"activity_id": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="create_assessment",
+        description="Create a durable assessment (not a fixed quiz mode).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "items": {"type": "array"},
+                "timed": {"type": "boolean"},
+                "duration_seconds": {"type": "number"},
+            },
+            "required": ["title", "items"],
+        },
+    ),
+    ToolSpec(
+        name="submit_assessment_answer",
+        description="Submit an answer to the current assessment item.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "attempt_id": {"type": "string"},
+                "item_id": {"type": "string"},
+                "response_text": {"type": "string"},
+            },
+            "required": ["attempt_id", "item_id"],
+        },
+    ),
+    ToolSpec(
+        name="record_assessment_timeout",
+        description="Record that a timed assessment item expired and get the next item if any.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "attempt_id": {"type": "string"},
+                "item_id": {"type": "string"},
+            },
+            "required": ["attempt_id"],
+        },
+    ),
+    ToolSpec(
+        name="update_concept_state",
+        description="Update observed mastery/confidence for a concept.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "concept_key": {"type": "string"},
+                "status": {"type": "string"},
+                "mastery": {"type": "number"},
+                "confidence": {"type": "number"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="record_evidence",
+        description="Record evidence about the learner.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "claim_key": {"type": "string"},
+                "content": {"type": "string"},
+                "strength": {"type": "number"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="form_hypothesis",
+        description="Form or update a hypothesis about the learner.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "claim_key": {"type": "string"},
+                "statement": {"type": "string"},
+                "confidence": {"type": "number"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="why_we_believe",
+        description="Explain why we currently believe something about the learner.",
+        parameters={
+            "type": "object",
+            "properties": {"claim_key": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="propose_learning_check",
+        description="Propose a light check related to an active hypothesis.",
+        parameters={
+            "type": "object",
+            "properties": {"hypothesis_id": {"type": "string"}, "hint": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="schedule_hypothesis_recheck",
+        description="Schedule a future recheck for a hypothesis.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "hypothesis_id": {"type": "string"},
+                "delay_hours": {"type": "number"},
+            },
+        },
+    ),
+    ToolSpec(
         name="research_fetch",
-        description="Fetch a public http(s) URL for world knowledge. Result is not learner memory.",
+        description="Fetch a public http(s) URL for world knowledge. Not learner memory.",
         parameters={
             "type": "object",
             "properties": {"url": {"type": "string"}},
@@ -418,194 +503,65 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="research_search",
-        description="Search the web when a search provider is configured; otherwise returns guidance to use research_fetch.",
+        description="Search the web when a search provider is configured.",
         parameters={
             "type": "object",
             "properties": {"query": {"type": "string"}},
             "required": ["query"],
         },
     ),
-        name="get_current_time",
-        description="Get authoritative current UTC and optional learner timezone. Use before scheduling or deadlines.",
-        parameters={
-            "type": "object",
-            "properties": {"timezone": {"type": "string", "description": "IANA timezone e.g. Africa/Lagos"}},
-        },
-    ),
-        name="present_choices",
-        description="Optional quick choices as buttons when a real choice helps. Not a permanent menu.",
+    ToolSpec(
+        name="request_channel_link",
+        description=(
+            "Start linking another channel (WhatsApp/Telegram). Prefer OTP: sends a 6-digit code "
+            "to that number/chat. method=knowledge only if OTP cannot be delivered."
+        ),
         parameters={
             "type": "object",
             "properties": {
-                "style": {"type": "string"},
-                "prompt": {"type": "string"},
-                "list_button_label": {"type": "string"},
-                "choices": {"type": "array", "items": {"type": "object"}},
+                "target_channel": {"type": "string"},
+                "target_external_id": {"type": "string"},
+                "method": {"type": "string"},
+                "questions": {"type": "array"},
             },
-            "required": ["choices"],
+            "required": ["target_channel", "target_external_id"],
         },
     ),
     ToolSpec(
-        name="forget_memory",
-        description="Forget something when the learner asks.",
-        parameters={
-            "type": "object",
-            "properties": {"memory_id": {"type": "string"}},
-            "required": ["memory_id"],
-        },
-    ),
-    ToolSpec(
-        name="inspect_memories",
-        description="Show what is remembered when the learner asks.",
-        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
-    ),
-    ToolSpec(
-        name="manage_goal",
-        description="Track a goal this person stated or implied.",
+        name="confirm_channel_link",
+        description="Confirm channel link when the learner pastes the OTP or knowledge answers.",
         parameters={
             "type": "object",
             "properties": {
-                "action": {"type": "string"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "goal_id": {"type": "string"},
-                "priority": {"type": "number"},
+                "code": {"type": "string"},
+                "challenge_id": {"type": "string"},
+                "answers": {"type": "array", "items": {"type": "string"}},
             },
-            "required": ["action"],
         },
     ),
     ToolSpec(
-        name="start_activity",
-        description="Start a durable practice or timed session if useful — not a fixed course mode.",
+        name="link_channel_identity",
+        description="Directly attach a channel identity (admin/system). Prefer request_channel_link for learners.",
         parameters={
             "type": "object",
             "properties": {
-                "kind": {"type": "string"},
-                "objective": {"type": "string"},
-                "duration_minutes": {"type": "number"},
-                "notes": {"type": "string"},
+                "channel": {"type": "string"},
+                "external_id": {"type": "string"},
+                "display_name": {"type": "string"},
+                "make_primary": {"type": "boolean"},
             },
-            "required": ["kind", "objective"],
+            "required": ["channel", "external_id"],
         },
     ),
     ToolSpec(
-        name="complete_activity",
-        description="Complete a durable activity.",
+        name="export_learner_data",
+        description="Export this learner's data package (memories, messages, goals, artifacts).",
         parameters={
             "type": "object",
-            "properties": {
-                "activity_id": {"type": "string"},
-                "outcome": {"type": "object"},
-            },
-            "required": ["activity_id"],
-        },
-    ),
-    ToolSpec(
-        name="update_concept_state",
-        description="Optionally note how this person is doing with a concept they are working on.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "concept": {"type": "string"},
-                "mastery_delta": {"type": "number"},
-                "status": {"type": "string"},
-                "note": {"type": "string"},
-                "related_concept": {"type": "string"},
-                "relation_type": {"type": "string"},
-            },
-            "required": ["concept"],
-        },
-    ),
-
-    ToolSpec(
-        name="create_assessment",
-        description="Create a durable practice/assessment (optional timer). Not a fixed quiz mode.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "objective": {"type": "string"},
-                "timed": {"type": "boolean"},
-                "duration_minutes": {"type": "number"},
-                "one_at_a_time": {"type": "boolean"},
-                "items": {"type": "array", "items": {"type": "object"}},
-            },
-            "required": ["title", "items"],
-        },
-    ),
-    ToolSpec(
-        name="submit_assessment_answer",
-        description="Record an assessment answer and advance.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "attempt_id": {"type": "string"},
-                "item_id": {"type": "string"},
-                "response_text": {"type": "string"},
-            },
-            "required": ["attempt_id", "item_id", "response_text"],
-        },
-    ),
-    ToolSpec(
-        name="record_evidence",
-        description="Record observable evidence. Do not invent scores.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "evidence_type": {"type": "string"},
-                "description": {"type": "string"},
-                "claim_key": {"type": "string"},
-                "assistance_level": {"type": "string"},
-                "payload": {"type": "object"},
-                "weight": {"type": "number"},
-            },
-            "required": ["evidence_type", "description"],
-        },
-    ),
-    ToolSpec(
-        name="form_hypothesis",
-        description="Form a candidate hypothesis about the learner (not a fact).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "claim_key": {"type": "string"},
-                "claim": {"type": "string"},
-                "confidence": {"type": "number"},
-                "rationale": {"type": "string"},
-            },
-            "required": ["claim_key", "claim"],
-        },
-    ),
-    ToolSpec(
-        name="why_we_believe",
-        description="Explain the evidence behind a claim about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {"claim_key": {"type": "string"}},
-            "required": ["claim_key"],
-        },
-    ),
-
-    ToolSpec(
-        name="propose_learning_check",
-        description="Suggest a light next check for an uncertain hypothesis about this learner. Do not spam.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="schedule_hypothesis_recheck",
-        description="Schedule a durable later re-check of a hypothesis.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "hypothesis_id": {"type": "string"},
-                "delay_hours": {"type": "number"},
-                "message_hint": {"type": "string"},
-            },
-            "required": ["hypothesis_id"],
+            "properties": {"message_limit": {"type": "number"}},
         },
     ),
 ]
-
 
 
 class TutorService:

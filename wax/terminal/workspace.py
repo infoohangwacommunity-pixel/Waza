@@ -28,8 +28,30 @@ DEFAULT_ROOT = os.environ.get("WAX_WORKSPACE_ROOT", "/tmp/wax-workspaces")
 
 
 def workspace_root() -> Path:
-    root = Path(getattr(settings, "workspace_root", None) or DEFAULT_ROOT)
-    root.mkdir(parents=True, exist_ok=True)
+    root = Path(
+        getattr(settings, "workspace_root", None)
+        or os.environ.get("WAX_WORKSPACE_ROOT")
+        or DEFAULT_ROOT
+    )
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".wax_write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as e:
+        if getattr(settings, "require_persistent_workspace", False) or (
+            settings.app_env == "production"
+            and str(root).startswith("/data/")
+        ):
+            raise RuntimeError(
+                f"Workspace path {root} is not writable. "
+                f"Attach a Railway Volume at /data and set WORKSPACE_ROOT=/data/wax-workspaces. "
+                f"Underlying error: {e}"
+            ) from e
+        logger.warning("workspace_root_not_writable", path=str(root), error=str(e)[:200])
+        # fall back to /tmp for non-strict envs
+        root = Path("/tmp/wax-workspaces")
+        root.mkdir(parents=True, exist_ok=True)
     return root
 
 
