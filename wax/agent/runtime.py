@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.config import get_settings
 from wax.db.models import Execution, Work
 from wax.observability.logging import get_logger
+from wax.observability.correlation import set_execution_id
 
 logger = get_logger(__name__)
 
@@ -67,6 +68,7 @@ class AgentRuntime:
         self.work.metadata_ = meta
         await self.session.flush()
         self.execution = ex
+        set_execution_id(str(ex.id))
         logger.info(
             "agent_execution_started",
             work_id=str(self.work.id),

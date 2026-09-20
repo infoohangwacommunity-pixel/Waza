@@ -186,6 +186,89 @@ class AssessmentService:
             pass
         return resp
 
+
+    async def record_item_timeout(
+        self,
+        *,
+        attempt_id,
+        item_id=None,
+    ) -> dict[str, Any]:
+        """Record that time ran out on the current (or given) item — durable evidence."""
+        attempt = await self.session.get(AssessmentAttempt, attempt_id)
+        if not attempt:
+            return {"ok": False, "error": "attempt_not_found"}
+        assessment_id = attempt.assessment_id
+        item = None
+        if item_id:
+            item = await self.session.get(AssessmentItem, item_id)
+        if item is None:
+            item = await self.next_item(assessment_id, attempt_id)
+        if item is None:
+            return {"ok": True, "completed": True, "next_item": None, "timed_out_item_id": None}
+
+        # Idempotent: if response already exists for this item, don't double-write
+        existing = await self.session.execute(
+            select(AssessmentResponse).where(
+                AssessmentResponse.attempt_id == attempt_id,
+                AssessmentResponse.item_id == item.id,
+            )
+        )
+        if existing.scalar_one_or_none():
+            nxt = await self.next_item(assessment_id, attempt_id)
+            return {
+                "ok": True,
+                "already_answered": True,
+                "timed_out_item_id": str(item.id),
+                "next_item": self._item_dict(nxt) if nxt else None,
+                "completed": nxt is None,
+            }
+
+        resp = AssessmentResponse(
+            id=uuid4(),
+            attempt_id=attempt_id,
+            item_id=item.id,
+            response_text=None,
+            response_structured={"timeout": True},
+            is_correct=False,
+            score=0.0,
+            feedback="time_expired",
+            evidence=[
+                {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "kind": "timeout",
+                }
+            ],
+        )
+        self.session.add(resp)
+        await self.session.flush()
+        nxt = await self.next_item(assessment_id, attempt_id)
+        done = nxt is None
+        if done:
+            await self.complete_attempt(attempt_id)
+        logger.info(
+            "assessment_item_timeout",
+            attempt_id=str(attempt_id),
+            item_id=str(item.id),
+            completed=done,
+        )
+        return {
+            "ok": True,
+            "timed_out_item_id": str(item.id),
+            "next_item": self._item_dict(nxt) if nxt else None,
+            "completed": done,
+        }
+
+    def _item_dict(self, item: AssessmentItem | None) -> dict[str, Any] | None:
+        if not item:
+            return None
+        return {
+            "item_id": str(item.id),
+            "prompt": item.prompt,
+            "item_type": item.item_type,
+            "options": item.options,
+            "ordinal": item.ordinal,
+        }
+
     async def complete_attempt(self, attempt_id) -> AssessmentAttempt:
         attempt = await self.session.get(AssessmentAttempt, attempt_id)
         if not attempt:

@@ -265,6 +265,36 @@ AVAILABLE_TOOLS = [
     ToolSpec(
     ToolSpec(
     ToolSpec(
+    ToolSpec(
+        name="record_assessment_timeout",
+        description="When a timed assessment item expired, record timeout and get the next item if any.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "attempt_id": {"type": "string"},
+                "item_id": {"type": "string"},
+            },
+            "required": ["attempt_id"],
+        },
+    ),
+    ToolSpec(
+        name="workspace_env",
+        description="Get or update this learner workspace environment manifest (packages/tools).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "name": {"type": "string"},
+                "version": {"type": "string"},
+                "source": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="check_quiet_hours",
+        description="Check whether the learner is currently in quiet hours based on preferences.",
+        parameters={"type": "object", "properties": {}},
+    ),
         name="research_fetch",
         description="Fetch a public http(s) URL for world knowledge. Result is not learner memory.",
         parameters={

@@ -39,6 +39,9 @@ TOOL_META: dict[str, dict[str, Any]] = {
     "workspace_command": {"risk": "high", "permissions": [CODE_EXECUTION]},
     "research_fetch": {"risk": "high", "permissions": [EXTERNAL_NETWORK]},
     "research_search": {"risk": "high", "permissions": [EXTERNAL_NETWORK]},
+    "record_assessment_timeout": {"risk": "medium", "permissions": [DATABASE_WRITE]},
+    "workspace_env": {"risk": "low", "permissions": [READ, WRITE]},
+    "check_quiet_hours": {"risk": "low", "permissions": [READ]},
     "create_assessment": {"risk": "medium", "permissions": [DATABASE_WRITE]},
     "submit_assessment_answer": {"risk": "medium", "permissions": [DATABASE_WRITE]},
 }

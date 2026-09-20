@@ -1068,6 +1068,68 @@ async def handle_research_search(
     from wax.research.fetch import search_stub
     return await search_stub(args.get("query") or "")
 
+
+async def handle_record_assessment_timeout(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Mark current assessment item timed out and return next item if any."""
+    from wax.assessment.service import AssessmentService
+    attempt_id = args.get("attempt_id") or (ctx.get("input_payload") or {}).get("attempt_id")
+    item_id = args.get("item_id")
+    if not attempt_id:
+        return {"ok": False, "error": "attempt_id_required"}
+    return await AssessmentService(session).record_item_timeout(
+        attempt_id=attempt_id, item_id=item_id
+    )
+
+
+async def handle_workspace_env(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Read or update per-learner workspace environment manifest."""
+    from wax.terminal.env_manifest import load_manifest, record_package, has_package
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    action = (args.get("action") or "get").lower()
+    if action == "get":
+        return {"ok": True, "manifest": load_manifest(principal_id)}
+    if action == "has_package":
+        name = args.get("name") or ""
+        return {"ok": True, "name": name, "installed": has_package(principal_id, name)}
+    if action == "record_package":
+        name = args.get("name")
+        if not name:
+            return {"ok": False, "error": "name_required"}
+        man = record_package(
+            principal_id, name, version=args.get("version"), source=args.get("source") or "pip"
+        )
+        return {"ok": True, "manifest": man}
+    return {"ok": False, "error": "unknown_action"}
+
+
+async def handle_check_quiet_hours(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from datetime import datetime, timezone
+    from wax.domain.preferences import get_preferences, is_in_quiet_hours
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    prefs = await get_preferences(session, principal_id)
+    now = datetime.now(timezone.utc)
+    # Use learner timezone if set
+    tz_name = prefs.get("timezone")
+    hhmm = now.strftime("%H:%M")
+    if tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            hhmm = now.astimezone(ZoneInfo(tz_name)).strftime("%H:%M")
+        except Exception:
+            pass
+    quiet = is_in_quiet_hours(prefs, hhmm)
+    return {"ok": True, "quiet_hours": quiet, "local_hhmm": hhmm, "timezone": tz_name}
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1082,6 +1144,9 @@ HANDLERS.update({
     "set_preference": handle_set_preference,
     "research_fetch": handle_research_fetch,
     "research_search": handle_research_search,
+    "record_assessment_timeout": handle_record_assessment_timeout,
+    "workspace_env": handle_workspace_env,
+    "check_quiet_hours": handle_check_quiet_hours,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,

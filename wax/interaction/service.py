@@ -127,6 +127,13 @@ class InteractionService:
     ) -> dict[str, Any]:
         """Atomically consume. Returns status outcome for webhook/worker."""
         now = now or datetime.now(timezone.utc)
+        # Re-load with row lock to defeat double-tap / dual-worker races
+        locked = await self.session.execute(
+            select(Interaction)
+            .where(Interaction.id == interaction.id)
+            .with_for_update()
+        )
+        interaction = locked.scalar_one_or_none() or interaction
         if interaction.principal_id != principal_id:
             logger.warning(
                 "interactive_wrong_principal",
