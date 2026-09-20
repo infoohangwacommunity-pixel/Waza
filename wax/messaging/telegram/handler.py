@@ -45,6 +45,10 @@ async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[
     except json.JSONDecodeError:
         raise WebhookAcceptError("invalid_json", 400)
 
+    # Inline button callbacks — durable Interaction consume path
+    if payload.get("callback_query"):
+        return await _handle_telegram_callback(payload)
+
     normalized = normalize_telegram_update(payload)
     if not normalized:
         return {"status": "ignored"}

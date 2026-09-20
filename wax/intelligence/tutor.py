@@ -65,6 +65,10 @@ Artifacts and files:
 - Only say a file was sent when the delivery layer confirmed it.
 - create_artifact stores the file; channel delivery is separate.
 
+Active learning context:
+- Notice what you and the learner were doing before a new request.
+- If the new request is unrelated, you may briefly offer to pause and resume later — do not invent subject bans.
+
 Buttons:
 - Use present_choices only when a small set of options clearly helps.
 - If they say they do not want buttons, stop using them for this conversation unless they ask again.
@@ -207,6 +211,14 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+    ToolSpec(
+        name="get_current_time",
+        description="Get authoritative current UTC and optional learner timezone. Use before scheduling or deadlines.",
+        parameters={
+            "type": "object",
+            "properties": {"timezone": {"type": "string", "description": "IANA timezone e.g. Africa/Lagos"}},
+        },
+    ),
         name="present_choices",
         description="Optional quick choices as buttons when a real choice helps. Not a permanent menu.",
         parameters={
@@ -460,7 +472,11 @@ class TutorService:
         tool_notes: list[str] = []
         tool_results: list[dict] = []
         interactive_payload: dict | None = None
-        max_rounds = 3
+        # Budgeted agent loop (not a fixed product ceiling of 3 forever)
+        from wax.config import get_settings as _gs
+        _s = _gs()
+        max_rounds = int(getattr(_s, 'agent_max_tool_rounds', 8) or 8)
+        max_rounds = max(1, min(max_rounds, 20))
         for _ in range(max_rounds):
             response = await self.intelligence.complete(
                 CompletionRequest(

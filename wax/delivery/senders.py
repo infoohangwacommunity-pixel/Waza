@@ -90,21 +90,37 @@ async def send_telegram(chat_id: str, text: str, interactive: dict | None = None
                 and i == len(chunks) - 1
                 and interactive.get("choices")
             ):
-                rows = []
-                row = []
-                for c in interactive["choices"][:8]:
-                    title = c.get("title") or c.get("id") or "OK"
-                    row.append({"text": title[:64]})
-                    if len(row) == 2:
+                choices = interactive["choices"][:8]
+                # Prefer inline keyboard when durable callback_data is present
+                if any(c.get("callback_data") for c in choices):
+                    ik = []
+                    row = []
+                    for c in choices:
+                        title = str(c.get("title") or c.get("id") or "OK")[:64]
+                        cb = str(c.get("callback_data") or c.get("id") or title)[:64]
+                        row.append({"text": title, "callback_data": cb})
+                        if len(row) == 2:
+                            ik.append(row)
+                            row = []
+                    if row:
+                        ik.append(row)
+                    body["reply_markup"] = {"inline_keyboard": ik}
+                else:
+                    rows = []
+                    row = []
+                    for c in choices:
+                        title = c.get("title") or c.get("id") or "OK"
+                        row.append({"text": str(title)[:64]})
+                        if len(row) == 2:
+                            rows.append(row)
+                            row = []
+                    if row:
                         rows.append(row)
-                        row = []
-                if row:
-                    rows.append(row)
-                body["reply_markup"] = {
-                    "keyboard": rows,
-                    "one_time_keyboard": True,
-                    "resize_keyboard": True,
-                }
+                    body["reply_markup"] = {
+                        "keyboard": rows,
+                        "one_time_keyboard": True,
+                        "resize_keyboard": True,
+                    }
             resp = await client.post(url, json=body)
             results.append({"status_code": resp.status_code, "body": resp.text[:300]})
             if resp.status_code >= 400:

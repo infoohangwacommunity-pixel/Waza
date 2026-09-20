@@ -611,6 +611,47 @@ class DocumentChunk(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
 
+
+class Interaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Server-authoritative interactive choice (buttons/lists).
+
+    Channel adapters only render; consume/expire happen here.
+    Opaque callback_token is what platforms send back (Telegram limit 64 bytes).
+    """
+
+    __tablename__ = "interactions"
+    __table_args__ = (
+        Index("ix_interaction_principal", "principal_id"),
+        Index("ix_interaction_status_expires", "status", "expires_at"),
+        UniqueConstraint("callback_token", name="uq_interaction_callback_token"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    activity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
+    )
+    channel: Mapped[str] = mapped_column(String(40), nullable=False)
+    callback_token: Mapped[str] = mapped_column(String(64), nullable=False)
+    external_message_id: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    prompt: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    style: Mapped[str] = mapped_column(String(40), default="buttons")
+    choices: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    status: Mapped[str] = mapped_column(String(40), default="pending")
+    # pending | consumed | expired | cancelled
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    consumed_choice_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
 class Assessment(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """
     Generic durable assessment — not QuizMode.

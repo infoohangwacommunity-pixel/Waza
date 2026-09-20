@@ -151,31 +151,63 @@ async def handle_present_choices(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
     """
-    Tutor requests interactive choices for the current channel.
-    Does not send itself — returns structured data for the delivery layer.
+    Tutor requests interactive choices. Creates a durable Interaction row.
+    Delivery layer renders; consume/expire is server-authoritative.
     """
+    from wax.interaction.service import InteractionService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
     style = (args.get("style") or "buttons").lower()
     choices_raw = args.get("choices") or []
     choices = []
     for i, c in enumerate(choices_raw[:10]):
         if isinstance(c, str):
-            choices.append({"id": f"opt_{i}", "title": c[:20], "description": None})
+            choices.append({"id": f"opt_{i}", "title": c[:64], "description": None})
         elif isinstance(c, dict):
             choices.append(
                 {
-                    "id": str(c.get("id") or f"opt_{i}")[:256],
-                    "title": str(c.get("title") or c.get("label") or f"Option {i}")[:20],
+                    "id": str(c.get("id") or f"opt_{i}")[:128],
+                    "title": str(c.get("title") or c.get("label") or f"Option {i}")[:64],
                     "description": (c.get("description") or None),
                 }
             )
     if not choices:
         return {"ok": False, "error": "no_choices"}
+
+    expires_in = args.get("expires_in_seconds")
+    try:
+        expires_in = int(expires_in) if expires_in is not None else None
+    except (TypeError, ValueError):
+        expires_in = None
+
+    channel = (ctx.get("channel") or "telegram").lower()
+    svc = InteractionService(session)
+    ix = await svc.create(
+        principal_id=principal_id,
+        channel=channel,
+        choices=choices,
+        prompt=args.get("prompt") or "",
+        style="list" if style == "list" and len(choices) > 3 else "buttons",
+        work_id=ctx.get("work_id"),
+        activity_id=ctx.get("activity_id"),
+        conversation_id=ctx.get("conversation_id"),
+        expires_in_seconds=expires_in,
+        metadata={
+            "target_external_id": ctx.get("target_external_id"),
+            "list_button_label": (args.get("list_button_label") or "Options")[:20],
+        },
+    )
     return {
         "ok": True,
-        "style": "list" if style == "list" and len(choices) > 3 else "buttons",
-        "choices": choices,
+        "interaction_id": str(ix.id),
+        "style": ix.style,
+        "choices": ix.choices,
         "list_button_label": (args.get("list_button_label") or "Options")[:20],
         "prompt": args.get("prompt") or "",
+        "expires_at": ix.expires_at.isoformat() if ix.expires_at else None,
+        "expires_in_seconds": expires_in,
     }
 
 HANDLERS: dict[str, ToolHandler] = {}
@@ -843,12 +875,44 @@ async def handle_schedule_hypothesis_recheck(
         return {"ok": False, "error": "could_not_schedule"}
     return {"ok": True, "scheduled_action_id": str(action.id), "execute_at": action.execute_at.isoformat() if getattr(action, "execute_at", None) else None}
 
+
+async def handle_get_current_time(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Authoritative clock for the agent — never invent dates from the model."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    now = datetime.now(timezone.utc)
+    tz_name = (args.get("timezone") or ctx.get("timezone") or "UTC").strip() or "UTC"
+    local_iso = None
+    try:
+        local = now.astimezone(ZoneInfo(tz_name))
+        local_iso = local.isoformat()
+        dow = local.strftime("%A")
+        date_s = local.strftime("%Y-%m-%d")
+    except Exception:
+        tz_name = "UTC"
+        local_iso = now.isoformat()
+        dow = now.strftime("%A")
+        date_s = now.strftime("%Y-%m-%d")
+    return {
+        "ok": True,
+        "utc": now.isoformat(),
+        "timezone": tz_name,
+        "local": local_iso,
+        "date": date_s,
+        "day_of_week": dow,
+    }
+
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
     "create_artifact": handle_create_artifact,
     "run_python": handle_run_python,
     "present_choices": handle_present_choices,
+    "get_current_time": handle_get_current_time,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,

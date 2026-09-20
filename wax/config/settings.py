@@ -74,6 +74,7 @@ class Settings(BaseSettings):
     terminal_require_sandbox: bool = False  # overridden true when app_env=production
     terminal_use_docker: bool = False  # prefer docker run --network none
 
+    agent_max_tool_rounds: int = 8
     work_poll_interval_seconds: float = 1.0
     work_stale_seconds: int = 300
     work_max_retries: int = 3

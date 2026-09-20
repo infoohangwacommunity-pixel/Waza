@@ -473,6 +473,21 @@ async def recovery_loop() -> None:
                 except Exception:
                     logger.exception("scheduler_failure")
                 try:
+                    from wax.interaction.service import InteractionService
+                    expired_ix = await InteractionService(session).expire_due(limit=30)
+                    for ix in expired_ix:
+                        try:
+                            await InteractionService(session).enqueue_continuation(
+                                ix, reason="timeout"
+                            )
+                        except Exception:
+                            logger.exception(
+                                "interaction_timeout_enqueue_failed",
+                                interaction_id=str(ix.id),
+                            )
+                except Exception:
+                    logger.exception("interaction_expiry_error")
+                try:
                     from wax.db.models import Activity
                     now = datetime.now(timezone.utc)
                     exp = await session.execute(
