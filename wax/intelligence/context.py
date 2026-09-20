@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.db.models import Conversation, Goal, LearningObservation, Message
 from wax.delivery.presentation import platform_context_block
 from wax.memory.service import MemoryService
+from wax.domain.learner_state import build_learner_state_snapshot, format_learner_state_block
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -76,6 +77,13 @@ class ContextAssembler:
 
         learning_block = await self._learning_snapshot(principal_id)
         goals_block = await self._active_goals(principal_id)
+        situation_block = ""
+        if principal_id:
+            try:
+                snap = await build_learner_state_snapshot(self.session, principal_id)
+                situation_block = format_learner_state_block(snap)
+            except Exception:
+                logger.exception("learner_state_snapshot_failed")
         knowledge_block = await self._knowledge_snapshot(principal_id)
         hyp_block = await self._hypothesis_snapshot(principal_id)
         recent = await self._recent_messages(conversation_id, limit=18)
@@ -85,7 +93,7 @@ class ContextAssembler:
             system_prefix=system_prefix,
             memory_block=memory_block + summary_block,
             learning_block=learning_block + knowledge_block + hyp_block,
-            goals_block=goals_block,
+            goals_block=goals_block + situation_block,
             recent_messages=recent,
             memories_used=memories_used,
         )

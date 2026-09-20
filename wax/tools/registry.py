@@ -906,6 +906,143 @@ async def handle_get_current_time(
     }
 
 
+
+async def handle_get_learner_state(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Safe domain read of current learner situation (tenant-scoped)."""
+    from wax.domain.learner_state import build_learner_state_snapshot
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    snap = await build_learner_state_snapshot(session, principal_id)
+    return {"ok": True, "state": snap}
+
+
+async def handle_schedule_at(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Schedule at absolute time. Prefer ISO UTC or local+timezone."""
+    from datetime import datetime, timezone
+    from wax.scheduler.service import SchedulerService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    when_s = args.get("execute_at") or args.get("when")
+    if not when_s:
+        return {"ok": False, "error": "execute_at_required"}
+    try:
+        when = datetime.fromisoformat(str(when_s).replace("Z", "+00:00"))
+    except Exception:
+        return {"ok": False, "error": "invalid_datetime"}
+    tz_name = args.get("timezone")
+    if when.tzinfo is None and not tz_name:
+        when = when.replace(tzinfo=timezone.utc)
+    elif when.tzinfo is None and tz_name:
+        try:
+            from zoneinfo import ZoneInfo
+            when = when.replace(tzinfo=ZoneInfo(str(tz_name)))
+        except Exception:
+            when = when.replace(tzinfo=timezone.utc)
+    action = await SchedulerService(session).schedule_at(
+        principal_id=principal_id,
+        action_type=str(args.get("action_type") or "tutor_followup"),
+        execute_at=when,
+        reason=args.get("reason"),
+        payload={"message_hint": args.get("message_hint")},
+        timezone_name=tz_name,
+    )
+    return {
+        "ok": True,
+        "scheduled_action_id": str(action.id),
+        "execute_at": action.execute_at.isoformat() if action.execute_at else None,
+    }
+
+
+async def handle_pause_activity(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.work.activities import ActivityService
+    from wax.db.models import Activity
+    from sqlalchemy import select
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    aid = args.get("activity_id")
+    svc = ActivityService(session)
+    if not aid:
+        # pause most recent active
+        stmt = (
+            select(Activity)
+            .where(Activity.principal_id == principal_id, Activity.status == "active")
+            .order_by(Activity.updated_at.desc())
+            .limit(1)
+        )
+        act = (await session.execute(stmt)).scalar_one_or_none()
+        if not act:
+            return {"ok": False, "error": "no_active_activity"}
+        aid = act.id
+    act = await svc.pause(aid, reason=args.get("reason"))
+    if not act:
+        return {"ok": False, "error": "not_found"}
+    if act.principal_id != principal_id:
+        return {"ok": False, "error": "forbidden"}
+    return {"ok": True, "activity_id": str(act.id), "status": act.status}
+
+
+async def handle_resume_activity(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.work.activities import ActivityService
+    from wax.db.models import Activity
+    from sqlalchemy import select
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    aid = args.get("activity_id")
+    svc = ActivityService(session)
+    if not aid:
+        stmt = (
+            select(Activity)
+            .where(Activity.principal_id == principal_id, Activity.status == "paused")
+            .order_by(Activity.updated_at.desc())
+            .limit(1)
+        )
+        act = (await session.execute(stmt)).scalar_one_or_none()
+        if not act:
+            return {"ok": False, "error": "no_paused_activity"}
+        aid = act.id
+    act = await svc.resume(aid)
+    if not act:
+        return {"ok": False, "error": "not_found"}
+    if act.principal_id != principal_id:
+        return {"ok": False, "error": "forbidden"}
+    return {"ok": True, "activity_id": str(act.id), "status": act.status}
+
+
+async def handle_set_preference(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.domain.preferences import update_preferences
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    key = args.get("key")
+    value = args.get("value")
+    if not key:
+        return {"ok": False, "error": "key_required"}
+    allowed = {
+        "language", "quiet_hours", "encouragement", "explanation_style",
+        "message_length", "timezone", "proactivity_level",
+    }
+    if key not in allowed:
+        return {"ok": False, "error": "key_not_allowed", "allowed": sorted(allowed)}
+    prefs = await update_preferences(session, principal_id, {key: value})
+    return {"ok": True, "preferences": prefs}
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -913,6 +1050,11 @@ HANDLERS.update({
     "run_python": handle_run_python,
     "present_choices": handle_present_choices,
     "get_current_time": handle_get_current_time,
+    "get_learner_state": handle_get_learner_state,
+    "schedule_at": handle_schedule_at,
+    "pause_activity": handle_pause_activity,
+    "resume_activity": handle_resume_activity,
+    "set_preference": handle_set_preference,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,

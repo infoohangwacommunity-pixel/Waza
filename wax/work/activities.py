@@ -92,3 +92,35 @@ class ActivityService:
         )
         result = await self.session.execute(stmt)
         return list(result.scalars().all())
+
+
+    async def pause(self, activity_id, *, reason: str | None = None):
+        from uuid import UUID
+        act = await self.session.get(Activity, activity_id if not isinstance(activity_id, str) else UUID(str(activity_id)))
+        if not act:
+            return None
+        if act.status not in ("active", "waiting"):
+            return act
+        act.status = "paused"
+        progress = dict(act.progress or {})
+        progress["paused_reason"] = reason
+        from datetime import datetime, timezone
+        progress["paused_at"] = datetime.now(timezone.utc).isoformat()
+        act.progress = progress
+        await self.session.flush()
+        return act
+
+    async def resume(self, activity_id):
+        from uuid import UUID
+        act = await self.session.get(Activity, activity_id if not isinstance(activity_id, str) else UUID(str(activity_id)))
+        if not act:
+            return None
+        if act.status != "paused":
+            return act
+        act.status = "active"
+        progress = dict(act.progress or {})
+        from datetime import datetime, timezone
+        progress["resumed_at"] = datetime.now(timezone.utc).isoformat()
+        act.progress = progress
+        await self.session.flush()
+        return act

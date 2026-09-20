@@ -398,6 +398,13 @@ async def claim_next(session, worker_id: str) -> Work | None:
     work.claimed_by = worker_id
     work.claimed_at = now
     work.started_at = now
+    # Lease metadata for recovery (stale claim detection)
+    meta = dict(work.metadata_ or {})
+    lease_s = int(getattr(settings, "work_stale_seconds", 300) or 300)
+    from datetime import timedelta as _td
+    meta["lease_until"] = (now + _td(seconds=lease_s)).isoformat()
+    meta["lease_worker"] = worker_id
+    work.metadata_ = meta
     work.attempt += 1
     await session.flush()
     work_id_var.set(str(work.id))

@@ -20,6 +20,8 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "encouragement": None,  # light | direct | minimal | null
     "explanation_style": None,  # examples_first | theory_first | mixed | null
     "message_length": None,  # short | medium | detailed | null
+    "timezone": None,  # IANA e.g. Africa/Lagos
+    "proactivity_level": None,  # quiet | balanced | active
 }
 
 

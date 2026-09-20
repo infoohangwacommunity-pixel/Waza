@@ -26,6 +26,7 @@ from wax.intelligence.session_continuity import SessionContinuityService
 from wax.memory.observations import ObservationService
 from wax.observability.logging import get_logger
 from wax.tools.registry import execute_tool
+from wax.agent.runtime import AgentRuntime
 from wax.delivery.presentation import InteractiveChoice, PresentableResponse
 from wax.intelligence.context import ContextAssembler
 
@@ -77,6 +78,57 @@ Buttons:
 
 
 AVAILABLE_TOOLS = [
+    ToolSpec(
+        name="schedule_at",
+        description="Schedule a follow-up at an absolute datetime (ISO 8601). Optional IANA timezone.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "execute_at": {"type": "string"},
+                "timezone": {"type": "string"},
+                "reason": {"type": "string"},
+                "message_hint": {"type": "string"},
+                "action_type": {"type": "string"},
+            },
+            "required": ["execute_at", "reason"],
+        },
+    ),
+    ToolSpec(
+        name="get_learner_state",
+        description="Read current goals, active/paused activities, pending choices, and upcoming schedule for this learner.",
+        parameters={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
+        name="pause_activity",
+        description="Pause the active learning activity (e.g. to handle an unrelated request). Optional activity_id.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "activity_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="resume_activity",
+        description="Resume a paused learning activity.",
+        parameters={
+            "type": "object",
+            "properties": {"activity_id": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="set_preference",
+        description="Store an explicit learner preference (message_length, timezone, language, etc.).",
+        parameters={
+            "type": "object",
+            "properties": {
+                "key": {"type": "string"},
+                "value": {},
+            },
+            "required": ["key", "value"],
+        },
+    ),
     ToolSpec(
         name="schedule_followup",
         description="Schedule a future follow-up when a later check-in would help this person.",
@@ -472,23 +524,24 @@ class TutorService:
         tool_notes: list[str] = []
         tool_results: list[dict] = []
         interactive_payload: dict | None = None
-        # Budgeted agent loop (not a fixed product ceiling of 3 forever)
-        from wax.config import get_settings as _gs
-        _s = _gs()
-        max_rounds = int(getattr(_s, 'agent_max_tool_rounds', 8) or 8)
-        max_rounds = max(1, min(max_rounds, 20))
+        agent = AgentRuntime(self.session, work)
+        await agent.start()
+        max_rounds = agent.max_rounds
         for _ in range(max_rounds):
+            if not agent.can_call_tool() and _ > 0:
+                # Budget exhausted — force a text reply next
+                pass
             response = await self.intelligence.complete(
                 CompletionRequest(
                     messages=llm_messages,
-                    tools=AVAILABLE_TOOLS,
+                    tools=AVAILABLE_TOOLS if agent.can_call_tool() else None,
                     temperature=0.7,
                     max_tokens=2048,
                 ),
                 allow_fallback=True,
             )
 
-            if response.tool_calls:
+            if response.tool_calls and agent.can_call_tool():
                 llm_messages.append(
                     ChatMessage(
                         role="assistant",
@@ -497,19 +550,24 @@ class TutorService:
                     )
                 )
                 for tc in response.tool_calls:
+                    if not agent.can_call_tool():
+                        break
                     fn = tc.get("function") or {}
                     name = fn.get("name") or "unknown"
                     args = fn.get("arguments")
                     tc_id = tc.get("id") or str(uuid4())
+                    parsed_args = args if isinstance(args, dict) else {}
                     outcome = await execute_tool(self.session, name, args, tool_ctx)
-                    tool_notes.append(f"{name}:{outcome.get('ok')}")
-                    tool_results.append({"name": name, "result": outcome})
-                    if name == "present_choices" and outcome.get("ok"):
-                        interactive_payload = outcome
+                    out_dict = outcome if isinstance(outcome, dict) else {"ok": False}
+                    await agent.record_tool(name, parsed_args, out_dict)
+                    tool_notes.append(f"{name}:{out_dict.get('ok')}")
+                    tool_results.append({"name": name, "result": out_dict})
+                    if name == "present_choices" and out_dict.get("ok"):
+                        interactive_payload = out_dict
                     llm_messages.append(
                         ChatMessage(
                             role="tool",
-                            content=str(outcome)[:4000],
+                            content=str(out_dict)[:4000],
                             tool_call_id=tc_id,
                             name=name,
                         )
@@ -582,6 +640,7 @@ class TutorService:
             except Exception:
                 logger.exception("memory_work_enqueue_failed")
 
+        await agent.complete(reply_preview=reply_text)
         return {
             "reply": reply_text,
             "message_id": str(out_msg_id) if out_msg_id else None,
@@ -590,6 +649,7 @@ class TutorService:
             "tools": tool_results,
             "tool_notes": tool_notes,
             "interactive": interactive_payload,
+            "execution_id": str(agent.execution.id) if agent.execution else None,
         }
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:

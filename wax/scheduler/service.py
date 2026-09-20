@@ -55,6 +55,35 @@ class SchedulerService:
         )
         return action
 
+    async def schedule_at(
+        self,
+        *,
+        principal_id,
+        action_type: str,
+        execute_at: datetime,
+        reason: str | None = None,
+        payload: dict[str, Any] | None = None,
+        timezone_name: str | None = None,
+        idempotency_key: str | None = None,
+    ) -> ScheduledAction:
+        """Schedule at an absolute UTC datetime (optional timezone metadata)."""
+        if execute_at.tzinfo is None:
+            execute_at = execute_at.replace(tzinfo=timezone.utc)
+        else:
+            execute_at = execute_at.astimezone(timezone.utc)
+        pl = dict(payload or {})
+        if timezone_name:
+            pl["timezone"] = timezone_name
+            pl["utc_execute_at"] = execute_at.isoformat()
+        return await self.schedule(
+            principal_id=principal_id,
+            action_type=action_type,
+            execute_at=execute_at,
+            reason=reason,
+            payload=pl,
+            idempotency_key=idempotency_key,
+        )
+
     async def schedule_in_hours(
         self,
         *,
