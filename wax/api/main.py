@@ -73,13 +73,28 @@ async def health_detail():
         "status": "ok",
         "app": settings.app_name,
         "env": settings.app_env,
-        "version": "0.2.0",
+        "version": "0.3.0",
         "whatsapp_enabled": settings.whatsapp_enabled,
         "telegram_enabled": settings.telegram_enabled,
         "terminal_enabled": settings.terminal_enabled,
         "workspace_root": str(root),
         "primary_provider": settings.primary_provider,
         "fallback_provider": settings.fallback_provider,
+        "storage_backend": getattr(settings, "effective_storage_backend", settings.storage_backend),
+        "policy": {
+            "allow_code_execution": getattr(settings, "allow_code_execution", True),
+            "allow_external_network": getattr(settings, "allow_external_network", True),
+            "allow_html_artifacts": getattr(settings, "allow_html_artifacts", True),
+            "agent_max_tool_rounds": getattr(settings, "agent_max_tool_rounds", 8),
+        },
+        "capabilities": [
+            "interactions",
+            "schedule_series",
+            "research_fetch",
+            "learner_export",
+            "html_pages",
+            "work_leases",
+        ],
     }
 
 

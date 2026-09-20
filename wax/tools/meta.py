@@ -45,6 +45,9 @@ TOOL_META: dict[str, dict[str, Any]] = {
     "cancel_schedule": {"risk": "medium", "permissions": [SCHEDULE]},
     "schedule_series": {"risk": "medium", "permissions": [SCHEDULE]},
     "redeliver_artifact": {"risk": "medium", "permissions": [MESSAGE]},
+    "export_learner_data": {"risk": "medium", "permissions": [DATABASE_READ]},
+    "link_channel_identity": {"risk": "high", "permissions": [DATABASE_WRITE]},
+    "create_html_page": {"risk": "medium", "permissions": [FILE_WRITE]},
     "create_assessment": {"risk": "medium", "permissions": [DATABASE_WRITE]},
     "submit_assessment_answer": {"risk": "medium", "permissions": [DATABASE_WRITE]},
 }

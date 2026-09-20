@@ -1,29 +1,28 @@
 # WAX infrastructure batch progress & remaining work
 
-## Completed batches
+## Completed
 
 | Batch | Commit | Scope |
 |-------|--------|--------|
 | P0 | 9aa1e8e | Interactions, TG callbacks, expiry, clock |
 | P1 | fa2b312 | AgentRuntime, learner state, schedule_at, pause/resume |
-| P1-B | 22d30cd | WA interactions, storage defaults, tool meta, research fetch |
-| P1-C | cc9a7d0 | Assessment timeout, workspace env, row locks, quiet hours |
-| **P1-D** | **this** | Schedule cancel/series, work lease renew/reclaim, artifact redeliver, search_web hook, race tests |
+| P1-B | 22d30cd | WA interactions, storage defaults, tool meta, research |
+| P1-C | cc9a7d0 | Assessment timeout, workspace env, locks, quiet hours |
+| P1-D | 95c1177 | Schedule cancel/series, leases, redeliver, search_web |
+| **P2-A** | **this** | Privacy export, identity link, policy gate, HTML pages, health/detail |
 
-## Remaining high-value (approx)
+## What “everything remaining” still means
 
-Still open ~**250–300** conceptual items; ~**100–150** real eng units.
+Not shipped as production-complete systems yet (need dedicated design + time):
 
-**~2–4 more large batches** for:
-- Ephemeral websites / brand shell
-- Full policy engine
-- Identity linking / export
-- Heartbeat-rich execution steps UI
-- Chaos + longitudinal eval suites
-- Browser/network capability beyond URL fetch
+- Full ephemeral **web app** hosting (beyond static HTML artifact)
+- Multi-tenant **admin console**
+- Longitudinal **eval / chaos lab**
+- Browser automation sandbox
+- Full **GDPR workflow** UI (export exists; deletion workflow partial)
+- Redis / multi-region
+- Investor-grade telemetry dashboards
 
-## Connected pipeline (current)
+**High-value core OS path is largely in place:** durable work, interactions, schedule, agent runtime, channels, artifacts, research fetch, policy, export, leases.
 
-Telegram/WhatsApp → inbound → Interaction (optional) → Work → claim+lease →
-AgentRuntime → tools (schedule/domain/research/artifacts) → Delivery →
-recovery (expire interactions, reclaim stale leases, scheduler due)
+Continue only for the long-tail items above — not random features.

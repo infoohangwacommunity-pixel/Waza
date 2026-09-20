@@ -267,6 +267,40 @@ AVAILABLE_TOOLS = [
     ToolSpec(
     ToolSpec(
     ToolSpec(
+    ToolSpec(
+        name="export_learner_data",
+        description="Export this learner's data package (memories, messages, goals, artifacts) for privacy requests.",
+        parameters={
+            "type": "object",
+            "properties": {"message_limit": {"type": "number"}},
+        },
+    ),
+    ToolSpec(
+        name="link_channel_identity",
+        description="Link another channel identity (whatsapp/telegram id) to this same learner for continuity.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "channel": {"type": "string"},
+                "external_id": {"type": "string"},
+                "display_name": {"type": "string"},
+                "make_primary": {"type": "boolean"},
+            },
+            "required": ["channel", "external_id"],
+        },
+    ),
+    ToolSpec(
+        name="create_html_page",
+        description="Create a simple branded HTML study page artifact from title+content.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "content": {"type": "string"},
+            },
+            "required": ["title", "content"],
+        },
+    ),
         name="cancel_schedule",
         description="Cancel a pending scheduled action by id.",
         parameters={

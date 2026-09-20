@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.db.models import Artifact, ScheduledAction
 from wax.observability.logging import get_logger
 from wax.tools.meta import tool_meta
+from wax.security.policy import tool_allowed
 from wax.scheduler.service import SchedulerService
 from wax.terminal.executor import get_terminal
 
@@ -239,6 +240,10 @@ async def execute_tool(
     if not handler:
         return {"ok": False, "error": f"unknown_tool:{name}"}
     meta = tool_meta(name)
+    allowed, deny_reason = tool_allowed(name, ctx)
+    if not allowed:
+        logger.warning("tool_denied_by_policy", tool=name, reason=deny_reason)
+        return {"ok": False, "error": f"policy_denied:{deny_reason}"}
     logger.info(
         "tool_invoke",
         tool=name,
@@ -1229,6 +1234,89 @@ async def handle_redeliver_artifact(
         "note": "Queued redelivery of existing artifact bytes — content not regenerated.",
     }
 
+
+async def handle_export_learner_data(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.domain.export import export_principal_package
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    limit = int(args.get("message_limit") or 200)
+    return await export_principal_package(session, principal_id, message_limit=limit)
+
+
+async def handle_link_channel_identity(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.domain.identity import link_identity_to_principal
+    principal_id = ctx.get("principal_id")
+    channel = args.get("channel")
+    external_id = args.get("external_id")
+    if not principal_id or not channel or not external_id:
+        return {"ok": False, "error": "channel_and_external_id_required"}
+    identity = await link_identity_to_principal(
+        session,
+        principal_id=principal_id,
+        channel=str(channel),
+        external_id=str(external_id),
+        display_name=args.get("display_name"),
+        make_primary=bool(args.get("make_primary")),
+    )
+    return {
+        "ok": True,
+        "identity_id": str(identity.id),
+        "channel": identity.channel,
+        "external_id": identity.external_id,
+        "is_primary": identity.is_primary,
+    }
+
+
+async def handle_create_html_page(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Create a branded HTML artifact (ephemeral study page)."""
+    from uuid import uuid4
+    from wax.artifacts.html_page import render_branded_html
+    from wax.artifacts.storage import get_storage
+    from wax.db.models import Artifact
+    from wax.config import get_settings
+
+    if not getattr(get_settings(), "allow_html_artifacts", True):
+        return {"ok": False, "error": "html_artifacts_disabled"}
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    title = args.get("title") or "Notes"
+    content = args.get("content") or args.get("body") or ""
+    html = render_branded_html(title=title, body=content)
+    from wax.artifacts.storage import store_bytes
+    uri = store_bytes(
+        principal_id,
+        f"{uuid4().hex[:8]}-page.html",
+        html.encode("utf-8"),
+        content_type="text/html; charset=utf-8",
+    )
+    art = Artifact(
+        id=uuid4(),
+        principal_id=principal_id,
+        kind="html_page",
+        title=title[:500],
+        content_type="text/html",
+        uri=uri,
+        structured={"format": "html", "ephemeral": True},
+        metadata_={"source": "create_html_page"},
+    )
+    session.add(art)
+    await session.flush()
+    return {
+        "ok": True,
+        "artifact_id": str(art.id),
+        "uri": uri,
+        "title": title,
+        "note": "HTML page stored as artifact. Deliver via redeliver_artifact or share secure URL when available.",
+    }
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1249,6 +1337,9 @@ HANDLERS.update({
     "cancel_schedule": handle_cancel_schedule,
     "schedule_series": handle_schedule_series,
     "redeliver_artifact": handle_redeliver_artifact,
+    "export_learner_data": handle_export_learner_data,
+    "link_channel_identity": handle_link_channel_identity,
+    "create_html_page": handle_create_html_page,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,
