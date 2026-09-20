@@ -122,13 +122,27 @@ class MemoryConsolidationService:
                     confidence=float(item.get("confidence", 0.85)),
                     importance=old.importance,
                     source="inferred",
-                    evidence=[{"action": "consolidation_supersede", "old_id": str(old.id)}],
+                    evidence=[
+                        {
+                            "action": "consolidation_supersede",
+                            "old_id": str(old.id),
+                            "at": now.isoformat(),
+                        }
+                    ],
                     is_active=True,
                     tags=old.tags or [],
                 )
-                old.superseded_by_id = new_m.id
+                # FK: new memory row must exist before superseded_by_id points to it
                 self.session.add(new_m)
+                await self.session.flush()
+                old.superseded_by_id = new_m.id
                 actions += 1
+                logger.info(
+                    "memory_consolidation_supersede",
+                    principal_id=str(principal_id),
+                    old_id=str(old.id),
+                    new_id=str(new_m.id),
+                )
 
         for merge in data.get("merges") or []:
             keep = id_map.get(str(merge.get("keep_id")))
@@ -142,6 +156,7 @@ class MemoryConsolidationService:
                     drop = id_map.get(str(drop_id))
                     if drop and drop.id != keep.id:
                         drop.is_active = False
+                        # keep already exists in DB — safe FK target
                         drop.superseded_by_id = keep.id
                         actions += 1
 

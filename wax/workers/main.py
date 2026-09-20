@@ -270,6 +270,9 @@ async def process_scheduled_action(session, work: Work) -> None:
 
 async def _attempt_deliveries(session, work_id) -> None:
     from wax.delivery.senders import deliver as channel_deliver
+    from wax.db.models import Artifact
+    from wax.artifacts.storage import read_bytes
+
     stmt = select(Delivery).where(
         Delivery.work_id == work_id, Delivery.status == "pending"
     )
@@ -278,6 +281,7 @@ async def _attempt_deliveries(session, work_id) -> None:
         try:
             wrow = await session.get(Work, work_id)
             interactive = (wrow.result_payload or {}).get("interactive") if wrow else None
+            tools = (wrow.result_payload or {}).get("tools") or [] if wrow else []
             outcome = await channel_deliver(
                 delivery.channel,
                 delivery.target_external_id,
@@ -287,18 +291,83 @@ async def _attempt_deliveries(session, work_id) -> None:
             if outcome.get("status") in ("ok", "skipped"):
                 delivery.status = "delivered"
                 delivery.delivered_at = datetime.now(timezone.utc)
-                delivery.external_message_id = f"out-{uuid4().hex[:12]}"
+                # Prefer real provider message id when present
+                real_id = outcome.get("external_message_id") or outcome.get("message_id")
+                if not real_id:
+                    results = outcome.get("results") or []
+                    for r in results:
+                        if isinstance(r, dict) and r.get("message_id"):
+                            real_id = str(r["message_id"])
+                            break
+                delivery.external_message_id = (
+                    str(real_id) if real_id else f"out-{uuid4().hex[:12]}"
+                )
                 delivery.metadata_ = {**(delivery.metadata_ or {}), "outcome": outcome}
+                logger.info(
+                    "delivery_succeeded",
+                    delivery_id=str(delivery.id),
+                    channel=delivery.channel,
+                    external_message_id=delivery.external_message_id,
+                )
             else:
                 delivery.status = "failed"
                 delivery.error = str(outcome)
                 delivery.attempt += 1
-            logger.info(
-                "delivery_attempted",
-                delivery_id=str(delivery.id),
-                channel=delivery.channel,
-                status=delivery.status,
-            )
+                logger.warning(
+                    "delivery_failed",
+                    delivery_id=str(delivery.id),
+                    channel=delivery.channel,
+                    error=str(outcome)[:200],
+                )
+
+            # Artifact file delivery (Telegram document) when tools created one
+            for tool in tools:
+                if not isinstance(tool, dict):
+                    continue
+                if tool.get("name") != "create_artifact":
+                    continue
+                out = tool.get("result") or tool.get("outcome") or {}
+                if not out.get("ok") or not out.get("artifact_id"):
+                    continue
+                if out.get("delivered"):
+                    continue
+                try:
+                    from uuid import UUID
+                    art = await session.get(Artifact, UUID(str(out["artifact_id"])))
+                    if not art:
+                        continue
+                    uri = (art.structured or {}).get("storage_uri")
+                    if not uri:
+                        continue
+                    data = read_bytes(uri)
+                    if delivery.channel == "telegram":
+                        from wax.messaging.telegram.client import send_document
+                        ext = "pdf" if "pdf" in (art.content_type or "") else "txt"
+                        doc_out = await send_document(
+                            delivery.target_external_id,
+                            filename=f"{(art.title or 'notes')[:40]}.{ext}",
+                            data=data,
+                            caption=art.title,
+                            content_type=art.content_type or "application/octet-stream",
+                        )
+                        if doc_out.get("status") == "ok":
+                            structured = dict(art.structured or {})
+                            structured["delivered"] = True
+                            structured["telegram_file_id"] = doc_out.get("file_id")
+                            art.structured = structured
+                            logger.info(
+                                "artifact_delivery_succeeded",
+                                artifact_id=str(art.id),
+                                channel="telegram",
+                            )
+                        else:
+                            logger.warning(
+                                "artifact_delivery_failed",
+                                artifact_id=str(art.id),
+                                outcome=str(doc_out)[:200],
+                            )
+                except Exception:
+                    logger.exception("artifact_delivery_error")
         except Exception as e:
             delivery.status = "failed"
             delivery.error = str(e)
@@ -382,17 +451,27 @@ async def worker_loop(worker_id: str) -> None:
 async def recovery_loop() -> None:
     cycle = 0
     while RUNNING:
+        # Isolate subsystems so one failure does not skip the rest of the cycle.
         try:
             async with session_scope() as session:
-                await recover_orphans(session)
-                from wax.scheduler.service import SchedulerService
-                sched = SchedulerService(session)
-                due = await sched.due_actions(limit=10)
-                for action in due:
-                    await sched.mark_executing(action)
-                    await sched.create_work_for_action(action)
-                    logger.info("scheduled_action_enqueued", action_id=str(action.id))
-                # Expire timed activities that ran out
+                try:
+                    await recover_orphans(session)
+                except Exception:
+                    logger.exception("recovery_orphans_error")
+                try:
+                    from wax.scheduler.service import SchedulerService
+                    sched = SchedulerService(session)
+                    due = await sched.due_actions(limit=10)
+                    for action in due:
+                        await sched.mark_executing(action)
+                        await sched.create_work_for_action(action)
+                        logger.info(
+                            "scheduled_action_claimed",
+                            action_id=str(action.id),
+                            work_id=str(action.work_id) if action.work_id else None,
+                        )
+                except Exception:
+                    logger.exception("scheduler_failure")
                 try:
                     from wax.db.models import Activity
                     now = datetime.now(timezone.utc)
@@ -408,11 +487,12 @@ async def recovery_loop() -> None:
                     await session.flush()
                 except Exception:
                     logger.exception("activity_expiry_error")
-                # Delivery retries
-                retried = await DeliveryRetryService(session).process_batch(limit=10)
-                if retried:
-                    logger.info("deliveries_retried", count=retried)
-                # Periodic memory consolidation (every ~10 cycles)
+                try:
+                    retried = await DeliveryRetryService(session).process_batch(limit=10)
+                    if retried:
+                        logger.info("deliveries_retried", count=retried)
+                except Exception:
+                    logger.exception("delivery_retry_error")
                 cycle += 1
                 if cycle % 30 == 0:
                     try:
@@ -420,13 +500,19 @@ async def recovery_loop() -> None:
                     except Exception:
                         logger.exception("workspace_cleanup_error")
                 if cycle % 10 == 0:
-                    from wax.db.models import Principal
-                    result = await session.execute(select(Principal.id).limit(5))
-                    for (pid,) in result.all():
-                        try:
-                            await MemoryConsolidationService(session).consolidate_principal(pid)
-                        except Exception:
-                            logger.exception("consolidation_error", principal_id=str(pid))
+                    try:
+                        from wax.db.models import Principal
+                        result = await session.execute(select(Principal.id).limit(5))
+                        for (pid,) in result.all():
+                            try:
+                                await MemoryConsolidationService(session).consolidate_principal(pid)
+                            except Exception:
+                                logger.exception(
+                                    "memory_consolidation_failed",
+                                    principal_id=str(pid),
+                                )
+                    except Exception:
+                        logger.exception("memory_consolidation_batch_error")
         except Exception:
             logger.exception("recovery_error")
         await asyncio.sleep(max(5.0, settings.scheduler_poll_interval_seconds))

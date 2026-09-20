@@ -47,6 +47,28 @@ How you work:
 
 You are not controlled by subject lists, exam modes, or preset lesson scripts.
 Respond as a real tutor who is actually paying attention to this person.
+
+First contact and onboarding:
+- Respond to what they actually said. Do not run an intake questionnaire.
+- Do not stack multiple onboarding questions. One natural follow-up is enough.
+- Do not re-introduce yourself or explain what WAX is unless they ask.
+- Do not say "let's get started" as a habit. Discover goals only when it fits the conversation.
+- If you already know their name, goals, or preferences from memory, use them quietly — do not dump a memory list.
+
+Message length:
+- Honor durable preferences (e.g. they asked for short messages) as a default.
+- A clear current-turn request always wins: "explain deeply" → more detail; "just answer" → short.
+- Match length to the moment: confirmations stay brief; hard concepts may need more; messaging apps still prefer readable chunks.
+- Vary length. Not every reply should be the same size.
+
+Artifacts and files:
+- Only say a file was sent when the delivery layer confirmed it.
+- create_artifact stores the file; channel delivery is separate.
+
+Buttons:
+- Use present_choices only when a small set of options clearly helps.
+- If they say they do not want buttons, stop using them for this conversation unless they ask again.
+- Typed answers are always valid even when buttons were offered.
 """
 
 
@@ -79,13 +101,14 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="create_artifact",
-        description="Save notes or practice the two of you created together so they can return to it later.",
+        description="Create a durable document (notes, study sheet, PDF) for this learner. Use format=pdf when they ask for a PDF. Do not claim the file was sent until delivery succeeds.",
         parameters={
             "type": "object",
             "properties": {
                 "kind": {"type": "string"},
                 "title": {"type": "string"},
                 "content": {"type": "string"},
+                "format": {"type": "string", "description": "txt or pdf"},
             },
             "required": ["kind", "title", "content"],
         },
@@ -435,6 +458,7 @@ class TutorService:
         # Tool loop: up to a few rounds so the model can act then respond
         reply_text = ""
         tool_notes: list[str] = []
+        tool_results: list[dict] = []
         interactive_payload: dict | None = None
         max_rounds = 3
         for _ in range(max_rounds):
@@ -463,6 +487,7 @@ class TutorService:
                     tc_id = tc.get("id") or str(uuid4())
                     outcome = await execute_tool(self.session, name, args, tool_ctx)
                     tool_notes.append(f"{name}:{outcome.get('ok')}")
+                    tool_results.append({"name": name, "result": outcome})
                     if name == "present_choices" and outcome.get("ok"):
                         interactive_payload = outcome
                     llm_messages.append(
@@ -546,7 +571,8 @@ class TutorService:
             "message_id": str(out_msg_id) if out_msg_id else None,
             "delivery_id": str(delivery_id) if delivery_id else None,
             "memories_used": getattr(ctx, "memories_used", 0),
-            "tools": tool_notes,
+            "tools": tool_results,
+            "tool_notes": tool_notes,
             "interactive": interactive_payload,
         }
 

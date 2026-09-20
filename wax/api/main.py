@@ -138,6 +138,51 @@ async def root() -> dict[str, str]:
     }
 
 
+
+
+@app.get("/artifacts/{artifact_id}/download")
+async def artifact_download(artifact_id: str, token: str = ""):
+    """Signed download — verifies ownership token; never exposes filesystem paths."""
+    from uuid import UUID
+    from fastapi.responses import Response
+    from wax.db.models import Artifact
+    from wax.db.session import session_scope
+    from wax.artifacts.access import verify_download_token
+    from wax.artifacts.storage import read_bytes
+
+    try:
+        aid = UUID(artifact_id)
+    except Exception:
+        return JSONResponse({"error": "invalid_id"}, status_code=400)
+    async with session_scope() as session:
+        art = await session.get(Artifact, aid)
+        if not art:
+            return JSONResponse({"error": "not_found"}, status_code=404)
+        if not token or not verify_download_token(str(art.id), str(art.principal_id), token):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        uri = (art.structured or {}).get("storage_uri")
+        if not uri:
+            # Fallback: serve text content
+            data = (art.content or "").encode("utf-8")
+            ctype = art.content_type or "text/plain"
+        else:
+            try:
+                data = read_bytes(uri)
+            except Exception:
+                return JSONResponse({"error": "storage_miss"}, status_code=404)
+            ctype = art.content_type or "application/octet-stream"
+        filename = (art.title or "artifact").replace('"', "")[:80]
+        ext = "pdf" if "pdf" in (ctype or "") else "txt"
+        return Response(
+            content=data,
+            media_type=ctype,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}.{ext}"',
+                "Cache-Control": "private, max-age=300",
+            },
+        )
+
+
 def run() -> None:
     import uvicorn
 

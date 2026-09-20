@@ -105,7 +105,29 @@ class SchedulerService:
         await self.session.flush()
 
     async def create_work_for_action(self, action: ScheduledAction) -> Work:
-        """Turn a due scheduled action into durable Work for the tutor/worker."""
+        """Turn a due scheduled action into durable Work for the tutor/worker.
+
+        Invariant: at most one Work per action. Flush Work before setting
+        action.work_id so the FK target exists (autoflush=False).
+        """
+        if action.work_id is not None:
+            existing = await self.session.get(Work, action.work_id)
+            if existing is not None:
+                logger.info(
+                    "scheduled_work_reused",
+                    action_id=str(action.id),
+                    work_id=str(existing.id),
+                )
+                return existing
+            # Stale work_id pointing at missing row — clear and recreate
+            logger.warning(
+                "scheduled_work_stale_cleared",
+                action_id=str(action.id),
+                stale_work_id=str(action.work_id),
+            )
+            action.work_id = None
+            await self.session.flush()
+
         work = Work(
             id=uuid4(),
             principal_id=action.principal_id,
@@ -121,6 +143,12 @@ class SchedulerService:
             },
         )
         self.session.add(work)
+        await self.session.flush()  # works row must exist before FK assign
         action.work_id = work.id
         await self.session.flush()
+        logger.info(
+            "scheduled_work_created",
+            action_id=str(action.id),
+            work_id=str(work.id),
+        )
         return work

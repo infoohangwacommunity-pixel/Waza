@@ -72,3 +72,115 @@ async def send_text(
                 logger.error("telegram_send_failed", status=resp.status_code, body=resp.text[:200])
                 return {"status": "failed", "results": results}
     return {"status": "ok", "chunks": len(chunks), "results": results}
+
+
+async def send_document(
+    chat_id: str,
+    *,
+    filename: str,
+    data: bytes,
+    caption: str | None = None,
+    content_type: str = "application/octet-stream",
+) -> dict[str, Any]:
+    """Upload a document to Telegram (multipart). Returns provider message id when possible."""
+    if not settings.telegram_enabled or not settings.telegram_bot_token:
+        return {"status": "skipped", "reason": "telegram_not_configured"}
+    if len(data) > 50 * 1024 * 1024:
+        return {"status": "failed", "reason": "file_too_large"}
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            files = {
+                "document": (filename, data, content_type),
+            }
+            form = {"chat_id": str(chat_id)}
+            if caption:
+                form["caption"] = caption[:1024]
+            resp = await client.post(_api("sendDocument"), data=form, files=files)
+            body = {}
+            try:
+                body = resp.json()
+            except Exception:
+                body = {"raw": resp.text[:300]}
+            if resp.status_code >= 400 or not body.get("ok"):
+                logger.error(
+                    "telegram_document_failed",
+                    status=resp.status_code,
+                    body=str(body)[:300],
+                )
+                return {"status": "failed", "status_code": resp.status_code, "body": body}
+            result = body.get("result") or {}
+            msg_id = result.get("message_id")
+            doc = result.get("document") or {}
+            file_id = doc.get("file_id")
+            logger.info(
+                "artifact_delivery_succeeded",
+                channel="telegram",
+                chat_id=str(chat_id),
+                message_id=msg_id,
+                file_id=file_id,
+            )
+            return {
+                "status": "ok",
+                "external_message_id": str(msg_id) if msg_id is not None else None,
+                "file_id": file_id,
+                "provider": "telegram",
+            }
+    except Exception as e:
+        logger.exception("telegram_document_error")
+        return {"status": "failed", "error": str(e)}
+
+
+async def send_inline_choices(
+    chat_id: str,
+    text: str,
+    choices: list[dict[str, Any]],
+    *,
+    interaction_prefix: str = "ix",
+) -> dict[str, Any]:
+    """Send message with inline keyboard. callback_data is opaque interaction token."""
+    if not settings.telegram_enabled or not settings.telegram_bot_token:
+        return {"status": "skipped", "reason": "telegram_not_configured"}
+    # Telegram callback_data max 64 bytes
+    keyboard = []
+    row = []
+    for i, c in enumerate(choices[:8]):
+        cid = str(c.get("callback_data") or c.get("id") or f"{interaction_prefix}:{i}")[:64]
+        title = str(c.get("title") or c.get("id") or "OK")[:64]
+        row.append({"text": title, "callback_data": cid})
+        if len(row) == 2:
+            keyboard.append(row)
+            row = []
+    if row:
+        keyboard.append(row)
+    body = {
+        "chat_id": chat_id,
+        "text": text,
+        "reply_markup": {"inline_keyboard": keyboard},
+    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        resp = await client.post(_api("sendMessage"), json=body)
+        data = {}
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+        if resp.status_code >= 400 or not data.get("ok"):
+            return {"status": "failed", "status_code": resp.status_code, "body": data}
+        msg_id = (data.get("result") or {}).get("message_id")
+        return {
+            "status": "ok",
+            "external_message_id": str(msg_id) if msg_id is not None else None,
+            "provider": "telegram",
+        }
+
+
+async def clear_inline_keyboard(chat_id: str, message_id: int | str) -> dict[str, Any]:
+    """Remove inline keyboard after a choice is consumed."""
+    if not settings.telegram_enabled or not settings.telegram_bot_token:
+        return {"status": "skipped"}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        resp = await client.post(
+            _api("editMessageReplyMarkup"),
+            json={"chat_id": chat_id, "message_id": int(message_id), "reply_markup": {}},
+        )
+        return {"status": "ok" if resp.status_code < 400 else "failed"}

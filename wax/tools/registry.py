@@ -56,32 +56,71 @@ async def handle_schedule_followup(
 async def handle_create_artifact(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
+    """Create durable artifact (txt/pdf). Does not claim channel delivery succeeded."""
+    from wax.artifacts.generate import generate_bytes
+    from wax.artifacts.storage import store_bytes
+    from wax.artifacts.access import make_download_token, public_download_url
+
     principal_id = ctx.get("principal_id")
     if not principal_id:
         return {"ok": False, "error": "no_principal"}
     kind = (args.get("kind") or "notes").strip()[:80]
     title = (args.get("title") or "Untitled").strip()[:500]
     content = args.get("content") or ""
+    fmt = (args.get("format") or args.get("file_format") or "txt").strip().lower()
+    if fmt not in ("txt", "pdf", "text", "plain"):
+        fmt = "txt"
+    if fmt in ("text", "plain"):
+        fmt = "txt"
+
+    data, content_type, fmt = generate_bytes(fmt, title, content)
+    art_id = uuid4()
+    ext = "pdf" if fmt == "pdf" else "txt"
+    uri = store_bytes(principal_id, f"{art_id}.{ext}", data, content_type=content_type)
+
     art = Artifact(
-        id=uuid4(),
+        id=art_id,
         principal_id=principal_id,
         work_id=ctx.get("work_id"),
         kind=kind,
         title=title,
-        content=content,
-        content_type="text/plain",
-        size_bytes=len(content.encode("utf-8")),
+        content=content if fmt == "txt" else (content[:2000] if content else ""),
+        content_type=content_type,
+        size_bytes=len(data),
         status="ready",
-        structured={"created_via": "tutor_tool"},
+        structured={
+            "created_via": "tutor_tool",
+            "format": fmt,
+            "storage_uri": uri,
+            "delivery_available": True,
+            "delivered": False,
+        },
     )
     session.add(art)
     await session.flush()
+    token = make_download_token(str(art.id), str(principal_id))
+    download_url = public_download_url(str(art.id), token)
+    logger.info(
+        "artifact_created",
+        artifact_id=str(art.id),
+        principal_id=str(principal_id),
+        format=fmt,
+        size_bytes=len(data),
+    )
     return {
         "ok": True,
+        "status": "ready",
         "artifact_id": str(art.id),
         "kind": kind,
         "title": title,
-        "size_bytes": art.size_bytes,
+        "format": fmt,
+        "content_type": content_type,
+        "size_bytes": len(data),
+        "storage_uri": uri,
+        "download_url": download_url,
+        "delivery_available": True,
+        "delivered": False,
+        "note": "Artifact stored. Channel delivery is separate — do not tell the learner it was sent until delivery succeeds.",
     }
 
 
