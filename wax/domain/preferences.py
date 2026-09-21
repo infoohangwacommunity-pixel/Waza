@@ -22,6 +22,9 @@ DEFAULT_PREFERENCES: dict[str, Any] = {
     "message_length": None,  # short | medium | detailed | null
     "timezone": None,  # IANA e.g. Africa/Lagos
     "proactivity_level": None,  # quiet | balanced | active
+    "emoji": None,  # few | normal | none | null
+    "tone": None,  # casual | formal | mixed | null
+    "learning_style": None,  # talk_through | read | examples | mixed | null
 }
 
 

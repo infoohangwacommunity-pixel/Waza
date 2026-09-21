@@ -77,6 +77,7 @@ class ContextAssembler:
 
         learning_block = await self._learning_snapshot(principal_id)
         goals_block = await self._active_goals(principal_id)
+        prefs_block = await self._preferences_block(principal_id)
         situation_block = ""
         if principal_id:
             try:
@@ -91,7 +92,7 @@ class ContextAssembler:
 
         assembled = AssembledContext(
             system_prefix=system_prefix,
-            memory_block=memory_block + summary_block,
+            memory_block=memory_block + summary_block + prefs_block,
             learning_block=learning_block + knowledge_block + hyp_block,
             goals_block=goals_block + situation_block,
             recent_messages=recent,
@@ -141,6 +142,55 @@ class ContextAssembler:
         result = await self.session.execute(stmt)
         msgs = list(reversed(result.scalars().all()))
         return [{"role": m.role, "content": m.content} for m in msgs]
+
+    async def _preferences_block(self, principal_id) -> str:
+        """Surface durable explicit preferences so the tutor does not drift."""
+        if not principal_id:
+            return ""
+        try:
+            from wax.domain.preferences import get_preferences
+
+            prefs = await get_preferences(self.session, principal_id)
+        except Exception:
+            logger.exception("preferences_block_failed")
+            return ""
+        # Only show non-default / meaningful keys
+        interesting = []
+        for key in (
+            "message_length",
+            "language",
+            "timezone",
+            "emoji",
+            "tone",
+            "learning_style",
+            "quiet_hours",
+        ):
+            val = prefs.get(key)
+            if val is None or val == "" or val is False:
+                continue
+            interesting.append(f"- {key}: {val}")
+        # Any extra custom keys the learner set
+        for key, val in (prefs or {}).items():
+            if key in (
+                "message_length",
+                "language",
+                "timezone",
+                "emoji",
+                "tone",
+                "learning_style",
+                "quiet_hours",
+            ):
+                continue
+            if val is None or val == "":
+                continue
+            interesting.append(f"- {key}: {val}")
+        if not interesting:
+            return ""
+        return (
+            "\n--- Durable preferences (honor unless current turn overrides) ---\n"
+            + "\n".join(interesting)
+            + "\n--- End preferences ---\n"
+        )
 
     async def _learning_snapshot(self, principal_id, limit: int = 8) -> str:
         if not principal_id:

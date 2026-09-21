@@ -1050,6 +1050,7 @@ async def handle_set_preference(
     allowed = {
         "language", "quiet_hours", "encouragement", "explanation_style",
         "message_length", "timezone", "proactivity_level",
+        "emoji", "tone", "learning_style",
     }
     if key not in allowed:
         return {"ok": False, "error": "key_not_allowed", "allowed": sorted(allowed)}
