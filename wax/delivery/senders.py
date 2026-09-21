@@ -130,12 +130,44 @@ async def send_telegram(chat_id: str, text: str, interactive: dict | None = None
     return {"status": "ok", "chunks": len(chunks), "results": results}
 
 
+async def send_typing(channel: str, target: str, *, inbound_message_id: str | None = None) -> dict[str, Any]:
+    """
+    Best-effort typing / read indicator. Never blocks durable work on failure.
+    WhatsApp requires the inbound message id for typing_indicator+read.
+    """
+    from wax.delivery.presentation import get_profile
+
+    profile = get_profile(channel)
+    if not getattr(profile, "supports_typing_indicator", False):
+        return {"status": "skipped", "reason": "channel_no_typing"}
+    try:
+        if channel == "telegram":
+            from wax.messaging.telegram.client import send_typing as tg_typing
+
+            return await tg_typing(target)
+        if channel == "whatsapp":
+            from wax.messaging.whatsapp.client import send_typing_and_read
+
+            if not inbound_message_id:
+                return {"status": "skipped", "reason": "whatsapp_needs_message_id"}
+            return await send_typing_and_read(inbound_message_id)
+    except Exception as e:
+        logger.warning("typing_indicator_failed", channel=channel, error=str(e)[:200])
+        return {"status": "failed", "error": str(e)[:200]}
+    return {"status": "skipped", "reason": f"unknown_channel:{channel}"}
+
+
 async def deliver(
     channel: str,
     target: str,
     text: str,
     interactive: dict | None = None,
+    *,
+    inbound_message_id: str | None = None,
+    show_typing: bool = True,
 ) -> dict[str, Any]:
+    if show_typing:
+        await send_typing(channel, target, inbound_message_id=inbound_message_id)
     if channel == "whatsapp":
         return await send_whatsapp(target, text, interactive)
     if channel == "telegram":

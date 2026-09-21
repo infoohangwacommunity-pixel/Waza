@@ -283,11 +283,17 @@ async def _attempt_deliveries(session, work_id) -> None:
             wrow = await session.get(Work, work_id)
             interactive = (wrow.result_payload or {}).get("interactive") if wrow else None
             tools = (wrow.result_payload or {}).get("tools") or [] if wrow else []
+            inbound_mid = None
+            meta = delivery.metadata_ or {}
+            if isinstance(meta, dict):
+                inbound_mid = meta.get("inbound_external_id") or meta.get("source_message_id")
             outcome = await channel_deliver(
                 delivery.channel,
                 delivery.target_external_id,
                 delivery.content,
                 interactive=interactive,
+                inbound_message_id=inbound_mid,
+                show_typing=True,
             )
             if outcome.get("status") in ("ok", "skipped"):
                 delivery.status = "delivered"

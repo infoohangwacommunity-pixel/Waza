@@ -33,6 +33,17 @@ def workspace_root() -> Path:
         or os.environ.get("WAX_WORKSPACE_ROOT")
         or DEFAULT_ROOT
     )
+    if settings.app_env == "production" and str(root).startswith("/tmp"):
+        logger.error(
+            "workspace_root_ephemeral",
+            path=str(root),
+            hint="Set WORKSPACE_ROOT=/data/wax-workspaces and attach a Railway Volume at /data",
+        )
+        if getattr(settings, "require_persistent_workspace", False):
+            raise RuntimeError(
+                "Production workspace must not use /tmp. "
+                "Attach a Railway Volume at /data and set WORKSPACE_ROOT=/data/wax-workspaces."
+            )
     try:
         root.mkdir(parents=True, exist_ok=True)
         probe = root / ".wax_write_probe"

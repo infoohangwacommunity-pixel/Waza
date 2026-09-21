@@ -35,8 +35,10 @@ class WebhookAcceptError(Exception):
 
 async def handle_telegram_webhook(body: bytes, headers: dict[str, str]) -> dict[str, Any]:
     if settings.telegram_webhook_secret:
+        from wax.security.webhooks import verify_telegram_secret
+
         token = headers.get("x-telegram-bot-api-secret-token")
-        if token != settings.telegram_webhook_secret:
+        if not verify_telegram_secret(settings.telegram_webhook_secret, token):
             logger.warning("telegram_invalid_secret")
             raise WebhookAcceptError("invalid_secret", 403)
 

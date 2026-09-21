@@ -34,5 +34,8 @@ echo "=== WAX DATABASE SCHEMA VERIFY START ==="
 python scripts/verify_schema.py
 echo "=== WAX DATABASE SCHEMA VERIFY COMPLETE ==="
 
+echo "=== WAX CAPABILITY PROBE ==="
+python scripts/verify_capabilities.py || true
+
 echo "=== WAX APPLICATION START ==="
 exec "$@"

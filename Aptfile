@@ -1,0 +1,9 @@
+ffmpeg
+tesseract-ocr
+sox
+libmediainfo0v5
+mediainfo
+bubblewrap
+poppler-utils
+imagemagick
+file

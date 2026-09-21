@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
-import hmac
 import json
 import uuid
 from typing import Any
@@ -23,6 +21,7 @@ from wax.db.models import (
 from wax.db.session import session_scope
 from wax.messaging.normalization import normalize_whatsapp_message
 from wax.observability.logging import get_logger
+from wax.security.webhooks import verify_whatsapp_signature
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -38,14 +37,12 @@ class WebhookAcceptError(Exception):
 
 
 def _verify_signature(body: bytes, signature_header: str | None) -> bool:
-    if not settings.whatsapp_app_secret:
-        return not settings.webhook_signature_required
-    if not signature_header or not signature_header.startswith("sha256="):
-        return False
-    expected = hmac.new(
-        settings.whatsapp_app_secret.encode(), body, hashlib.sha256
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature_header[7:])
+    return verify_whatsapp_signature(
+        settings.whatsapp_app_secret,
+        body,
+        signature_header,
+        required=bool(getattr(settings, "webhook_signature_required", True)),
+    )
 
 
 async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[str, Any]:
