@@ -1,13 +1,13 @@
-# Railway / Nixpacks: install OS-level tools the terminal sandbox allowlists.
-# Python deps still come from requirements.txt.
-# Without these, ffmpeg/tesseract/sox/mediainfo/bwrap are missing at runtime.
+# OS-level tools for the terminal sandbox allowlist.
+# Do NOT override [phases.install] — that breaks Nixpacks Python provider
+# (build fails with: python: command not found).
+# Python deps are installed automatically from requirements.txt.
 
 [phases.setup]
 nixPkgs = [
   "ffmpeg",
   "tesseract",
   "sox",
-  "libmediainfo",
   "mediainfo",
   "bubblewrap",
   "poppler_utils",
@@ -15,11 +15,5 @@ nixPkgs = [
   "file",
 ]
 
-[phases.install]
-cmds = [
-  "python -m pip install --upgrade pip",
-  "pip install -r requirements.txt",
-]
-
-[start]
-cmd = "bash scripts/startup.sh uvicorn wax.api.main:app --host 0.0.0.0 --port $PORT"
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.12"

@@ -3,6 +3,23 @@
 # Fail-closed: any step failure exits non-zero and the process does not start.
 set -euo pipefail
 
+# Railway/Nixpacks images often expose python3 but not python.
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "FATAL: neither python3 nor python found on PATH" >&2
+  exit 127
+fi
+export PYTHON
+# Some tools still invoke "python" — provide a shim when missing
+if ! command -v python >/dev/null 2>&1; then
+  mkdir -p /tmp/wax-bin
+  ln -sf "$(command -v python3)" /tmp/wax-bin/python
+  export PATH="/tmp/wax-bin:${PATH}"
+fi
+
 echo "=== WAX DATABASE MIGRATION START ==="
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
@@ -11,7 +28,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
 fi
 
 # Safe target metadata only (never print password / full URL)
-python - <<'PY'
+$PYTHON - <<'PY'
 import os
 from sqlalchemy.engine import make_url
 raw = os.environ.get("DATABASE_URL", "")
@@ -26,16 +43,16 @@ except Exception as e:
     print(f"migration_target parse_error={e}")
 PY
 
-python -m alembic upgrade head
+$PYTHON -m alembic upgrade head
 
 echo "=== WAX DATABASE MIGRATION COMPLETE ==="
 
 echo "=== WAX DATABASE SCHEMA VERIFY START ==="
-python scripts/verify_schema.py
+$PYTHON scripts/verify_schema.py
 echo "=== WAX DATABASE SCHEMA VERIFY COMPLETE ==="
 
 echo "=== WAX CAPABILITY PROBE ==="
-python scripts/verify_capabilities.py || true
+$PYTHON scripts/verify_capabilities.py || true
 
 echo "=== WAX APPLICATION START ==="
 exec "$@"
