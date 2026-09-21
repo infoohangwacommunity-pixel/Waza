@@ -40,6 +40,16 @@ class Settings(BaseSettings):
     memory_api_key: str = ""
     memory_model: str = "gpt-4o-mini"
     memory_base_url: str = ""  # defaults to primary_base_url if empty
+
+    # Embeddings are independent of the chat provider (configure via env).
+    # Example Voyage:
+    #   EMBEDDING_PROVIDER=voyage
+    #   EMBEDDING_API_KEY=...
+    #   EMBEDDING_BASE_URL=https://api.voyageai.com/v1
+    #   EMBEDDING_MODEL=voyage-3.5-lite
+    embedding_provider: str = "none"
+    embedding_api_key: str = ""
+    embedding_base_url: str = ""
     embedding_model: str = "text-embedding-3-small"
 
     # Optional multimodal provider (same OpenAI-compatible shape) — only used when AI asks

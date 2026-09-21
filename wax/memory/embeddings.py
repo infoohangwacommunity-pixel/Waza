@@ -1,13 +1,16 @@
 """
 Embedding service for semantic memory retrieval.
 
-Uses OpenAI-compatible /embeddings endpoints when configured.
+Configured independently of the chat provider via EMBEDDING_* env vars.
+OpenAI-compatible POST {base}/embeddings (Voyage, OpenAI, etc.).
+
 Falls back gracefully — structured hybrid retrieval still works without vectors.
 """
 
 from __future__ import annotations
 
 import math
+import os
 from typing import Any
 
 import httpx
@@ -18,15 +21,65 @@ from wax.observability.logging import get_logger
 logger = get_logger(__name__)
 settings = get_settings()
 
+# Convenience defaults when operator sets PROVIDER name but omits BASE_URL.
+# Not educational hardcoding — infrastructure endpoint hints only.
+_PROVIDER_BASE_HINTS: dict[str, str] = {
+    "openai": "https://api.openai.com/v1",
+    "voyage": "https://api.voyageai.com/v1",
+    "voyageai": "https://api.voyageai.com/v1",
+}
+
 
 def _embedding_config() -> tuple[str, str, str] | None:
-    """api_key, base_url, model"""
-    key = settings.primary_api_key
+    """
+    Return (api_key, base_url, model) for embeddings.
+
+    Priority:
+    1. Explicit EMBEDDING_API_KEY (+ optional base/model/provider)
+    2. Else, if embedding_provider is none/empty, no dedicated embeddings
+       (do NOT silently send embedding traffic to the chat provider —
+        that caused Cerebras /embeddings 402 noise)
+    """
+    key = (settings.embedding_api_key or os.environ.get("EMBEDDING_API_KEY") or "").strip()
+    provider = (
+        settings.embedding_provider
+        or os.environ.get("EMBEDDING_PROVIDER")
+        or "none"
+    ).strip().lower()
+    base = (
+        settings.embedding_base_url
+        or os.environ.get("EMBEDDING_BASE_URL")
+        or ""
+    ).strip().rstrip("/")
+    model = (
+        settings.embedding_model
+        or os.environ.get("EMBEDDING_MODEL")
+        or "text-embedding-3-small"
+    ).strip()
+
     if not key:
+        # No dedicated embedding key → skip vectors (retrieval still works)
         return None
-    base = (settings.primary_base_url or "https://api.openai.com/v1").rstrip("/")
-    # Allow override via model name heuristic; default text-embedding-3-small
-    model = getattr(settings, "embedding_model", None) or "text-embedding-3-small"
+
+    if not base:
+        if provider in _PROVIDER_BASE_HINTS:
+            base = _PROVIDER_BASE_HINTS[provider]
+        elif provider in ("none", "", "null"):
+            # Key set without provider/base — refuse to guess chat provider URL
+            logger.warning(
+                "embedding_base_url_missing",
+                hint="Set EMBEDDING_BASE_URL (e.g. https://api.voyageai.com/v1) "
+                "or EMBEDDING_PROVIDER=voyage",
+            )
+            return None
+        else:
+            logger.warning(
+                "embedding_base_url_unknown_provider",
+                provider=provider,
+                hint="Set EMBEDDING_BASE_URL explicitly",
+            )
+            return None
+
     return key, base, model
 
 
@@ -35,12 +88,12 @@ async def embed_texts(texts: list[str]) -> list[list[float]] | None:
     if not cfg or not texts:
         return None
     api_key, base, model = cfg
-    # truncate very long inputs
     cleaned = [(t or "")[:6000] for t in texts]
+    url = f"{base}/embeddings"
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
-                f"{base}/embeddings",
+                url,
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
@@ -48,13 +101,27 @@ async def embed_texts(texts: list[str]) -> list[list[float]] | None:
                 json={"model": model, "input": cleaned},
             )
         if resp.status_code >= 400:
-            logger.warning("embed_failed", status=resp.status_code, body=resp.text[:200])
+            logger.warning(
+                "embed_failed",
+                status=resp.status_code,
+                url=url,
+                model=model,
+                body=resp.text[:200],
+            )
             return None
         data = resp.json()
         items = sorted(data.get("data") or [], key=lambda x: x.get("index", 0))
-        return [it.get("embedding") or [] for it in items]
+        vectors = [it.get("embedding") or [] for it in items]
+        if vectors:
+            logger.info(
+                "embed_ok",
+                model=model,
+                count=len(vectors),
+                dims=len(vectors[0]) if vectors[0] else 0,
+            )
+        return vectors
     except Exception as e:
-        logger.warning("embed_error", error=str(e))
+        logger.warning("embed_error", error=str(e), url=url)
         return None
 
 
