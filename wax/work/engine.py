@@ -128,8 +128,22 @@ class WorkEngine:
         target: str,
         content: str,
         idempotency_key: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Delivery:
+        """Create outbound delivery once per idempotency_key (provider retries safe)."""
         key = idempotency_key or f"delivery:{work_id}"
+        existing = await self.session.execute(
+            select(Delivery).where(Delivery.idempotency_key == key).limit(1)
+        )
+        row = existing.scalar_one_or_none()
+        if row is not None:
+            logger.info(
+                "delivery_idempotent_hit",
+                work_id=str(work_id),
+                delivery_id=str(row.id),
+                key=key,
+            )
+            return row
         d = Delivery(
             id=uuid4(),
             work_id=work_id,
@@ -139,7 +153,15 @@ class WorkEngine:
             content=content,
             status="pending",
             idempotency_key=key,
+            metadata_=metadata or {},
         )
         self.session.add(d)
         await self.session.flush()
+        logger.info(
+            "delivery_created",
+            work_id=str(work_id),
+            delivery_id=str(d.id),
+            channel=channel,
+            key=key,
+        )
         return d
