@@ -1,7 +1,9 @@
-# OS-level tools for the terminal sandbox allowlist.
-# Do NOT override [phases.install] — that breaks Nixpacks Python provider
-# (build fails with: python: command not found).
-# Python deps are installed automatically from requirements.txt.
+# Optional (only if Railway builder is set back to NIXPACKS).
+# Prefer Dockerfile (railway.toml builder = DOCKERFILE) for a coherent Python path.
+providers = ["python"]
+
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.12"
 
 [phases.setup]
 nixPkgs = [
@@ -13,7 +15,5 @@ nixPkgs = [
   "poppler_utils",
   "imagemagick",
   "file",
+  "unzip",
 ]
-
-[variables]
-NIXPACKS_PYTHON_VERSION = "3.12"

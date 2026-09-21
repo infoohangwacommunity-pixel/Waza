@@ -1,9 +1,9 @@
 [build]
-builder = "NIXPACKS"
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
 
 [deploy]
-# Primary guarantee: migrations run in the process start command (see Procfile /
-# startCommand). preDeploy is secondary — Railway has not reliably executed it.
+# Migrations run inside scripts/startup.sh (not preDeploy — Railway is unreliable for that).
 startCommand = "bash scripts/startup.sh uvicorn wax.api.main:app --host 0.0.0.0 --port $PORT"
 healthcheckPath = "/health"
 healthcheckTimeout = 60

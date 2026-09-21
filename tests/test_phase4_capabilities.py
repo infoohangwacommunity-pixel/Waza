@@ -23,7 +23,8 @@ def test_transcribe_in_available_tools():
 def test_transcription_module_exists():
     src = Path("wax/tools/transcription.py").read_text()
     assert "transcribe_local_audio" in src
-    assert "transcription_not_configured" in src
+    assert "vosk" in src.lower()
+    assert "ffmpeg" in src
 
 
 def test_worker_auto_transcribes_audio():
