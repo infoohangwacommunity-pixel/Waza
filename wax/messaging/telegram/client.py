@@ -184,3 +184,28 @@ async def clear_inline_keyboard(chat_id: str, message_id: int | str) -> dict[str
             json={"chat_id": chat_id, "message_id": int(message_id), "reply_markup": {}},
         )
         return {"status": "ok" if resp.status_code < 400 else "failed"}
+
+
+async def answer_callback_query(
+    callback_query_id: str,
+    *,
+    text: str | None = None,
+    show_alert: bool = False,
+) -> dict[str, Any]:
+    """Acknowledge an inline button press so Telegram stops the loading spinner."""
+    if not settings.telegram_enabled or not settings.telegram_bot_token:
+        return {"status": "skipped", "reason": "telegram_not_configured"}
+    if not callback_query_id:
+        return {"status": "skipped", "reason": "no_callback_query_id"}
+    body: dict[str, Any] = {"callback_query_id": callback_query_id}
+    if text:
+        body["text"] = text[:200]
+    if show_alert:
+        body["show_alert"] = True
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(_api("answerCallbackQuery"), json=body)
+        return {"status": "ok" if resp.status_code < 400 else "failed"}
+    except Exception as e:
+        logger.warning("telegram_answer_callback_failed", error=str(e)[:200])
+        return {"status": "failed", "error": str(e)[:200]}
