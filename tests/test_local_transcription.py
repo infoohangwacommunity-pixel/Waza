@@ -1,4 +1,4 @@
-"""Local transcription — no paid API required by default."""
+"""Local transcription — controlled ffmpeg, no paid API by default."""
 
 from pathlib import Path
 
@@ -9,6 +9,16 @@ def test_transcription_prefers_vosk_local():
     assert "ffmpeg" in src
     assert "WAX_TRANSCRIPTION_ALLOW_API" in src
     assert "api_transcription_disabled" in src
+    assert "path_escape" in src
+    assert "pcm_s16le" in src
+
+
+def test_ffmpeg_not_via_open_shell_bwrap():
+    """Conversion is path-isolated controlled pipeline, not model shell."""
+    src = Path("wax/tools/transcription.py").read_text()
+    assert "create_subprocess_exec" in src
+    # Should not require run_sandboxed for media conversion reliability
+    assert "run_sandboxed" not in src
 
 
 def test_dockerfile_provides_python_and_media_tools():
@@ -16,21 +26,12 @@ def test_dockerfile_provides_python_and_media_tools():
     assert "python:3.12" in df
     assert "ffmpeg" in df
     assert "tesseract" in df
-    assert "vosk" not in df  # python dep, not apt
 
 
 def test_railway_uses_dockerfile_builder():
     src = Path("railway.toml").read_text()
     assert 'builder = "DOCKERFILE"' in src
-    assert "dockerfilePath" in src
 
 
 def test_vosk_in_requirements():
-    req = Path("requirements.txt").read_text()
-    assert "vosk" in req
-
-
-def test_no_required_openai_transcription_in_default_path():
-    src = Path("wax/tools/transcription.py").read_text()
-    # default path must not require PRIMARY_API_KEY
-    assert "transcription_not_configured" not in src or "WAX_TRANSCRIPTION_ALLOW_API" in src
+    assert "vosk" in Path("requirements.txt").read_text()

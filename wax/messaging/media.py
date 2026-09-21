@@ -87,13 +87,21 @@ async def fetch_telegram_media(file_id: str, principal_id: Any, filename_hint: s
         data = data_resp.content
 
     name = filename_hint or Path(file_path).name or f"tg-{uuid4().hex[:10]}"
+    # Telegram voice notes often arrive as voice/*.oga — preserve a recognizable suffix
+    # so local transcription can treat them as audio without hardcoding product modes.
+    lower = name.lower()
+    if not any(lower.endswith(ext) for ext in (".oga", ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm")):
+        if "voice" in (file_path or "").lower() or lower.endswith(".oga"):
+            name = f"{name}.oga"
+        elif "voice" in lower:
+            name = f"{name}.oga"
     dest_dir = principal_workspace(principal_id) / "media"
     path = safe_write_bytes(dest_dir, name, data)
     return {
         "ok": True,
         "path": str(path),
         "size": len(data),
-        "mime": None,
+        "mime": "audio/ogg" if str(path).lower().endswith((".oga", ".ogg", ".opus")) else None,
         "sha256": content_hash(data),
         "channel": "telegram",
         "file_id": file_id,

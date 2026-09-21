@@ -4,16 +4,19 @@ Local audio transcription via terminal workspace tools.
 Primary path (no paid transcription API):
   ffmpeg → 16 kHz mono WAV → Vosk offline model → text
 
-Optional fallback: OpenAI-compatible /audio/transcriptions only when
-WAX_TRANSCRIPTION_ALLOW_API=1 and PRIMARY_API_KEY is set.
+ffmpeg runs as a controlled, path-isolated pipeline on files already under the
+workspace root — not as an open model shell. Optional API transcription only
+when WAX_TRANSCRIPTION_ALLOW_API=1.
 
 Images/OCR remain tesseract via inspect_media (local).
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import shutil
 import wave
 import zipfile
 from pathlib import Path
@@ -41,11 +44,8 @@ AUDIO_SUFFIXES = {
     ".opus",
 }
 
-# Small English model (~40MB). Cached under durable workspace root when possible.
 VOSK_MODEL_NAME = "vosk-model-small-en-us-0.15"
-VOSK_MODEL_URL = (
-    f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
-)
+VOSK_MODEL_URL = f"https://alphacephei.com/vosk/models/{VOSK_MODEL_NAME}.zip"
 
 
 def _model_root() -> Path:
@@ -60,8 +60,22 @@ def _model_root() -> Path:
     return path
 
 
+def _workspace_root() -> Path:
+    from wax.terminal.workspace import workspace_root
+
+    return workspace_root().resolve()
+
+
+def _under_workspace(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        root = _workspace_root()
+        return str(resolved).startswith(str(root) + os.sep) or resolved == root
+    except Exception:
+        return False
+
+
 def _ensure_vosk_model() -> Path | None:
-    """Download + unzip model once. Returns model directory or None."""
     root = _model_root()
     model_dir = root / VOSK_MODEL_NAME
     if model_dir.is_dir() and any(model_dir.iterdir()):
@@ -81,7 +95,6 @@ def _ensure_vosk_model() -> Path | None:
         if model_dir.is_dir():
             logger.info("vosk_model_ready", path=str(model_dir))
             return model_dir
-        # some zips nest differently
         for child in root.iterdir():
             if child.is_dir() and "vosk-model" in child.name:
                 return child
@@ -91,40 +104,101 @@ def _ensure_vosk_model() -> Path | None:
     return None
 
 
+def _ffmpeg_bin() -> str | None:
+    return shutil.which("ffmpeg")
+
+
 async def _ffmpeg_to_wav(src: Path, wav_out: Path) -> dict[str, Any]:
-    """Convert any audio to 16k mono PCM WAV using local ffmpeg."""
-    from wax.terminal.sandbox import run_sandboxed
+    """
+    Convert any common voice/audio container to 16 kHz mono PCM WAV.
+
+    Path-isolated: source and output must live under the workspace root.
+    Uses a controlled ffmpeg invocation (allowlisted binary), not model shell access.
+    """
+    src = src.resolve()
+    wav_out = wav_out.resolve()
+    if not src.is_file():
+        return {"ok": False, "error": "file_not_found", "path": str(src)}
+    if not _under_workspace(src):
+        return {"ok": False, "error": "path_escape", "path": str(src)}
+    if not _under_workspace(wav_out.parent):
+        return {"ok": False, "error": "path_escape", "path": str(wav_out)}
+
+    ffmpeg = _ffmpeg_bin()
+    if not ffmpeg:
+        return {
+            "ok": False,
+            "error": "ffmpeg_not_found",
+            "hint": "Install ffmpeg in the container image (Dockerfile apt package).",
+        }
 
     wav_out.parent.mkdir(parents=True, exist_ok=True)
+    # Telegram voice notes are often Opus in OGG (.oga/.ogg). Let ffmpeg probe;
+    # force pcm_s16le output for Vosk.
     argv = [
-        "ffmpeg",
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
         "-y",
         "-i",
         str(src),
+        "-vn",
         "-ac",
         "1",
         "-ar",
         "16000",
-        "-f",
-        "wav",
+        "-c:a",
+        "pcm_s16le",
         str(wav_out),
     ]
-    # Prefer cwd at parent so path bounds stay sensible
-    result = await run_sandboxed(argv, cwd=src.parent)
-    if not result.success:
-        return {
-            "ok": False,
-            "error": "ffmpeg_failed",
-            "detail": (result.error or result.stderr or "")[:400],
-        }
-    if not wav_out.is_file():
-        return {"ok": False, "error": "ffmpeg_no_output"}
-    return {"ok": True, "wav": str(wav_out)}
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin",
+        "HOME": str(src.parent),
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+    }
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *argv,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            cwd=str(src.parent),
+            env=env,
+        )
+        try:
+            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=90.0)
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"ok": False, "error": "ffmpeg_timeout"}
+        stderr = (stderr_b or b"").decode("utf-8", errors="replace")[:800]
+        if proc.returncode != 0:
+            logger.warning(
+                "ffmpeg_failed",
+                returncode=proc.returncode,
+                stderr=stderr,
+                src=str(src),
+            )
+            return {
+                "ok": False,
+                "error": "ffmpeg_failed",
+                "returncode": proc.returncode,
+                "detail": stderr or "no_stderr",
+            }
+        if not wav_out.is_file() or wav_out.stat().st_size < 44:
+            return {"ok": False, "error": "ffmpeg_no_output", "detail": stderr}
+        return {"ok": True, "wav": str(wav_out)}
+    except FileNotFoundError:
+        return {"ok": False, "error": "ffmpeg_not_found"}
+    except Exception as e:
+        logger.exception("ffmpeg_exception")
+        return {"ok": False, "error": "ffmpeg_exception", "detail": str(e)[:300]}
 
 
 def _vosk_transcribe_wav(wav_path: Path, model_dir: Path) -> dict[str, Any]:
     try:
-        from vosk import Model, KaldiRecognizer, SetLogLevel
+        from vosk import KaldiRecognizer, Model, SetLogLevel
 
         SetLogLevel(-1)
     except ImportError:
@@ -175,7 +249,6 @@ def _vosk_transcribe_wav(wav_path: Path, model_dir: Path) -> dict[str, Any]:
 
 
 async def _api_transcribe_fallback(path: Path, language: str | None) -> dict[str, Any]:
-    """Optional paid path — disabled unless explicitly allowed."""
     allow = os.environ.get("WAX_TRANSCRIPTION_ALLOW_API", "").strip().lower() in (
         "1",
         "true",
@@ -194,10 +267,12 @@ async def _api_transcribe_fallback(path: Path, language: str | None) -> dict[str
     model = getattr(settings, "transcription_model", None) or "whisper-1"
     mime = {
         ".ogg": "audio/ogg",
+        ".oga": "audio/ogg",
         ".mp3": "audio/mpeg",
         ".wav": "audio/wav",
         ".m4a": "audio/mp4",
         ".webm": "audio/webm",
+        ".opus": "audio/ogg",
     }.get(path.suffix.lower(), "application/octet-stream")
     data: dict[str, str] = {"model": model, "response_format": "json"}
     if language:
@@ -237,14 +312,12 @@ async def transcribe_local_audio(path: str, *, language: str | None = None) -> d
     if not p.is_file():
         return {"ok": False, "error": "file_not_found", "path": path}
 
-    # 1) Local: ffmpeg → wav → vosk
     model_dir = _ensure_vosk_model()
     if model_dir is not None:
         wav_path = p.parent / f".wax-{p.stem}-16k.wav"
         conv = await _ffmpeg_to_wav(p, wav_path)
         if conv.get("ok"):
             local = _vosk_transcribe_wav(Path(conv["wav"]), model_dir)
-            # cleanup temp wav
             try:
                 Path(conv["wav"]).unlink(missing_ok=True)
             except Exception:
@@ -252,11 +325,15 @@ async def transcribe_local_audio(path: str, *, language: str | None = None) -> d
             if local.get("ok"):
                 local["source_path"] = str(p)
                 return local
-            logger.info("vosk_local_failed", error=local.get("error"))
+            logger.info("vosk_local_failed", error=local.get("error"), detail=local.get("detail"))
         else:
-            logger.info("ffmpeg_convert_failed", error=conv.get("error"))
+            logger.info(
+                "ffmpeg_convert_failed",
+                error=conv.get("error"),
+                detail=conv.get("detail"),
+                returncode=conv.get("returncode"),
+            )
     else:
         logger.info("vosk_model_unavailable")
 
-    # 2) Optional API only if explicitly enabled
     return await _api_transcribe_fallback(p, language)
