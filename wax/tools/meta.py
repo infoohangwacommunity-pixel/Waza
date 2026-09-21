@@ -16,6 +16,8 @@ CODE_EXECUTION = "CODE_EXECUTION"
 FILE_WRITE = "FILE_WRITE"
 
 TOOL_META: dict[str, dict[str, Any]] = {
+    "transcribe_audio": {"risk": "medium", "permissions": [EXTERNAL_NETWORK, READ]},
+    "ingest_document": {"risk": "medium", "permissions": [DATABASE_WRITE, READ]},
     "get_current_time": {"risk": "low", "permissions": [READ]},
     "get_learner_state": {"risk": "low", "permissions": [DATABASE_READ]},
     "inspect_memories": {"risk": "low", "permissions": [DATABASE_READ]},

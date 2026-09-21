@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 from uuid import uuid4
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.db.models import DocumentChunk, KnowledgeSource
@@ -63,3 +64,52 @@ class KnowledgeIngestService:
         await self.session.flush()
         logger.info("knowledge_ingested", source_id=str(source.id), chunks=len(parts))
         return source
+
+    async def list_sources(self, principal_id, limit: int = 12) -> list[dict[str, Any]]:
+        stmt = (
+            select(KnowledgeSource)
+            .where(KnowledgeSource.principal_id == principal_id)
+            .order_by(KnowledgeSource.created_at.desc())
+            .limit(limit)
+        )
+        result = await self.session.execute(stmt)
+        rows = list(result.scalars().all())
+        return [
+            {
+                "id": str(s.id),
+                "title": s.title,
+                "kind": s.kind,
+                "status": s.status,
+            }
+            for s in rows
+        ]
+
+    async def recent_chunks_for_context(
+        self, principal_id, query: str | None = None, limit: int = 6
+    ) -> list[str]:
+        """Principal-scoped chunks only. Simple recency + optional substring filter."""
+        stmt = (
+            select(DocumentChunk)
+            .where(DocumentChunk.principal_id == principal_id)
+            .order_by(DocumentChunk.created_at.desc())
+            .limit(40)
+        )
+        result = await self.session.execute(stmt)
+        rows = list(result.scalars().all())
+        q = (query or "").lower().strip()
+        out: list[str] = []
+        for ch in rows:
+            content = (ch.content or "").strip()
+            if not content:
+                continue
+            if q and q not in content.lower():
+                continue
+            out.append(content[:600])
+            if len(out) >= limit:
+                break
+        if not out and rows:
+            # fallback: most recent regardless of query
+            for ch in rows[:limit]:
+                if ch.content:
+                    out.append(ch.content[:600])
+        return out

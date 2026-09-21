@@ -57,6 +57,43 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("media_prepare_inline_failed")
 
+    # Auto-transcribe voice notes so the tutor receives text equivalent to typing
+    local_path = payload.get("local_media_path")
+    content_type = (payload.get("content_type") or "").lower()
+    if (
+        local_path
+        and not payload.get("transcript")
+        and (
+            content_type == "audio"
+            or str(local_path).lower().endswith((".ogg", ".oga", ".mp3", ".m4a", ".wav", ".webm"))
+        )
+    ):
+        try:
+            from wax.tools.transcription import transcribe_local_audio
+
+            tr = await transcribe_local_audio(str(local_path))
+            if tr.get("ok") and tr.get("transcript"):
+                payload = {
+                    **payload,
+                    "transcript": tr["transcript"],
+                    "text": tr["transcript"],
+                }
+                work.input_payload = payload
+                await session.flush()
+                logger.info(
+                    "audio_auto_transcribed",
+                    work_id=str(work.id),
+                    chars=len(tr["transcript"]),
+                )
+            else:
+                logger.info(
+                    "audio_auto_transcribe_skipped",
+                    work_id=str(work.id),
+                    error=tr.get("error"),
+                )
+        except Exception:
+            logger.exception("audio_auto_transcribe_failed")
+
     tutor = TutorService(session)
     try:
         await renew_lease(session, work, work.claimed_by or "worker")

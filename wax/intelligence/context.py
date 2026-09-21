@@ -86,6 +86,7 @@ class ContextAssembler:
             except Exception:
                 logger.exception("learner_state_snapshot_failed")
         knowledge_block = await self._knowledge_snapshot(principal_id)
+        materials_block = await self._learner_materials_block(principal_id, user_text)
         hyp_block = await self._hypothesis_snapshot(principal_id)
         recent = await self._recent_messages(conversation_id, limit=18)
         summary_block = await self._conversation_summary(conversation_id)
@@ -93,7 +94,7 @@ class ContextAssembler:
         assembled = AssembledContext(
             system_prefix=system_prefix,
             memory_block=memory_block + summary_block + prefs_block,
-            learning_block=learning_block + knowledge_block + hyp_block,
+            learning_block=learning_block + knowledge_block + materials_block + hyp_block,
             goals_block=goals_block + situation_block,
             recent_messages=recent,
             memories_used=memories_used,
@@ -228,6 +229,36 @@ class ContextAssembler:
         lines = [f"- {g.title}" + (f": {g.description}" if g.description else "") for g in goals]
         return "\n--- Active goals ---\n" + "\n".join(lines) + "\n--- End goals ---\n"
 
+
+
+    async def _learner_materials_block(self, principal_id, user_text: str = "") -> str:
+        if not principal_id:
+            return ""
+        try:
+            from wax.knowledge.ingest import KnowledgeIngestService
+
+            svc = KnowledgeIngestService(self.session)
+            sources = await svc.list_sources(principal_id, limit=8)
+            chunks = await svc.recent_chunks_for_context(principal_id, query=user_text, limit=4)
+        except Exception:
+            logger.exception("learner_materials_block_failed")
+            return ""
+        if not sources and not chunks:
+            return ""
+        lines = []
+        if sources:
+            lines.append("Sources:")
+            for s in sources[:8]:
+                lines.append(f"- {s['title']} ({s['kind']}/{s['status']})")
+        if chunks:
+            lines.append("Relevant extracts:")
+            for c in chunks:
+                lines.append(f"- {c[:400]}")
+        return (
+            "\n--- Learner materials (this person only) ---\n"
+            + "\n".join(lines)
+            + "\n--- End materials ---\n"
+        )
 
     async def _knowledge_snapshot(self, principal_id, limit: int = 10) -> str:
         if not principal_id:

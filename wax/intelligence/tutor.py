@@ -349,6 +349,30 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="transcribe_audio",
+        description="Transcribe a local voice note or audio file into text. Use after media is on disk.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "language": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="ingest_document",
+        description="Store learner-provided notes/PDF/text as retrievable knowledge for this learner only.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "text": {"type": "string"},
+                "path": {"type": "string"},
+                "kind": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
         name="inspect_memories",
         description="Inspect active memories for this learner.",
         parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
@@ -599,7 +623,14 @@ class TutorService:
         payload = work.input_payload or {}
         principal_id = work.principal_id
         conversation_id = work.conversation_id
-        user_text = payload.get("text", "")
+        user_text = payload.get("text", "") or ""
+        # Voice notes: prefer transcript over placeholder labels
+        if payload.get("transcript") and (
+            not user_text.strip()
+            or user_text.strip().startswith("[audio")
+            or user_text.strip() in ("[voice note]", "[audio received]")
+        ):
+            user_text = str(payload.get("transcript"))
         channel = payload.get("channel", "unknown")
         target = payload.get("target_external_id")
 
@@ -645,6 +676,26 @@ class TutorService:
             )
         if payload.get("local_media_path"):
             media_note += f"\n[System: media already on disk at {payload.get('local_media_path')}]"
+        if payload.get("content_type") == "audio" or (
+            payload.get("local_media_path")
+            and str(payload.get("local_media_path")).lower().endswith(
+                (".ogg", ".oga", ".mp3", ".m4a", ".wav", ".webm")
+            )
+        ):
+            media_note += (
+                "\n[System: this looks like audio/voice. "
+                "Use transcribe_audio on the local path, then tutor from the transcript. "
+                "Do not claim you listened unless transcription succeeded.]"
+            )
+        if payload.get("transcript"):
+            media_note += (
+                f"\n[System: transcript available:\n{str(payload.get('transcript'))[:4000]}]"
+            )
+        if payload.get("content_type") in ("document", "image") or payload.get("local_media_path"):
+            media_note += (
+                "\n[System: for learner notes/PDF/photos you may inspect_media and "
+                "ingest_document so material is retrievable later for this learner only.]"
+            )
         user_content = user_text + media_note
         if not recent or recent[-1].get("content") != user_text:
             llm_messages.append(ChatMessage(role="user", content=user_content))
@@ -659,6 +710,8 @@ class TutorService:
             "channel": channel,
             "media_id": payload.get("media_id"),
             "content_type": payload.get("content_type"),
+            "local_media_path": payload.get("local_media_path"),
+            "target_external_id": payload.get("target_external_id"),
         }
 
         # Tool loop: up to a few rounds so the model can act then respond

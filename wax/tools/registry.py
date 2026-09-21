@@ -1388,6 +1388,100 @@ async def handle_confirm_channel_link(
         )
     return {"ok": False, "error": "code_or_answers_required"}
 
+
+async def handle_transcribe_audio(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Transcribe a local audio/voice file. Does not invent success."""
+    from wax.tools.transcription import transcribe_local_audio
+    from wax.terminal.workspace import principal_workspace
+
+    path = (args.get("path") or "").strip()
+    principal_id = ctx.get("principal_id")
+    if not path and ctx.get("local_media_path"):
+        path = str(ctx.get("local_media_path"))
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    # Path isolation: must live under principal workspace when principal known
+    if principal_id:
+        base = principal_workspace(principal_id)
+        try:
+            resolved = Path(path).resolve()
+            if not str(resolved).startswith(str(base.resolve())):
+                return {"ok": False, "error": "path_escape"}
+        except Exception:
+            return {"ok": False, "error": "invalid_path"}
+    return await transcribe_local_audio(path, language=args.get("language"))
+
+
+async def handle_ingest_document(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Ingest learner-provided material into principal-scoped knowledge.
+    Accepts raw text and/or a workspace path (OCR/pdf text extracted when useful).
+    """
+    from wax.knowledge.ingest import KnowledgeIngestService
+    from wax.terminal.workspace import principal_workspace
+    from wax.terminal.executor import get_terminal
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    title = (args.get("title") or "Learner material").strip()[:500]
+    text = (args.get("text") or "").strip()
+    path = (args.get("path") or "").strip()
+    kind = (args.get("kind") or "document").strip()[:80]
+
+    if path and not text:
+        base = principal_workspace(principal_id)
+        try:
+            resolved = Path(path).resolve()
+            if not str(resolved).startswith(str(base.resolve())):
+                return {"ok": False, "error": "path_escape"}
+        except Exception:
+            return {"ok": False, "error": "invalid_path"}
+        if not resolved.is_file():
+            return {"ok": False, "error": "file_not_found"}
+        # Prefer plain text read for .txt/.md; otherwise terminal inspect
+        if resolved.suffix.lower() in {".txt", ".md", ".csv", ".json"}:
+            try:
+                text = resolved.read_text(encoding="utf-8", errors="replace")[:200000]
+            except Exception as e:
+                return {"ok": False, "error": f"read_failed:{e}"}
+        else:
+            term = get_terminal()
+            insp = await term.inspect_media_file(str(resolved), principal_id=principal_id)
+            if not insp.success:
+                return {"ok": False, "error": insp.error or "inspect_failed"}
+            text = insp.stdout or ""
+            # Prefer OCR/pdftotext sections if present
+            if "ocr:" in text.lower() or "pdftotext:" in text.lower():
+                pass
+            if not text.strip():
+                return {"ok": False, "error": "no_text_extracted"}
+
+    if not text.strip():
+        return {"ok": False, "error": "text_or_path_required"}
+
+    svc = KnowledgeIngestService(session)
+    source = await svc.ingest_text(
+        principal_id=principal_id,
+        title=title,
+        text=text,
+        kind=kind,
+    )
+    return {
+        "ok": True,
+        "knowledge_source_id": str(source.id),
+        "title": source.title,
+        "status": source.status,
+        "kind": source.kind,
+        "chars": len(text),
+    }
+
+
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1436,4 +1530,6 @@ HANDLERS.update({
     "form_hypothesis": handle_form_hypothesis,
     "propose_learning_check": handle_propose_learning_check,
     "schedule_hypothesis_recheck": handle_schedule_hypothesis_recheck,
+    "transcribe_audio": handle_transcribe_audio,
+    "ingest_document": handle_ingest_document,
 })
