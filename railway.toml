@@ -3,8 +3,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-# Migrations run inside scripts/startup.sh (not preDeploy — Railway is unreliable for that).
-startCommand = "bash scripts/startup.sh uvicorn wax.api.main:app --host 0.0.0.0 --port $PORT"
+# PORT is read inside scripts/start_web.sh — do not put $PORT on this line
+# (Railway can pass it as a literal string to uvicorn).
+startCommand = "bash scripts/start_web.sh"
 healthcheckPath = "/health"
 healthcheckTimeout = 60
 restartPolicyType = "ON_FAILURE"

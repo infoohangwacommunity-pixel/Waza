@@ -31,4 +31,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Default web start; Railway/worker override via startCommand / Procfile.
-CMD ["bash", "scripts/startup.sh", "uvicorn", "wax.api.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["bash", "scripts/start_web.sh"]
