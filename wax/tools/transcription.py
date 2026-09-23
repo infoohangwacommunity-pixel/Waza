@@ -53,14 +53,39 @@ def _vosk_model_name() -> str:
     return (os.environ.get("WAX_VOSK_MODEL_NAME") or DEFAULT_VOSK_MODEL).strip()
 
 
+def _model_search_roots() -> list[Path]:
+    """Prefer volume, then image-baked path, then workspace/tmp."""
+    roots: list[Path] = []
+    for key in ("WAX_MODEL_ROOT", "WAX_IMAGE_MODEL_ROOT"):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            roots.append(Path(v))
+    wr = os.environ.get("WAX_WORKSPACE_ROOT") or getattr(settings, "workspace_root", None)
+    if wr:
+        roots.append(Path(str(wr)))
+    roots.append(Path("/opt/wax-models"))
+    roots.append(Path("/tmp/wax-models"))
+    # de-dupe preserving order
+    seen: set[str] = set()
+    out: list[Path] = []
+    for r in roots:
+        k = str(r)
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out
+
+
 def _model_root() -> Path:
-    root = (
-        os.environ.get("WAX_MODEL_ROOT")
-        or os.environ.get("WAX_WORKSPACE_ROOT")
-        or getattr(settings, "workspace_root", None)
-        or "/tmp/wax-models"
-    )
-    path = Path(str(root)) / "models" / "vosk"
+    """Writable root used when downloading (dev only). Prefer volume path."""
+    for r in _model_search_roots():
+        path = r / "models" / "vosk"
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+        except Exception:
+            continue
+    path = Path("/tmp/wax-models/models/vosk")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -80,21 +105,36 @@ def _under_workspace(path: Path) -> bool:
         return False
 
 
+def _find_existing_vosk_model() -> Path | None:
+    name = _vosk_model_name()
+    for base in _model_search_roots():
+        root = base / "models" / "vosk"
+        model_dir = root / name
+        if model_dir.is_dir() and any(model_dir.iterdir()):
+            return model_dir
+        if root.is_dir():
+            for child in root.iterdir():
+                if child.is_dir() and "vosk-model" in child.name and any(child.iterdir()):
+                    return child
+        # also accept flat layout: base/vosk-model-...
+        flat = base / name
+        if flat.is_dir() and any(flat.iterdir()):
+            return flat
+    return None
+
+
 def _ensure_vosk_model() -> Path | None:
     """
-    Locate model directory. Prefer already-present model (image/volume).
+    Locate model directory. Prefer already-present model (image /opt then volume).
     Runtime download only when WAX_VOSK_ALLOW_DOWNLOAD=1 (not production default).
     """
+    found = _find_existing_vosk_model()
+    if found is not None:
+        return found
+
     name = _vosk_model_name()
     root = _model_root()
     model_dir = root / name
-    if model_dir.is_dir() and any(model_dir.iterdir()):
-        return model_dir
-    # Alternate layout: model extracted as sole child
-    for child in root.iterdir() if root.is_dir() else []:
-        if child.is_dir() and "vosk-model" in child.name:
-            if any(child.iterdir()):
-                return child
 
     allow_dl = os.environ.get("WAX_VOSK_ALLOW_DOWNLOAD", "").strip().lower() in (
         "1",

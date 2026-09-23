@@ -145,33 +145,17 @@ class TerminalExecutor:
         pages = max_pages if max_pages is not None else DEFAULT_PDF_MAX_PAGES
         pages = max(1, min(int(pages), HARD_PDF_MAX_PAGES))
 
-        # Optional OCR for images (capability exists; running extract_text is a tool choice)
+        # Optional OCR for images — only when extract_text=True (explicit)
         if extract_text and probe.kind == "image" and probe.capabilities.ocr:
-            r3 = await self.run_command(["tesseract", str(p), "stdout"], principal_id=principal_id)
-            if r3.success and r3.stdout.strip():
-                text = r3.stdout.strip()[:8000]
+            from wax.media.ocr import ocr_image
+
+            ev = ocr_image(p, preprocess=True)
+            evidence.append(ev.to_dict())
+            text = (ev.payload or {}).get("text") or ""
+            if text:
                 parts.append(f"ocr:\n{text[:4000]}")
-                status = "usable" if len(text) > 20 else "uncertain"
-                evidence.append(
-                    ExtractionEvidence(
-                        kind="ocr",
-                        processor="tesseract",
-                        payload={"text": text},
-                        quality_status=status,  # type: ignore[arg-type]
-                        provenance={"path": str(p.resolve())},
-                    ).to_dict()
-                )
-            elif extract_text:
-                evidence.append(
-                    ExtractionEvidence(
-                        kind="ocr",
-                        processor="tesseract",
-                        payload={"text": ""},
-                        quality_status="unusable",
-                        warnings=["ocr_empty_or_failed"],
-                        provenance={"path": str(p.resolve())},
-                    ).to_dict()
-                )
+            else:
+                parts.append(f"ocr: empty ({', '.join(ev.warnings) or 'no_text'})")
 
         if extract_text and probe.kind == "document" and p.suffix.lower() == ".pdf":
             r5 = await self.run_command(["pdfinfo", str(p)], principal_id=principal_id)

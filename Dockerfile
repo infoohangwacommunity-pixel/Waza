@@ -30,11 +30,20 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-# Local STT models: mount or bake under /data/wax-models (WAX_MODEL_ROOT).
-# Do not rely on runtime download in production.
+# Bake Vosk into the IMAGE at /opt/wax-models (NOT under /data).
+# Railway volume mounts on /data hide any files baked under /data at build time.
+# Runtime seed_models.sh copies into the volume once if empty.
+RUN chmod +x scripts/provision_vosk_model.sh scripts/seed_models.sh \
+    && scripts/provision_vosk_model.sh /opt/wax-models \
+    && test -d /opt/wax-models/models/vosk \
+    && find /opt/wax-models/models/vosk -maxdepth 1 -type d -name 'vosk-model-*' | grep -q .
+
+# Volume path for durable workspaces/models; image path is the guaranteed source.
 ENV WAX_MODEL_ROOT=/data/wax-models \
+    WAX_IMAGE_MODEL_ROOT=/opt/wax-models \
     WAX_VOSK_ALLOW_DOWNLOAD=0 \
-    WAX_AUTO_TRANSCRIBE=0
+    WAX_AUTO_TRANSCRIBE=0 \
+    WAX_VOSK_MODEL_NAME=vosk-model-small-en-us-0.15
 
 # Default web start; Railway/worker override via startCommand / Procfile.
 CMD ["bash", "scripts/start_web.sh"]

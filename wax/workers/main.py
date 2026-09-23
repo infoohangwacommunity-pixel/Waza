@@ -73,6 +73,20 @@ async def process_message_response(session, work: Work) -> None:
                 "media_probe": probe.to_dict(),
                 "media_capabilities": probe.capabilities.as_list(),
             }
+            try:
+                from wax.media.assets import register_asset
+
+                manifest = register_asset(
+                    work.principal_id,
+                    path=str(local_path),
+                    probe=probe,
+                    work_id=str(work.id),
+                    channel=payload.get("channel"),
+                    media_id=payload.get("media_id"),
+                )
+                payload["media_asset_id"] = manifest.get("asset_id")
+            except Exception:
+                logger.exception("media_asset_register_failed")
             work.input_payload = payload
             await session.flush()
             logger.info(
@@ -80,6 +94,7 @@ async def process_message_response(session, work: Work) -> None:
                 work_id=str(work.id),
                 kind=probe.kind,
                 capabilities=probe.capabilities.as_list(),
+                asset_id=payload.get("media_asset_id"),
             )
         except Exception:
             logger.exception("media_probe_failed")

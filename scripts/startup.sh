@@ -20,6 +20,11 @@ if ! command -v python >/dev/null 2>&1; then
   export PATH="/tmp/wax-bin:${PATH}"
 fi
 
+# Seed STT models from image into volume if volume is empty
+if [[ -x scripts/seed_models.sh ]]; then
+  bash scripts/seed_models.sh || echo "seed_models: non-fatal failure"
+fi
+
 echo "=== WAX DATABASE MIGRATION START ==="
 
 if [[ -z "${DATABASE_URL:-}" ]]; then
