@@ -749,6 +749,31 @@ def plain_text_fallback(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+
+def telegram_markdown_is_balanced(text: str) -> bool:
+    """
+    Structural check that Telegram legacy Markdown markers are balanced.
+    Used by tests and as a post-render invariant — not a full Telegram parser.
+    """
+    if not text:
+        return True
+    # Remove fenced code blocks (```...```) from consideration
+    stripped = re.sub(r"```[\s\S]*?```", "", text)
+    # Remove inline code `...`
+    stripped = re.sub(r"`[^`]*`", "", stripped)
+    # Remove links [label](url)
+    stripped = re.sub(r"\[[^\]]*\]\([^)]*\)", "", stripped)
+    # Remaining unescaped * and _ should be even counts
+    # Count unescaped * and _
+    stars = re.findall(r"(?<!\\)\*", stripped)
+    unders = re.findall(r"(?<!\\)_", stripped)
+    if len(stars) % 2 != 0:
+        return False
+    if len(unders) % 2 != 0:
+        return False
+    return True
+
+
 def present_for_channel(raw: str, channel: str) -> str:
     """
     Full presentation pipeline for a channel.

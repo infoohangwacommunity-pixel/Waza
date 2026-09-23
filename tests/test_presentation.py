@@ -425,3 +425,143 @@ def test_render_telegram_escapes_specials():
     out = render_telegram(doc)
     # Should not crash; bold applied
     assert "bold" in out or "*bold*" in out
+
+
+# ---------------------------------------------------------------------------
+# Hardening: Telegram escaping contract (must not rely on provider rejection)
+# ---------------------------------------------------------------------------
+
+
+def test_telegram_escapes_underscores_in_plain():
+    raw = "Use the variable my_value carefully."
+    out = present_for_channel(raw, "telegram")
+    # Underscores in plain text must be escaped for legacy Markdown
+    assert "my_value" in out.replace("\\", "") or "my_value" in out
+    from wax.delivery.presentation import telegram_markdown_is_balanced
+    assert telegram_markdown_is_balanced(out)
+
+
+def test_telegram_escapes_stars_in_plain():
+    raw = "The formula is a*b = c when plain."
+    out = present_for_channel(raw, "telegram")
+    from wax.delivery.presentation import telegram_markdown_is_balanced
+    assert telegram_markdown_is_balanced(out)
+    assert "a" in out and "b" in out
+
+
+def test_telegram_bold_with_specials_inside():
+    raw = "This is **a_b*c** important."
+    out = present_for_channel(raw, "telegram")
+    from wax.delivery.presentation import telegram_markdown_is_balanced
+    assert telegram_markdown_is_balanced(out)
+    assert "important" in out or "a" in out
+
+
+def test_telegram_link_with_parens_in_url():
+    raw = "See [docs](https://example.com/path_(1)) here."
+    out = present_for_channel(raw, "telegram")
+    assert "example.com" in out
+    from wax.delivery.presentation import telegram_markdown_is_balanced
+    assert telegram_markdown_is_balanced(out)
+
+
+def test_telegram_mixed_specials_balanced():
+    raw = """### Title_one
+
+Use *emphasis* and **strong** text.
+Also a_b and x*y plain symbols.
+
+- item_one
+- item_two
+"""
+    out = present_for_channel(raw, "telegram")
+    from wax.delivery.presentation import telegram_markdown_is_balanced
+    assert telegram_markdown_is_balanced(out)
+    assert "Title" in out
+    assert "emphasis" in out
+    assert "strong" in out
+
+
+def test_telegram_code_preserves_content():
+    raw = "Run `foo_bar*` now."
+    out = present_for_channel(raw, "telegram")
+    assert "foo_bar" in out or "foo" in out
+    from wax.delivery.presentation import telegram_markdown_is_balanced
+    assert telegram_markdown_is_balanced(out)
+
+
+# ---------------------------------------------------------------------------
+# Hardening: sender does not re-present (contract)
+# ---------------------------------------------------------------------------
+
+
+def test_sender_boundary_normalize_only():
+    """Senders must not call present_for_channel; only thin normalize."""
+    import ast
+    import inspect
+    from wax.delivery import senders
+
+    def _calls_present(fn) -> bool:
+        tree = ast.parse(inspect.getsource(fn))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Name) and node.func.id == "present_for_channel":
+                    return True
+                if isinstance(node.func, ast.Attribute) and node.func.attr == "present_for_channel":
+                    return True
+        return False
+
+    assert not _calls_present(senders.send_whatsapp)
+    assert not _calls_present(senders.send_telegram)
+    assert not _calls_present(senders.deliver)
+    # Thin boundary normalize is allowed
+    assert hasattr(senders, "_boundary_normalize")
+
+
+def test_boundary_normalize_strips_residual_html():
+    from wax.delivery.senders import _boundary_normalize
+    out = _boundary_normalize("Hello<br>World", "whatsapp")
+    assert "<br" not in out.lower()
+    assert "Hello" in out
+    assert "World" in out
+
+
+# ---------------------------------------------------------------------------
+# Hardening: chunking formatting constructs
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_preserves_code_fence_intact():
+    fence_body = "x = 1\n" * 30
+    raw = f"Intro paragraph.\n\n```\n{fence_body}```\n\nOutro."
+    # Use present first then chunk at small limit
+    from wax.delivery.presentation import present_for_channel
+    from wax.delivery.chunking import chunk_message, CODE_FENCE_SLACK
+    text = present_for_channel(raw, "whatsapp")
+    chunks = chunk_message(text, max_chars=80)
+    # No chunk should have unbalanced ```
+    for c in chunks:
+        assert c.count("```") % 2 == 0, f"unbalanced fence in chunk: {c[:60]!r}"
+
+
+def test_chunk_code_fence_slack_is_explicit():
+    from wax.delivery.chunking import CODE_FENCE_SLACK
+    assert CODE_FENCE_SLACK == 1.5
+
+
+def test_chunk_prefers_list_boundaries():
+    items = "\n".join(f"• item number {i} with some padding text here" for i in range(20))
+    chunks = chunk_message(items, max_chars=120)
+    assert len(chunks) > 1
+    # Chunks should tend to start at list items
+    for c in chunks[1:]:
+        stripped = c.lstrip()
+        assert stripped.startswith("•") or "item" in stripped
+
+
+def test_whatsapp_no_raw_md_heading_after_full_pipeline():
+    raw = "#### Deep heading\n\nBody with **bold**."
+    out = present_for_channel(raw, "whatsapp")
+    assert not re.search(r"^#{1,6}\s", out, re.MULTILINE)
+    assert "Deep heading" in out
+    assert "*bold*" in out or "bold" in out

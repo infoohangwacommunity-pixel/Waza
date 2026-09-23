@@ -1,9 +1,16 @@
 """
 Channel delivery adapters.
 
-WhatsApp and Telegram outbound. Keep channel logic out of the tutor core.
-Presentation (render → normalize) happens here so senders receive channel-valid text.
-Supports typing, smart chunking, and AI-requested interactives.
+Contract:
+  Presentation pipeline produces channel-valid text and stores it on Delivery.content.
+  Senders receive already-rendered text and deliver it — they do NOT re-run presentation.
+
+  Presentation → channel-valid text → Sender → provider
+
+Defensive normalize at the boundary is a thin safety net only (residual HTML / tables),
+not a second full render pass.
+
+Interactive payloads remain separate from ordinary text delivery.
 """
 
 from __future__ import annotations
@@ -18,7 +25,7 @@ from wax.delivery.presentation import (
     InteractiveChoice,
     PresentableResponse,
     get_profile,
-    present_for_channel,
+    normalize_for_channel,
 )
 from wax.observability.logging import get_logger
 
@@ -66,24 +73,45 @@ def build_presentable(text: str, interactive: dict | None = None) -> Presentable
     )
 
 
+def _boundary_normalize(text: str, channel: str) -> str:
+    """
+    Thin delivery-boundary safety net only.
+    Does not re-parse or re-render. Catches residual HTML / MD tables / headings
+    if Delivery.content was somehow written without going through presentation.
+    """
+    try:
+        return normalize_for_channel(text or "", channel)
+    except Exception:
+        return (text or "").strip()
+
+
 async def send_whatsapp(to: str, text: str, interactive: dict | None = None) -> dict[str, Any]:
+    """
+    Deliver already channel-rendered WhatsApp text.
+    `text` must be WhatsApp-safe (from present_for_channel / Delivery.content).
+    """
     if not settings.whatsapp_enabled or not settings.whatsapp_access_token:
         return {"status": "skipped", "reason": "whatsapp_not_configured"}
     from wax.messaging.whatsapp.client import deliver_presentable
 
-    # text is expected already channel-rendered; re-present is idempotent for plain/safe text
-    rendered = present_for_channel(text, "whatsapp")
-    presentable = build_presentable(rendered, interactive)
+    safe = _boundary_normalize(text, "whatsapp")
+    presentable = build_presentable(safe, interactive)
     return await deliver_presentable(to, presentable)
 
 
 async def send_telegram(chat_id: str, text: str, interactive: dict | None = None) -> dict[str, Any]:
+    """
+    Deliver already channel-rendered Telegram text (Markdown parse_mode).
+    `text` must be Telegram-safe from the Telegram renderer.
+    Last-resort plain fallback only if the provider rejects parse_mode — not the
+    normal correctness path; renderer tests must guarantee valid output.
+    """
     if not settings.telegram_enabled or not settings.telegram_bot_token:
         return {"status": "skipped", "reason": "telegram_not_configured"}
 
-    rendered = present_for_channel(text, "telegram")
+    safe = _boundary_normalize(text, "telegram")
     profile = get_profile("telegram")
-    chunks = chunk_message(rendered, max_chars=profile.max_text_chars)
+    chunks = chunk_message(safe, max_chars=profile.max_text_chars)
     results = []
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -101,7 +129,6 @@ async def send_telegram(chat_id: str, text: str, interactive: dict | None = None
                 and interactive.get("choices")
             ):
                 choices = interactive["choices"][:8]
-                # Prefer inline keyboard when durable callback_data is present
                 if any(c.get("callback_data") for c in choices):
                     ik = []
                     row = []
@@ -134,16 +161,23 @@ async def send_telegram(chat_id: str, text: str, interactive: dict | None = None
             resp = await client.post(url, json=body)
             results.append({"status_code": resp.status_code, "body": resp.text[:300]})
             if resp.status_code >= 400:
-                # Fallback: retry chunk without parse_mode if Markdown rejected
-                if "parse" in (resp.text or "").lower() or resp.status_code == 400:
-                    body_plain = {k: v for k, v in body.items() if k != "parse_mode"}
-                    resp2 = await client.post(url, json=body_plain)
-                    results.append({"status_code": resp2.status_code, "body": resp2.text[:300], "fallback": "plain"})
-                    if resp2.status_code >= 400:
-                        logger.error("telegram_send_failed", status=resp2.status_code)
-                        return {"status": "failed", "results": results}
-                else:
-                    logger.error("telegram_send_failed", status=resp.status_code)
+                # Last-resort reliability only — not the correctness mechanism
+                logger.warning(
+                    "telegram_parse_mode_rejected",
+                    status=resp.status_code,
+                    body=(resp.text or "")[:200],
+                )
+                body_plain = {k: v for k, v in body.items() if k != "parse_mode"}
+                resp2 = await client.post(url, json=body_plain)
+                results.append(
+                    {
+                        "status_code": resp2.status_code,
+                        "body": resp2.text[:300],
+                        "fallback": "plain",
+                    }
+                )
+                if resp2.status_code >= 400:
+                    logger.error("telegram_send_failed", status=resp2.status_code)
                     return {"status": "failed", "results": results}
     return {"status": "ok", "chunks": len(chunks), "results": results}
 
@@ -183,10 +217,10 @@ async def deliver(
     show_typing: bool = True,
 ) -> dict[str, Any]:
     """
-    Deliver text to a channel.
+    Deliver already channel-rendered text.
 
-    Presentation (render → normalize) is applied inside channel senders so the
-    provider receives channel-valid content. Interactive payloads stay separate.
+    Callers (tutor, scheduled path, engine) must run present_for_channel before
+    writing Delivery.content. Senders do not re-present.
     """
     if show_typing:
         await send_typing(channel, target, inbound_message_id=inbound_message_id)
