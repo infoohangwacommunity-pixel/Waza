@@ -204,7 +204,7 @@ class MemoryService:
                 or_(Memory.expires_at.is_(None), Memory.expires_at > now),
             )
             .order_by(Memory.importance.desc(), Memory.updated_at.desc())
-            .limit(limit * 3)
+            .limit(limit * 8)
         )
         if memory_types:
             stmt = stmt.where(Memory.memory_type.in_(memory_types))

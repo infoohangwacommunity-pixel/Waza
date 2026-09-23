@@ -87,29 +87,96 @@ class KnowledgeIngestService:
     async def recent_chunks_for_context(
         self, principal_id, query: str | None = None, limit: int = 6
     ) -> list[str]:
-        """Principal-scoped chunks only. Simple recency + optional substring filter."""
+        """Prefer semantic search when query present; else recent chunks."""
+        if query and query.strip():
+            hits = await self.semantic_search(principal_id, query, limit=limit)
+            if hits:
+                return [h["content"][:600] for h in hits]
         stmt = (
             select(DocumentChunk)
             .where(DocumentChunk.principal_id == principal_id)
             .order_by(DocumentChunk.created_at.desc())
-            .limit(40)
+            .limit(limit)
         )
         result = await self.session.execute(stmt)
         rows = list(result.scalars().all())
-        q = (query or "").lower().strip()
-        out: list[str] = []
+        return [(ch.content or "")[:600] for ch in rows if ch.content]
+
+    async def semantic_search(
+        self, principal_id, query: str, *, limit: int = 6
+    ) -> list[dict]:
+        """
+        Semantic + lexical retrieval of learner-owned chunks.
+        Returns provenance-rich hits. Never cross-principal.
+        """
+        from wax.memory.embeddings import embed_one, cosine_similarity
+
+        stmt = (
+            select(DocumentChunk)
+            .where(DocumentChunk.principal_id == principal_id)
+            .order_by(DocumentChunk.created_at.desc())
+            .limit(80)
+        )
+        result = await self.session.execute(stmt)
+        rows = list(result.scalars().all())
+        if not rows:
+            return []
+        q = (query or "").strip()
+        q_lower = q.lower()
+        q_vec = None
+        try:
+            if q:
+                q_vec = embed_one(q)
+        except Exception:
+            q_vec = None
+
+        scored: list[tuple[float, object]] = []
         for ch in rows:
             content = (ch.content or "").strip()
             if not content:
                 continue
-            if q and q not in content.lower():
-                continue
-            out.append(content[:600])
-            if len(out) >= limit:
-                break
-        if not out and rows:
-            # fallback: most recent regardless of query
-            for ch in rows[:limit]:
-                if ch.content:
-                    out.append(ch.content[:600])
+            score = 0.0
+            if q_lower and q_lower in content.lower():
+                score += 0.45
+            # token overlap
+            if q_lower:
+                q_toks = set(q_lower.split())
+                c_toks = set(content.lower().split())
+                if q_toks:
+                    score += 0.25 * (len(q_toks & c_toks) / max(1, len(q_toks)))
+            if q_vec and getattr(ch, "embedding", None):
+                try:
+                    sim = cosine_similarity(q_vec, list(ch.embedding))
+                    score += 0.55 * float(sim)
+                except Exception:
+                    pass
+            if score <= 0 and not q:
+                score = 0.1  # recency-only
+            if score > 0:
+                scored.append((score, ch))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        out = []
+        for score, ch in scored[:limit]:
+            label = None
+            try:
+                src = await self.session.get(KnowledgeSource, ch.knowledge_source_id) if ch.knowledge_source_id else None
+                if src:
+                    label = getattr(src, "title", None) or getattr(src, "label", None) or getattr(src, "filename", None)
+            except Exception:
+                pass
+            out.append(
+                {
+                    "content": (ch.content or "")[:1200],
+                    "score": round(float(score), 4),
+                    "chunk_id": str(ch.id),
+                    "source_id": str(ch.knowledge_source_id) if ch.knowledge_source_id else None,
+                    "label": label,
+                }
+            )
         return out
+
+    async def content_fingerprint(self, text: str) -> str:
+        import hashlib
+        norm = " ".join((text or "").split()).lower()
+        return hashlib.sha256(norm.encode("utf-8")).hexdigest()
+

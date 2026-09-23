@@ -79,7 +79,9 @@ class ContextAssembler:
                 ctx.goals_block = (ctx.goals_block or "") + f"\n--- Decision hints ---\n{hint_txt}\n"
             return ctx
         except Exception:
-            logger.exception("context_resolver_failed_fallback")
+            logger.exception("context_resolver_failed_explicit_degraded")
+            # Explicit degraded mode — still assemble minimal context; observability marks failure
+            logger.warning("learner_context_degraded", reason="resolver_exception")
         platform = platform_context_block(channel)
         system_prefix = tutor_system + platform
 

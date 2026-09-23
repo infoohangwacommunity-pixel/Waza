@@ -1,8 +1,7 @@
 """
-Context Resolver — ranked evidence pack for *this* decision, not a table dump.
+Context Resolver — decision-oriented evidence pack via Evidence Planner.
 
-Replaces ad-hoc multi-block assembly as the primary path while remaining
-compatible with AssembledContext consumers.
+No silent regression to obsolete architecture without observability.
 """
 
 from __future__ import annotations
@@ -13,9 +12,8 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.delivery.presentation import platform_context_block
-from wax.learner.model import LearnerModel, build_learner_model
-from wax.learner.temporal import now_in_tz
-from wax.memory.service import MemoryService
+from wax.learner.evidence import EvidencePack, gather_evidence
+from wax.learner.model import LearnerModel
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
@@ -24,50 +22,37 @@ DEFAULT_BUDGET = 14000
 
 
 @dataclass
-class EvidenceItem:
-    relevance: str  # high|medium|low
-    kind: str
-    content: str
-    why: str = ""
-    confidence: float = 0.5
-    source: str = ""
-
-    def render(self) -> str:
-        return f"[{self.relevance.upper()}|{self.kind}|c={self.confidence:.2f}] {self.content}" + (
-            f" (why: {self.why})" if self.why else ""
-        )
-
-
-@dataclass
 class LearnerContextPack:
     system_prefix: str
-    evidence: list[EvidenceItem] = field(default_factory=list)
+    evidence: list = field(default_factory=list)
     recent_messages: list[dict[str, str]] = field(default_factory=list)
     model: LearnerModel | None = None
     total_chars: int = 0
     memories_used: int = 0
     decision_hints: list[str] = field(default_factory=list)
+    degraded: bool = False
+    degradation_reason: str = ""
+    pack: EvidencePack | None = None
 
     def as_assembled_blocks(self) -> dict[str, Any]:
-        """Compatibility shape for tutor code expecting memory/learning/goals blocks."""
-        high = [e for e in self.evidence if e.relevance == "high"]
-        med = [e for e in self.evidence if e.relevance == "medium"]
-        mem_lines = [e.render() for e in self.evidence if e.kind in ("memory", "preference", "identity")]
-        learn_lines = [e.render() for e in self.evidence if e.kind in ("learning", "retention", "misconception")]
-        goal_lines = [e.render() for e in self.evidence if e.kind in ("goal", "activity", "temporal", "teaching")]
+        items = self.evidence
+        mem_lines = [e.render() for e in items if getattr(e, "kind", "") in ("memory", "preference", "identity")]
+        learn_lines = [e.render() for e in items if getattr(e, "kind", "") in ("learning", "retention", "misconception", "teaching")]
+        goal_lines = [e.render() for e in items if getattr(e, "kind", "") in ("goal", "activity", "temporal", "time", "knowledge")]
         return {
             "memory_block": ("\n--- Learner evidence (memory) ---\n" + "\n".join(mem_lines) + "\n") if mem_lines else "",
-            "learning_block": ("\n--- Learning / retention ---\n" + "\n".join(learn_lines) + "\n") if learn_lines else "",
-            "goals_block": ("\n--- Goals / activity / time ---\n" + "\n".join(goal_lines) + "\n") if goal_lines else "",
-            "evidence_block": "\n".join(e.render() for e in high + med),
+            "learning_block": ("\n--- Learning / teaching / retention ---\n" + "\n".join(learn_lines) + "\n") if learn_lines else "",
+            "goals_block": ("\n--- Goals / activity / time / materials ---\n" + "\n".join(goal_lines) + "\n") if goal_lines else "",
+            "evidence_block": "\n".join(e.render() for e in items if getattr(e, "relevance", "") in ("high", "medium")),
             "decision_hints": self.decision_hints,
+            "degraded": self.degraded,
+            "degradation_reason": self.degradation_reason,
         }
 
 
 class ContextResolver:
     def __init__(self, session: AsyncSession):
         self.session = session
-        self.memory = MemoryService(session)
 
     async def resolve(
         self,
@@ -78,152 +63,42 @@ class ContextResolver:
         user_text: str,
         tutor_system: str,
         budget: int = DEFAULT_BUDGET,
-        purpose: str = "reply",  # reply | schedule_wake | review
+        purpose: str = "reply",
     ) -> LearnerContextPack:
         platform = platform_context_block(channel)
         pack = LearnerContextPack(system_prefix=tutor_system + platform)
         if not principal_id:
             pack.recent_messages = await self._recent_messages(conversation_id)
+            pack.degraded = True
+            pack.degradation_reason = "no_principal"
             return pack
 
-        model = await build_learner_model(self.session, principal_id)
-        pack.model = model
-
-        # authoritative time
-        local_now = now_in_tz(model.timezone)
-        pack.evidence.append(
-            EvidenceItem(
-                "high",
-                "time",
-                f"Authoritative local time: {local_now.isoformat()} ({model.timezone})",
-                why="all temporal reasoning must use this",
-                confidence=1.0,
-                source="clock",
-            )
+        evidence = await gather_evidence(
+            self.session,
+            principal_id=principal_id,
+            user_text=user_text,
+            purpose=purpose,
+            conversation_id=conversation_id,
+            limit=28,
         )
-
-        # current activity / teaching thread
-        if model.activities:
-            a = model.activities[0]
-            pack.evidence.append(
-                EvidenceItem(
-                    "high",
-                    "activity",
-                    f"Current activity [{a.get('status')}]: {a.get('objective') or a.get('kind')}",
-                    why="what learner is doing now",
-                    confidence=0.85,
-                    source="activity",
-                )
+        pack.pack = evidence
+        pack.evidence = evidence.items
+        pack.decision_hints = list(evidence.decision_hints)
+        pack.degraded = evidence.degraded
+        pack.degradation_reason = evidence.degradation_reason
+        pack.memories_used = sum(1 for i in evidence.items if i.kind == "memory")
+        if evidence.degraded:
+            logger.warning(
+                "learner_context_degraded",
+                principal_id=str(principal_id),
+                reason=evidence.degradation_reason,
             )
-            pack.decision_hints.append("respect_active_activity_when_interrupting")
+            pack.decision_hints.append(f"degraded:{evidence.degradation_reason or 'partial'}")
 
-        for g in model.goals[:4]:
-            pack.evidence.append(
-                EvidenceItem(
-                    "high",
-                    "goal",
-                    f"Active goal: {g.get('title')} [{g.get('status')}]",
-                    why="direction of teaching",
-                    confidence=0.8,
-                    source="goal",
-                )
-            )
-
-        # preferences as evidence with confidence
-        for p in model.preferences[:6]:
-            pack.evidence.append(
-                EvidenceItem(
-                    "medium" if p["confidence"] < 0.7 else "high",
-                    "preference",
-                    p["content"],
-                    why="interaction tendency — contextual, revisable",
-                    confidence=p["confidence"],
-                    source="memory",
-                )
-            )
-
-        # fragile retention opportunities (not forced flashcards)
-        for f in model.fragile[:4]:
-            pack.evidence.append(
-                EvidenceItem(
-                    "medium",
-                    "retention",
-                    f"Fragile: {f.get('label') or f.get('concept_key')} R={f.get('retrievability')} ({f.get('reason')})",
-                    why="retrieval opportunity candidate — tutor decides if/how",
-                    confidence=0.7,
-                    source="retention",
-                )
-            )
-
-        # upcoming intents
-        for t in model.temporal_intents[:4]:
-            pack.evidence.append(
-                EvidenceItem(
-                    "medium",
-                    "temporal",
-                    f"Upcoming {t.get('type')}: {t.get('reason')} at {t.get('execute_at')}",
-                    why="scheduled intention",
-                    confidence=0.75,
-                    source="schedule",
-                )
-            )
-
-        # unresolved
-        for u in model.unresolved[:3]:
-            pack.evidence.append(
-                EvidenceItem(
-                    "high",
-                    "teaching",
-                    f"Unresolved: {u.get('summary')} [{u.get('status')}]",
-                    why="continuity",
-                    confidence=0.8,
-                    source="activity",
-                )
-            )
-
-        # semantic memory retrieval (existing service — still useful as sensor)
-        try:
-            mems = await self.memory.plan_and_retrieve(principal_id, user_text, limit=10)
-            pack.memories_used = len(mems)
-            for m in mems:
-                pack.evidence.append(
-                    EvidenceItem(
-                        "medium",
-                        "memory",
-                        m.content,
-                        why=f"type={m.memory_type}",
-                        confidence=float(m.confidence or 0.5),
-                        source="memory_service",
-                    )
-                )
-        except Exception:
-            logger.exception("memory_retrieve_failed")
-
-        # continue-resolution hint
-        ut = (user_text or "").strip().lower()
-        if ut in ("continue", "continue.", "let's continue", "lets continue", "go on"):
-            pack.decision_hints.append("user_said_continue_reconstruct_unfinished_thread")
-            if model.teaching.get("current_thread"):
-                pack.evidence.append(
-                    EvidenceItem(
-                        "high",
-                        "teaching",
-                        f"Likely continue target: {model.teaching['current_thread']}",
-                        why="continue utterance",
-                        confidence=0.9,
-                        source="teaching",
-                    )
-                )
-
-        pack.recent_messages = await self._recent_messages(conversation_id)
-        # budget: keep high first
-        ordered = sorted(
-            pack.evidence,
-            key=lambda e: {"high": 0, "medium": 1, "low": 2}.get(e.relevance, 3),
-        )
-        kept: list[EvidenceItem] = []
+        # budget trim
         size = len(pack.system_prefix)
-        for e in ordered:
+        kept = []
+        for e in evidence.items:
             line = e.render()
             if size + len(line) > budget:
                 break
@@ -231,6 +106,33 @@ class ContextResolver:
             size += len(line)
         pack.evidence = kept
         pack.total_chars = size
+        pack.recent_messages = await self._recent_messages(conversation_id)
+
+        if evidence.plan and evidence.plan.check_corrections:
+            try:
+                from wax.learner.correction import apply_possible_correction
+
+                corr = await apply_possible_correction(
+                    self.session, principal_id=principal_id, user_text=user_text
+                )
+                if corr.get("corrected"):
+                    pack.decision_hints.append("learner_correction_applied")
+                    for d in corr.get("details") or []:
+                        pack.evidence.insert(
+                            0,
+                            type(evidence.items[0])(
+                                kind="memory",
+                                content=f"CORRECTED ({d.get('type')}): {d.get('old_content')} → {d.get('new_content')}",
+                                relevance="high",
+                                confidence=0.9,
+                                source="correction",
+                                status="current",
+                            ) if evidence.items else None,
+                        )
+                    pack.evidence = [e for e in pack.evidence if e]
+            except Exception:
+                logger.exception("correction_apply_failed")
+
         return pack
 
     async def _recent_messages(self, conversation_id, limit: int = 14) -> list[dict[str, str]]:

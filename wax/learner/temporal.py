@@ -230,27 +230,30 @@ class TemporalService:
         active = (learner_snapshot.get("activities") or [{}])[0] if learner_snapshot.get("activities") else None
         decision = "deliver"
         reason = "due"
-        # completion heuristics: target keywords seen in recent goals/activity completion
         target_l = (intent.target or "").lower()
-        if intent.completion_condition and "completed" in (intent.payload or {}):
+        # Explicit completion flag only (no keyword games)
+        if intent.completion_condition and (intent.payload or {}).get("completed"):
             decision = "fulfilled"
             reason = "completion_condition_met"
-        # if actively in deep study and flexibility soft, suggest defer
-        if active and active.get("status") == "active" and intent.flexibility in ("soft", "window"):
-            if intent.purpose == "reminder" and not any(
-                k in target_l for k in ("exam", "deadline", "submit", "due")
-            ):
-                decision = "reschedule"
-                reason = "learner_in_active_study"
-        if intent.purpose == "review":
-            # if concept already practiced today, suppress duplicate
+        # Soft signal only — tutor still reassesses; we mark candidate deferral
+        elif (
+            active
+            and active.get("status") == "active"
+            and intent.flexibility in ("soft", "window")
+            and intent.purpose == "reminder"
+        ):
+            decision = "reschedule"
+            reason = "candidate_defer_active_study"
+            # Tutor prompt still decides final wording/interrupt policy
+        elif intent.purpose == "review":
             recent = learner_snapshot.get("recent_events") or []
             if any(
-                e.get("concept_key") == intent.concept_key and e.get("kind") in ("learning_success", "concept_practiced")
+                e.get("concept_key") == intent.concept_key
+                and e.get("kind") in ("learning_success", "concept_practiced", "spontaneous_retrieval")
                 for e in recent
             ):
                 decision = "suppress"
-                reason = "already_practiced_recently"
+                reason = "recent_retrieval_evidence"
 
         intent.evaluation = {"decision": decision, "reason": reason, "at": now.isoformat()}
         if decision == "fulfilled":
