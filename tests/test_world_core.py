@@ -114,8 +114,7 @@ def test_no_allowed_binaries_in_isolation_module():
 def test_sandbox_has_no_product_allowlist():
     src = Path("wax/terminal/sandbox.py").read_text()
     assert "Command not permitted" not in src
-    from wax.terminal.sandbox import ALLOWED_BINARIES
-    assert not ALLOWED_BINARIES
+    assert "ALLOWED_BINARIES" not in src
 
 
 def test_path_escape_symlink(world_root, monkeypatch, tmp_path):
@@ -138,3 +137,27 @@ def test_path_escape_symlink(world_root, monkeypatch, tmp_path):
     # Symlink pointing outside world must be rejected
     with pytest.raises(PathEscape):
         resolve_under_world(w.root, "workspace/evil")
+
+
+def test_reconcile_clears_stale_running(world_root, monkeypatch):
+    from wax.terminal import workspace as ws
+    from wax.world.manager import create_world, set_lifecycle
+    from wax.world.reconcile import reconcile_world_root
+    from wax.world import manager as mgr
+    import json
+
+    monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
+    mgr._cache.clear()
+    w = create_world("principal_r", migrate_legacy=False)
+    set_lifecycle(w, "BUSY", "exec")
+    rec = {"execution_id": "old", "status": "running", "started_at": 1}
+    (w.root / "state" / "exec" / "old.json").write_text(json.dumps(rec), encoding="utf-8")
+    lock = w.root / "state" / "locks" / "acquire-python_package-x.lock"
+    lock.write_text("1")
+    import os
+    os.utime(lock, (1, 1))
+    report = reconcile_world_root(w.root)
+    assert report["exec_closed"] >= 1
+    assert report["locks_cleared"] >= 1
+    data = json.loads((w.root / "state" / "exec" / "old.json").read_text())
+    assert data["status"] == "interrupted"

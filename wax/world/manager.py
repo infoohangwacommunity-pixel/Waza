@@ -141,6 +141,12 @@ def get_or_create_world(principal_id: str) -> World:
 
 
 def set_lifecycle(world: World, state: Lifecycle, reason: str = "") -> None:
+    """Update lifecycle on the World object + recovery JSON.
+
+    Postgres is the durable authority; callers with a session must also
+    await wax.world.persist.apply_lifecycle(...). Worker reconcile uses this
+    plus persist when a session is available.
+    """
     world.lifecycle = state
     world.lifecycle_reason = reason
     layout.write_json(

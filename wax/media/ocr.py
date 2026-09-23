@@ -47,45 +47,20 @@ async def _run_isolated(
     timeout: float = 60.0,
 ) -> tuple[int, str, str]:
     """Prefer World isolation; fall back only when no world context (dev)."""
-    if world_root is not None or principal_id:
-        from wax.world.run_tool import run_in_world
+    if world_root is None and not principal_id:
+        return 2, "", "world_required"
+    from wax.world.run_tool import run_in_world
 
-        r = await run_in_world(
-            principal_id,
-            argv,
-            cwd_rel="workspace",
-            network_mode="none",
-            timeout_sec=timeout,
-            world_root=world_root,
-        )
-        code = 0 if r.success else (r.exit_code if r.exit_code is not None else 1)
-        return code, r.stdout or "", r.stderr or r.error or ""
-    # Dev fallback without principal — still scrubbed env, no secrets
-    import subprocess
-
-    try:
-        proc = subprocess.run(
-            argv,
-            capture_output=True,
-            timeout=timeout,
-            env={
-                "PATH": "/usr/local/bin:/usr/bin:/bin",
-                "LANG": "C.UTF-8",
-                "LC_ALL": "C.UTF-8",
-                "HOME": "/tmp",
-            },
-        )
-        return (
-            proc.returncode,
-            (proc.stdout or b"").decode("utf-8", errors="replace"),
-            (proc.stderr or b"").decode("utf-8", errors="replace"),
-        )
-    except subprocess.TimeoutExpired:
-        return 124, "", "timeout"
-    except FileNotFoundError:
-        return 127, "", "not_found"
-    except Exception as e:
-        return 1, "", str(e)[:200]
+    r = await run_in_world(
+        principal_id,
+        argv,
+        cwd_rel="workspace",
+        network_mode="none",
+        timeout_sec=timeout,
+        world_root=world_root,
+    )
+    code = 0 if r.success else (r.exit_code if r.exit_code is not None else 1)
+    return code, r.stdout or "", r.stderr or r.error or ""
 
 
 async def preprocess_for_ocr(

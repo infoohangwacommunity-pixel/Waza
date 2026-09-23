@@ -359,6 +359,11 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="world_jobs",
+        description="List recent World executions/jobs and lifecycle for this learner.",
+        parameters={"type": "object", "properties": {}},
+    ),
+    ToolSpec(
         name="world_files",
         description="List/read/write/delete files inside the learner World workspace.",
         parameters={

@@ -141,18 +141,14 @@ def _ensure_vosk_model() -> Path | None:
         "true",
         "yes",
     )
-    # Dev convenience: allow download outside production unless explicitly disabled
-    app_env = (getattr(settings, "app_env", None) or os.environ.get("APP_ENV") or "").lower()
     if not allow_dl:
-        if app_env == "production":
-            logger.warning(
-                "vosk_model_missing_no_download",
-                model=name,
-                path=str(model_dir),
-                hint="Place model under WAX_MODEL_ROOT or bake into image; set WAX_VOSK_ALLOW_DOWNLOAD=1 only intentionally",
-            )
-            return None
-        # Non-production: allow one-time download for developer convenience
+        logger.warning(
+            "vosk_model_missing_no_download",
+            model=name,
+            path=str(model_dir),
+            hint="Provision model at image/volume path; set WAX_VOSK_ALLOW_DOWNLOAD=1 only for intentional dev download",
+        )
+        return None
     url = f"https://alphacephei.com/vosk/models/{name}.zip"
     zip_path = root / f"{name}.zip"
     try:
@@ -225,63 +221,31 @@ async def _ffmpeg_to_wav(src: Path, wav_out: Path, *, principal_id: str | None =
         "LC_ALL": "C.UTF-8",
     }
     try:
-        if principal_id:
-            from wax.world.run_tool import run_in_world
-
-            r = await run_in_world(
-                str(principal_id),
-                argv,
-                cwd_rel="workspace",
-                network_mode="none",
-                timeout_sec=90.0,
-            )
-            stderr = (r.stderr or r.error or "")[:800]
-            if (r.error or "").startswith("Timed out"):
-                return {"ok": False, "error": "ffmpeg_timeout"}
-            if not r.success:
-                logger.warning("ffmpeg_failed", stderr=stderr, src=str(src), backend=r.backend)
-                return {
-                    "ok": False,
-                    "error": "ffmpeg_failed",
-                    "detail": stderr or "no_stderr",
-                    "backend": r.backend,
-                }
-            if not wav_out.is_file() or wav_out.stat().st_size < 44:
-                return {"ok": False, "error": "ffmpeg_no_output", "detail": stderr}
+        if not principal_id:
             return {
-                "ok": True,
-                "wav": str(wav_out),
-                "sample_rate": 16000,
-                "channels": 1,
-                "codec": "pcm_s16le",
-                "backend": r.backend,
+                "ok": False,
+                "error": "world_required",
+                "detail": "ffmpeg runs only inside a learner World; principal_id is required",
             }
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(src.parent),
-            env=env,
+        from wax.world.run_tool import run_in_world
+
+        r = await run_in_world(
+            str(principal_id),
+            argv,
+            cwd_rel="workspace",
+            network_mode="none",
+            timeout_sec=90.0,
         )
-        try:
-            _stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=90.0)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
+        stderr = (r.stderr or r.error or "")[:800]
+        if (r.error or "").startswith("Timed out"):
             return {"ok": False, "error": "ffmpeg_timeout"}
-        stderr = (stderr_b or b"").decode("utf-8", errors="replace")[:800]
-        if proc.returncode != 0:
-            logger.warning(
-                "ffmpeg_failed",
-                returncode=proc.returncode,
-                stderr=stderr,
-                src=str(src),
-            )
+        if not r.success:
+            logger.warning("ffmpeg_failed", stderr=stderr, src=str(src), backend=r.backend)
             return {
                 "ok": False,
                 "error": "ffmpeg_failed",
-                "returncode": proc.returncode,
                 "detail": stderr or "no_stderr",
+                "backend": r.backend,
             }
         if not wav_out.is_file() or wav_out.stat().st_size < 44:
             return {"ok": False, "error": "ffmpeg_no_output", "detail": stderr}
@@ -291,6 +255,7 @@ async def _ffmpeg_to_wav(src: Path, wav_out: Path, *, principal_id: str | None =
             "sample_rate": 16000,
             "channels": 1,
             "codec": "pcm_s16le",
+            "backend": r.backend,
         }
     except FileNotFoundError:
         return {"ok": False, "error": "ffmpeg_not_found"}

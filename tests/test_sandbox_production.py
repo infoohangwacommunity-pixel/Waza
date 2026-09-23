@@ -1,15 +1,18 @@
-"""Production must refuse terminal when no secure runtime is available."""
+"""Production must refuse World isolation when no secure runtime is available."""
 import asyncio
-from pathlib import Path
 from unittest.mock import patch
 
-from wax.terminal.sandbox import run_sandboxed
+from wax.world.errors import IsolationUnavailable
+from wax.world.isolation import IsolationRequest, run_isolated
 
 
-def test_production_refuses_without_isolation(tmp_path, monkeypatch):
+def test_production_refuses_without_isolation(tmp_path):
+    (tmp_path / "identity.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "workspace").mkdir()
+
     class S:
         app_env = "production"
-        terminal_require_sandbox = False
+        terminal_require_sandbox = True
         terminal_timeout_seconds = 5
         terminal_max_output_bytes = 10000
         terminal_cpu_seconds = 5
@@ -17,33 +20,32 @@ def test_production_refuses_without_isolation(tmp_path, monkeypatch):
         terminal_use_docker = False
         effective_terminal_require_sandbox = True
 
-    with patch("wax.terminal.sandbox.settings", S()):
-        with patch("wax.terminal.sandbox._has_bwrap", return_value=False):
-            with patch("wax.terminal.sandbox._has_docker", return_value=False):
-                with patch("wax.terminal.sandbox._want_docker", return_value=False):
-                    r = asyncio.run(
-                        run_sandboxed(["echo", "hi"], cwd=tmp_path)
-                    )
-    assert r.success is False
-    assert "sandbox_required" in (r.error or "").lower() or "unavailable" in (r.error or "").lower()
+    async def _run():
+        with patch("wax.world.isolation.settings", S()):
+            with patch("wax.world.isolation._has_bwrap", return_value=False):
+                with patch("wax.world.isolation._has_docker", return_value=False):
+                    with patch("wax.world.isolation._want_docker", return_value=False):
+                        with patch("wax.world.isolation._require_sandbox", return_value=True):
+                            return await run_isolated(
+                                IsolationRequest(
+                                    argv=["echo", "hi"],
+                                    world_root=tmp_path,
+                                    timeout_sec=2,
+                                )
+                            )
+
+    try:
+        r = asyncio.run(_run())
+        assert r.success is False
+    except IsolationUnavailable:
+        pass
 
 
-def test_dev_allows_rlimits_fallback(tmp_path, monkeypatch):
-    class S:
-        app_env = "development"
-        terminal_require_sandbox = False
-        terminal_timeout_seconds = 5
-        terminal_max_output_bytes = 10000
-        terminal_cpu_seconds = 5
-        terminal_memory_bytes = 10_000_000
-        terminal_use_docker = False
-        effective_terminal_require_sandbox = False
+def test_sandbox_adapter_uses_world(tmp_path):
+    from wax.terminal.sandbox import run_sandboxed
 
-    with patch("wax.terminal.sandbox.settings", S()):
-        with patch("wax.terminal.sandbox._has_bwrap", return_value=False):
-            with patch("wax.terminal.sandbox._want_docker", return_value=False):
-                r = asyncio.run(
-                    run_sandboxed(["echo", "hi"], cwd=tmp_path)
-                )
-    # May succeed via rlimits if echo exists
-    assert r.isolation in ("rlimits", "bwrap", "docker") or r.error
+    (tmp_path / "identity.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "workspace").mkdir()
+    r = asyncio.run(run_sandboxed(["echo", "adapter"], cwd=tmp_path / "workspace", timeout=5))
+    # Either isolated success or isolation unavailable — never host-secret leak
+    assert r.isolation in ("bwrap", "docker", "rlimits", "none", "world") or r.error

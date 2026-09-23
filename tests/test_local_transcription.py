@@ -13,12 +13,13 @@ def test_transcription_prefers_vosk_local():
     assert "pcm_s16le" in src
 
 
-def test_ffmpeg_not_via_open_shell_bwrap():
-    """Conversion is path-isolated controlled pipeline, not model shell."""
+def test_ffmpeg_goes_through_world_isolation():
+    """Conversion is World-isolated, not a host subprocess fallback."""
     src = Path("wax/tools/transcription.py").read_text()
-    assert "create_subprocess_exec" in src
-    # Should not require run_sandboxed for media conversion reliability
+    assert "run_in_world" in src
+    assert "create_subprocess_exec" not in src
     assert "run_sandboxed" not in src
+    assert "world_required" in src
 
 
 def test_dockerfile_provides_python_and_media_tools():

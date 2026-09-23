@@ -1704,6 +1704,21 @@ async def handle_extract_subtitles(
 
 
 
+
+async def handle_world_jobs(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """List or inspect World execution records (compatibility + recovery view)."""
+    from wax.world.manager import get_or_create_world
+    from wax.world.discover import discover
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    world = get_or_create_world(str(principal_id))
+    snap = discover(world, sections=["jobs", "lifecycle"])
+    return {"ok": True, "jobs": snap.get("jobs") or [], "lifecycle": snap.get("lifecycle")}
+
 async def handle_world_discover(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1717,6 +1732,12 @@ async def handle_world_discover(
         return {"ok": False, "error": "no_principal"}
     try:
         world = get_or_create_world(str(principal_id))
+        try:
+            from wax.world.persist import upsert_world
+
+            await upsert_world(session, world)
+        except Exception:
+            pass
         sections = args.get("sections")
         if isinstance(sections, str):
             sections = [s.strip() for s in sections.split(",") if s.strip()]
@@ -1878,4 +1899,5 @@ HANDLERS.update({
     "world_exec": handle_world_exec,
     "world_acquire": handle_world_acquire,
     "world_files": handle_world_files,
+    "world_jobs": handle_world_jobs,
 })

@@ -67,13 +67,15 @@ def workspace_root() -> Path:
 
 
 def principal_workspace(principal_id: str | Any) -> Path:
-    """
-    Compatibility path for media/tools.
+    """Resolve the learner workspace via World.
 
-    Prefer the World workspace when a world exists for this principal;
-    otherwise fall back to legacy principals/<id> layout (no permanent symlinks).
+    Does not swallow World security/lifecycle failures into a silent
+    legacy path. Legacy principals/<id> is only used when the World
+    layout has never been created for this process tree (pre-migration
+    hosts) and get_or_create_world is unavailable to import.
     """
-    safe = str(principal_id).replace("/", "_")[:64]
+    from wax.world.errors import WorldError
+
     try:
         from wax.world.manager import get_or_create_world
 
@@ -83,8 +85,11 @@ def principal_workspace(principal_id: str | Any) -> Path:
         (path / "media").mkdir(exist_ok=True)
         (path / "projects").mkdir(exist_ok=True)
         return path
-    except Exception:
+    except WorldError:
+        raise
+    except ImportError:
         pass
+    safe = str(principal_id).replace("/", "_")[:64]
     path = workspace_root() / "principals" / safe
     path.mkdir(parents=True, exist_ok=True)
     (path / "media").mkdir(exist_ok=True)

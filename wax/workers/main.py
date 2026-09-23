@@ -593,6 +593,13 @@ async def recover_orphans(session) -> int:
 
 async def worker_loop(worker_id: str) -> None:
     logger.info("worker_started", worker_id=worker_id)
+    try:
+        from wax.world.reconcile import reconcile_all_worlds
+
+        report = reconcile_all_worlds()
+        logger.info("world_startup_reconcile", worlds=report.get("worlds"), details=report.get("reports"))
+    except Exception:
+        logger.exception("world_startup_reconcile_failed")
     while RUNNING:
         try:
             async with session_scope() as session:

@@ -75,16 +75,38 @@ def _scan_runtimes(root: Path) -> list[dict[str, Any]]:
 
 
 def _scan_software(root: Path) -> list[dict[str, Any]]:
+    """Observed software: recorded + import/path check when possible."""
     soft = root / "software"
     items = []
     if not soft.is_dir():
         return items
+    py = root / "runtimes" / "python" / "default" / "bin" / "python"
+    if not py.is_file():
+        py = root / "runtimes" / "python" / "default" / "bin" / "python3"
     for f in sorted(soft.glob("*.json")):
         try:
             data = json.loads(f.read_text(encoding="utf-8"))
-            items.append(data)
         except Exception:
-            items.append({"name": f.stem, "verify_status": "corrupt_record"})
+            items.append({"name": f.stem, "recorded": True, "verify_status": "corrupt_record", "healthy": False})
+            continue
+        data["recorded"] = True
+        mod = data.get("import_module") or str(data.get("name") or f.stem).replace("-", "_").split("[")[0]
+        present = py.is_file()
+        data["runtime_present"] = present
+        if data.get("verify_status") == "ok" and present:
+            # cheap filesystem check: look for dist-info / module under venv
+            site = list((root / "runtimes" / "python" / "default").rglob(f"{mod}*"))
+            if site:
+                data["physically_present"] = True
+                data["healthy"] = True
+            else:
+                data["physically_present"] = False
+                data["healthy"] = False
+                data["verify_status"] = "drifted"
+        else:
+            data["healthy"] = data.get("verify_status") == "ok"
+            data["physically_present"] = data.get("healthy", False)
+        items.append(data)
     return items
 
 

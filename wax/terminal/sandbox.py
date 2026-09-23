@@ -1,35 +1,17 @@
 """
-Terminal sandbox — strongest isolation available on the host.
+Compatibility adapter: old run_sandboxed → World isolation.
 
-Order of preference:
-1. docker (if WAX_TERMINAL_DOCKER=1 or terminal_require_sandbox + docker present)
-2. bubblewrap (bwrap)
-3. unshare + rlimits (dev only unless require_sandbox is false)
-
-Never inject app secrets into the child environment.
-Multi-tenant: each principal gets a dedicated workspace directory.
+This module is NOT a second security implementation. All execution goes
+through wax.world.isolation. No semantic binary allowlist.
 """
 
 from __future__ import annotations
 
-import asyncio
-import os
-import resource
-import shutil
-import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
-from wax.config import get_settings
-from wax.observability.logging import get_logger
-
-logger = get_logger(__name__)
-settings = get_settings()
-
-# DEPRECATED: semantic command allowlist removed. Isolation is the security boundary.
-# Kept as empty set for any residual imports; do not reintroduce product allowlists.
-ALLOWED_BINARIES: set[str] = set()
+from wax.world.errors import IsolationUnavailable
+from wax.world.isolation import IsolationRequest, run_isolated
 
 
 @dataclass
@@ -40,56 +22,20 @@ class SandboxResult:
     exit_code: int | None
     duration_ms: int
     error: str | None = None
-    isolation: str = "subprocess"
+    isolation: str = "world"
     cwd: str | None = None
 
 
-def _scrub_env(extra: dict[str, str] | None = None) -> dict[str, str]:
-    env = {
-        "PATH": "/usr/local/bin:/usr/bin:/bin",
-        "LANG": "C.UTF-8",
-        "PYTHONIOENCODING": "utf-8",
-        "HOME": "/tmp",
-        "PYTHONDONTWRITEBYTECODE": "1",
-    }
-    if extra:
-        env.update(extra)
-    return env
-
-
-def _preexec_limits():
-    try:
-        cpu = int(getattr(settings, "terminal_cpu_seconds", 20) or 20)
-        resource.setrlimit(resource.RLIMIT_CPU, (cpu, cpu))
-    except Exception:
-        pass
-    try:
-        mem = int(getattr(settings, "terminal_memory_bytes", 512 * 1024 * 1024) or 512 * 1024 * 1024)
-        resource.setrlimit(resource.RLIMIT_AS, (mem, mem))
-    except Exception:
-        pass
-    try:
-        resource.setrlimit(resource.RLIMIT_NOFILE, (64, 64))
-    except Exception:
-        pass
-    try:
-        resource.setrlimit(resource.RLIMIT_NPROC, (32, 32))
-    except Exception:
-        pass
-
-
-def _has_bwrap() -> bool:
-    return shutil.which("bwrap") is not None
-
-
-def _has_docker() -> bool:
-    return shutil.which("docker") is not None
-
-
-def _want_docker() -> bool:
-    if os.environ.get("WAX_TERMINAL_DOCKER", "").lower() in ("1", "true", "yes"):
-        return True
-    return bool(getattr(settings, "terminal_use_docker", False))
+def _world_root_from_cwd(cwd: Path) -> Path:
+    cwd = cwd.resolve()
+    if (cwd / "identity.json").is_file():
+        return cwd
+    if (cwd.parent / "identity.json").is_file():
+        return cwd.parent
+    # worlds/<id>/workspace → worlds/<id>
+    if cwd.name in {"workspace", "tmp", "artifacts", "media"} and (cwd.parent / "identity.json").is_file():
+        return cwd.parent
+    return cwd
 
 
 async def run_sandboxed(
@@ -99,138 +45,34 @@ async def run_sandboxed(
     timeout: float | None = None,
     max_output: int | None = None,
 ) -> SandboxResult:
-    if not argv:
-        return SandboxResult(False, "", "", None, 0, error="empty_command")
-    # No semantic binary allowlist. Security is isolation (bwrap/docker) + resources.
-    # Prefer wax.world.isolation.run_isolated for new code.
-
-    timeout = timeout or float(settings.terminal_timeout_seconds)
-    max_output = max_output or int(settings.terminal_max_output_bytes)
-    cwd.mkdir(parents=True, exist_ok=True)
-    env = _scrub_env({"HOME": str(cwd)})
-    # Production always requires docker/bwrap — never silent rlimits fallback
-    require = bool(getattr(settings, "effective_terminal_require_sandbox", False))
-    if not require:
-        # property may exist
-        try:
-            require = bool(settings.effective_terminal_require_sandbox)
-        except Exception:
-            require = bool(getattr(settings, "terminal_require_sandbox", False))
-            if getattr(settings, "app_env", "") == "production":
-                require = True
-
-
-    # 1) Docker isolation (strong multi-tenant boundary when available)
-    if _want_docker() and _has_docker():
-        image = os.environ.get("WAX_TERMINAL_IMAGE", "python:3.12-slim")
-        # Mount only the principal workspace; no network; drop caps; read-only root
-        docker_argv = [
-            "docker", "run", "--rm",
-            "--network", "none",
-            "--read-only",
-            "--tmpfs", "/tmp:rw,size=64m",
-            "--memory", str(int(getattr(settings, "terminal_memory_bytes", 512 * 1024 * 1024))),
-            "--cpus", "0.5",
-            "--pids-limit", "64",
-            "--security-opt", "no-new-privileges",
-            "--cap-drop", "ALL",
-            "-v", f"{cwd.resolve()}:/workspace:rw",
-            "-w", "/workspace",
-            "-e", "HOME=/workspace",
-            "-e", "LANG=C.UTF-8",
-            image,
-            *argv,
-        ]
-        return await _exec(
-            docker_argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output, isolation="docker"
-        )
-
-    # 2) bubblewrap
-    if _has_bwrap():
-        bwrap_argv = [
-            "bwrap",
-            "--ro-bind", "/usr", "/usr",
-            "--ro-bind", "/bin", "/bin",
-            "--ro-bind", "/lib", "/lib",
-            "--ro-bind-try", "/lib64", "/lib64",
-            "--bind", str(cwd), str(cwd),
-            "--chdir", str(cwd),
-            "--unshare-net",
-            "--unshare-pid",
-            "--die-with-parent",
-            "--new-session",
-            "--tmpfs", "/tmp",
-            "--dev", "/dev",
-            "--proc", "/proc",
-            "--setenv", "HOME", str(cwd),
-            "--setenv", "PATH", "/usr/bin:/bin",
-            "--setenv", "LANG", "C.UTF-8",
-            "--",
-            *argv,
-        ]
-        return await _exec(
-            bwrap_argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output, isolation="bwrap"
-        )
-
-    if require:
-        return SandboxResult(
-            False, "", "", None, 0,
-            error="sandbox_required_but_unavailable (install bwrap or enable docker)",
-            isolation="none",
-        )
-
-    # 3) Dev fallback: rlimits only
-    return await _exec(
-        argv, cwd=cwd, env=env, timeout=timeout, max_output=max_output,
-        isolation="rlimits", preexec=_preexec_limits,
-    )
-
-
-async def _exec(
-    argv: list[str],
-    *,
-    cwd: Path,
-    env: dict[str, str],
-    timeout: float,
-    max_output: int,
-    isolation: str,
-    preexec=None,
-) -> SandboxResult:
-    start = time.monotonic()
+    world_root = _world_root_from_cwd(Path(cwd))
     try:
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=str(cwd) if isolation != "docker" else None,
-            env=env if isolation != "docker" else None,
-            limit=max_output,
-            preexec_fn=preexec if isolation == "rlimits" else None,
-        )
-        try:
-            stdout_b, stderr_b = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        except asyncio.TimeoutError:
-            proc.kill()
-            await proc.wait()
-            return SandboxResult(
-                False, "", "", None,
-                int((time.monotonic() - start) * 1000),
-                error=f"Timed out after {timeout}s",
-                isolation=isolation,
-                cwd=str(cwd),
-            )
-        stdout = (stdout_b or b"")[:max_output].decode("utf-8", errors="replace")
-        stderr = (stderr_b or b"")[:max_output].decode("utf-8", errors="replace")
+        rel = str(Path(cwd).resolve().relative_to(world_root.resolve()))
+    except ValueError:
+        rel = "workspace"
+    if rel in (".", ""):
+        rel = "workspace"
+    req = IsolationRequest(
+        argv=list(argv),
+        world_root=world_root,
+        cwd_rel=rel if rel != "workspace" else "workspace",
+        network_mode="none",
+        timeout_sec=float(timeout or 60.0),
+        max_output=int(max_output or 150_000),
+    )
+    try:
+        r = await run_isolated(req)
+    except IsolationUnavailable as e:
         return SandboxResult(
-            proc.returncode == 0, stdout, stderr, proc.returncode,
-            int((time.monotonic() - start) * 1000),
-            isolation=isolation, cwd=str(cwd),
+            False, "", "", None, 0, error=str(e.message), isolation="none", cwd=str(cwd)
         )
-    except FileNotFoundError as e:
-        return SandboxResult(False, "", "", None, 0, error=f"binary_missing:{e}", isolation=isolation)
-    except Exception as e:
-        logger.exception("sandbox_exec_failed")
-        return SandboxResult(
-            False, "", "", None, int((time.monotonic() - start) * 1000),
-            error=str(e), isolation=isolation,
-        )
+    return SandboxResult(
+        r.success,
+        r.stdout,
+        r.stderr,
+        r.exit_code,
+        r.duration_ms,
+        error=r.error,
+        isolation=r.backend,
+        cwd=str(cwd),
+    )
