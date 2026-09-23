@@ -220,6 +220,32 @@ class TemporalService:
         )
         return intent
 
+
+def decide_due_intent(intent, learner_snapshot: dict[str, Any]) -> dict[str, str]:
+    """Pure wake-time policy (no DB). Scheduler stays thin."""
+    active = (learner_snapshot.get("activities") or [{}])[0] if learner_snapshot.get("activities") else None
+    decision = "deliver"
+    reason = "due"
+    if getattr(intent, "completion_condition", None) and (getattr(intent, "payload", None) or {}).get("completed"):
+        return {"decision": "fulfilled", "reason": "completion_condition_met"}
+    if (
+        active
+        and active.get("status") == "active"
+        and getattr(intent, "flexibility", "") in ("soft", "window")
+        and getattr(intent, "purpose", "") == "reminder"
+    ):
+        return {"decision": "reschedule", "reason": "candidate_defer_active_study"}
+    if getattr(intent, "purpose", "") == "review":
+        recent = learner_snapshot.get("recent_events") or []
+        if any(
+            e.get("concept_key") == getattr(intent, "concept_key", None)
+            and e.get("kind") in ("learning_success", "concept_practiced", "spontaneous_retrieval")
+            for e in recent
+        ):
+            return {"decision": "suppress", "reason": "recent_retrieval_evidence"}
+    return {"decision": decision, "reason": reason}
+
+
     async def evaluate_due_intent(self, intent: TemporalIntent, learner_snapshot: dict[str, Any]) -> dict[str, Any]:
         """
         Reassess intent at wake time. Does NOT compose the final message —
@@ -227,33 +253,8 @@ class TemporalService:
         """
         now = datetime.now(timezone.utc)
         intent.last_evaluated_at = now
-        active = (learner_snapshot.get("activities") or [{}])[0] if learner_snapshot.get("activities") else None
-        decision = "deliver"
-        reason = "due"
-        target_l = (intent.target or "").lower()
-        # Explicit completion flag only (no keyword games)
-        if intent.completion_condition and (intent.payload or {}).get("completed"):
-            decision = "fulfilled"
-            reason = "completion_condition_met"
-        # Soft signal only — tutor still reassesses; we mark candidate deferral
-        elif (
-            active
-            and active.get("status") == "active"
-            and intent.flexibility in ("soft", "window")
-            and intent.purpose == "reminder"
-        ):
-            decision = "reschedule"
-            reason = "candidate_defer_active_study"
-            # Tutor prompt still decides final wording/interrupt policy
-        elif intent.purpose == "review":
-            recent = learner_snapshot.get("recent_events") or []
-            if any(
-                e.get("concept_key") == intent.concept_key
-                and e.get("kind") in ("learning_success", "concept_practiced", "spontaneous_retrieval")
-                for e in recent
-            ):
-                decision = "suppress"
-                reason = "recent_retrieval_evidence"
+        decided = decide_due_intent(intent, learner_snapshot)
+        decision, reason = decided["decision"], decided["reason"]
 
         intent.evaluation = {"decision": decision, "reason": reason, "at": now.isoformat()}
         if decision == "fulfilled":

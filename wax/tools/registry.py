@@ -1305,8 +1305,11 @@ async def handle_cancel_schedule(
 async def handle_schedule_series(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
+    """Legacy series adapter → one TemporalIntent per occurrence."""
     from datetime import datetime, timezone, timedelta
-    from wax.scheduler.service import SchedulerService
+    from wax.learner.temporal import TemporalService
+    from wax.learner.model import build_learner_model
+
     principal_id = ctx.get("principal_id")
     if not principal_id:
         return {"ok": False, "error": "no_principal"}
@@ -1323,20 +1326,33 @@ async def handle_schedule_series(
     else:
         delay = float(args.get("delay_hours") or 1)
         first_at = datetime.now(timezone.utc) + timedelta(hours=delay)
-    actions = await SchedulerService(session).schedule_series(
-        principal_id=principal_id,
-        action_type=str(args.get("action_type") or "tutor_followup"),
-        first_at=first_at,
-        interval_hours=float(hours),
-        count=int(count),
-        reason=args.get("reason"),
-        payload={"message_hint": args.get("message_hint")},
-    )
-    return {
-        "ok": True,
-        "count": len(actions),
-        "ids": [str(a.id) for a in actions],
-    }
+    if first_at.tzinfo is None:
+        first_at = first_at.replace(tzinfo=timezone.utc)
+    tz = "UTC"
+    try:
+        model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+        tz = model.timezone or tz
+    except Exception:
+        pass
+    purpose_raw = str(args.get("action_type") or "followup")
+    purpose = "review" if "review" in purpose_raw else "followup"
+    reason = str(args.get("reason") or "series")
+    svc = TemporalService(session)
+    created = []
+    for i in range(max(1, min(int(count), 12))):
+        when = first_at + timedelta(hours=float(hours) * i)
+        intent = await svc.create_intent(
+            principal_id=principal_id,
+            purpose=purpose,
+            target=reason,
+            execute_at=when,
+            timezone_name=tz,
+            original_request=reason,
+            flexibility="soft",
+            payload={"message_hint": args.get("message_hint"), "legacy_schedule_series": True, "index": i},
+        )
+        created.append({"intent_id": str(intent.id), "at": intent.execute_at.isoformat()})
+    return {"ok": True, "count": len(created), "series": created, "via": "temporal_intent"}
 
 
 async def handle_redeliver_artifact(

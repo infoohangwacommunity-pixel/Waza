@@ -483,8 +483,57 @@ class MemoryService:
         )
         memory_type = item.get("memory_type", "semantic")
         importance = float(item.get("importance", 0.5))
+        hint = (item.get("supersedes_hint") or "").strip()
+        if hint:
+            try:
+                from wax.learner.contradiction import EvidenceView, resolve_conflict
+
+                cands = await self.retrieve_relevant(
+                    principal_id, hint, limit=6, memory_types=[memory_type] if memory_type else None
+                )
+                views = []
+                for c in cands:
+                    views.append(
+                        EvidenceView(
+                            id=str(c.id),
+                            content=c.content or "",
+                            kind=c.memory_type or "semantic",
+                            source=c.source or "inferred",
+                            confidence=float(c.confidence or 0.5),
+                            recency=0.4,
+                            is_correction=False,
+                            is_active=bool(c.is_active),
+                        )
+                    )
+                views.append(
+                    EvidenceView(
+                        id="incoming",
+                        content=content,
+                        kind=memory_type,
+                        source=item.get("source") or "inferred",
+                        confidence=float(item.get("confidence", 0.6)),
+                        recency=1.0,
+                        is_correction=True,
+                    )
+                )
+                resolved = resolve_conflict(views)
+                if resolved.get("status") in ("resolved", "current") and cands:
+                    winner_is_new = resolved["current"] and resolved["current"].id == "incoming"
+                    if winner_is_new:
+                        new_mem = await self.supersede(
+                            principal_id,
+                            cands[0].id,
+                            content,
+                            source="learner_correction",
+                            confidence=float(item.get("confidence", 0.85)),
+                        )
+                        logger.info("memory_superseded_via_hint", old_id=str(cands[0].id))
+                        return new_mem
+            except Exception:
+                logger.exception("supersedes_hint_failed")
+
         similar = await self._find_similar_memory(principal_id, content, memory_type)
-        if similar:
+        if similar and not hint:
             similar.confidence = min(1.0, (similar.confidence or 0.5) + 0.05)
             similar.importance = max(similar.importance or 0.5, importance)
             similar.evidence = list(similar.evidence or []) + [{"kind": "reinforcement"}]

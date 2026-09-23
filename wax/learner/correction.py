@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.memory.service import MemoryService
 from wax.observability.logging import get_logger
 from wax.learner.events import record_learner_event
+from wax.learner.contradiction import EvidenceView, resolve_conflict
 
 logger = get_logger(__name__)
 
@@ -45,8 +46,34 @@ async def apply_possible_correction(
         return {"corrected": False, "details": []}
 
     details = []
-    # Heuristic: if message asserts a new preference/goal, supersede top similar active ones
     new_content = (new_statement or text)[:500]
+    views = [
+        EvidenceView(
+            id=str(c.id),
+            content=c.content or "",
+            kind=c.memory_type or "semantic",
+            source=c.source or "inferred",
+            confidence=float(c.confidence or 0.5),
+            recency=0.3,
+            is_correction=False,
+        )
+        for c in candidates
+    ]
+    views.append(
+        EvidenceView(
+            id="incoming",
+            content=new_content,
+            kind="semantic",
+            source="learner_correction",
+            confidence=0.88,
+            recency=1.0,
+            is_correction=True,
+        )
+    )
+    resolved = resolve_conflict(views)
+    if resolved.get("status") == "uncertain":
+        logger.info("correction_uncertain_not_forced", principal_id=str(principal_id))
+        return {"corrected": False, "details": [], "status": "uncertain"}
     for old in candidates[:3]:
         # only supersede if types match likely correction domain
         if old.memory_type not in ("goal", "preference", "semantic"):

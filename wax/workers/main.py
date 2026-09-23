@@ -215,6 +215,17 @@ async def process_memory_work(session, work: Work) -> None:
                 source_work_id=payload.get("source_work_id"),
             )
             try:
+                from wax.learner.correction import apply_possible_correction
+                from wax.learner.evidence import EvidencePlanner
+
+                plan = await EvidencePlanner(session).plan(user_text=user_text, purpose="reply")
+                if plan.check_corrections or plan.decision_type == "correct":
+                    await apply_possible_correction(
+                        session, principal_id=principal_id, user_text=user_text
+                    )
+            except Exception:
+                logger.exception("post_extract_correction_failed")
+            try:
                 obs = await ObservationService(session).record(
                     principal_id=principal_id,
                     kind="tutor_turn",
