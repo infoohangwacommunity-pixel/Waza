@@ -104,8 +104,13 @@ async def run_sandboxed(
     if not argv:
         return SandboxResult(False, "", "", None, 0, error="empty_command")
     binary = os.path.basename(argv[0])
-    if binary not in ALLOWED_BINARIES:
-        return SandboxResult(False, "", "", None, 0, error=f"Command not permitted: {binary}")
+    # Legacy path: allowlist remains for old workspace_command only.
+    # World execution uses wax.world.isolation (no semantic allowlist).
+    # Set WAX_DISABLE_BINARY_ALLOWLIST=1 to disable this product restriction during migration.
+    import os as _os
+    if _os.environ.get("WAX_DISABLE_BINARY_ALLOWLIST", "").lower() not in ("1", "true", "yes"):
+        if binary not in ALLOWED_BINARIES:
+            return SandboxResult(False, "", "", None, 0, error=f"Command not permitted: {binary}")
 
     timeout = timeout or float(settings.terminal_timeout_seconds)
     max_output = max_output or int(settings.terminal_max_output_bytes)

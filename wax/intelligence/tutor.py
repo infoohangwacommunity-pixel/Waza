@@ -313,6 +313,64 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="world_discover",
+        description=(
+            "Inspect the learner's personal computing World: lifecycle, disk, "
+            "runtimes, installed software (observed), files, jobs. Prefer this "
+            "before assuming software is missing or present."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {"sections": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="world_exec",
+        description=(
+            "Run a command (argv list) or Python script inside the learner World "
+            "under isolation. No developer command allowlist — infrastructure "
+            "enforces mounts, resources, and network mode (none|pkg)."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "argv": {"type": "array", "items": {"type": "string"}},
+                "script": {"type": "string"},
+                "cwd": {"type": "string"},
+                "network_mode": {"type": "string"},
+                "budget_class": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="world_acquire",
+        description=(
+            "Install software into the World. kind=python_package uses pip into "
+            "the world's private venv (never the WAX app). Always verified by import."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string"},
+                "name": {"type": "string"},
+                "version_spec": {"type": "string"},
+            },
+            "required": ["name"],
+        },
+    ),
+    ToolSpec(
+        name="world_files",
+        description="List/read/write/delete files inside the learner World workspace.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "path": {"type": "string"},
+                "content": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
         name="workspace_env",
         description="Get or update workspace environment manifest (packages/tools).",
         parameters={

@@ -67,7 +67,24 @@ def workspace_root() -> Path:
 
 
 def principal_workspace(principal_id: str | Any) -> Path:
+    """
+    Compatibility path for media/tools.
+
+    Prefer the World workspace when a world exists for this principal;
+    otherwise fall back to legacy principals/<id> layout (no permanent symlinks).
+    """
     safe = str(principal_id).replace("/", "_")[:64]
+    try:
+        from wax.world.manager import get_or_create_world
+
+        w = get_or_create_world(str(principal_id))
+        path = w.root / "workspace"
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "media").mkdir(exist_ok=True)
+        (path / "projects").mkdir(exist_ok=True)
+        return path
+    except Exception:
+        pass
     path = workspace_root() / "principals" / safe
     path.mkdir(parents=True, exist_ok=True)
     (path / "media").mkdir(exist_ok=True)

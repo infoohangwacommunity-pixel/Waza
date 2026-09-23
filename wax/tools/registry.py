@@ -1716,6 +1716,124 @@ async def handle_extract_subtitles(
     }
 
 
+
+async def handle_world_discover(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Discover observed state of the learner's personal World."""
+    from wax.world.manager import get_or_create_world
+    from wax.world.discover import discover
+    from wax.world.errors import WorldError
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    try:
+        world = get_or_create_world(str(principal_id))
+        sections = args.get("sections")
+        if isinstance(sections, str):
+            sections = [s.strip() for s in sections.split(",") if s.strip()]
+        return discover(world, sections=sections)
+    except WorldError as e:
+        return e.to_dict()
+    except Exception as e:
+        return {"ok": False, "error": "world_discover_failed", "detail": str(e)[:300]}
+
+
+async def handle_world_exec(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Execute argv or a script inside the learner World (isolated). No command allowlist."""
+    from wax.world.manager import get_or_create_world
+    from wax.world.exec import world_exec
+    from wax.world.errors import WorldError
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    argv = args.get("argv")
+    if isinstance(argv, str):
+        import shlex
+        argv = shlex.split(argv)
+    try:
+        world = get_or_create_world(str(principal_id))
+        return await world_exec(
+            world,
+            argv=argv,
+            script=args.get("script"),
+            runtime=args.get("runtime") or "python",
+            cwd_rel=args.get("cwd") or "workspace",
+            network_mode=args.get("network_mode") or "none",
+            budget_class=args.get("budget_class") or "interactive",
+        )
+    except WorldError as e:
+        return e.to_dict()
+    except Exception as e:
+        return {"ok": False, "error": "world_exec_failed", "detail": str(e)[:300]}
+
+
+async def handle_world_acquire(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Acquire software into the World (v1: python_package via pip into world venv)."""
+    from wax.world.manager import get_or_create_world
+    from wax.world.acquire import acquire
+    from wax.world.providers.base import AcquireRequest
+    from wax.world.errors import WorldError
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    name = (args.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "name_required"}
+    kind = (args.get("kind") or "python_package").strip()
+    try:
+        world = get_or_create_world(str(principal_id))
+        req = AcquireRequest(
+            kind=kind,
+            name=name,
+            version_spec=args.get("version_spec") or args.get("version"),
+        )
+        return await acquire(world, req)
+    except WorldError as e:
+        return e.to_dict()
+    except Exception as e:
+        return {"ok": False, "error": "world_acquire_failed", "detail": str(e)[:300]}
+
+
+async def handle_world_files(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """List/read/write files inside the learner World."""
+    from wax.world.manager import get_or_create_world
+    from wax.world import files as wfiles
+    from wax.world.errors import WorldError
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    action = (args.get("action") or "list").strip()
+    path = args.get("path") or "workspace"
+    try:
+        world = get_or_create_world(str(principal_id))
+        if action == "list":
+            return wfiles.list_files(world, path)
+        if action == "read":
+            return wfiles.read_file(world, path)
+        if action == "write":
+            return wfiles.write_file(world, path, args.get("content") or "")
+        if action == "mkdir":
+            return wfiles.mkdir(world, path)
+        if action == "delete":
+            return wfiles.delete_file(world, path)
+        return {"ok": False, "error": "unknown_action"}
+    except WorldError as e:
+        return e.to_dict()
+    except Exception as e:
+        return {"ok": False, "error": "world_files_failed", "detail": str(e)[:300]}
+
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1769,4 +1887,8 @@ HANDLERS.update({
     "extract_video_audio": handle_extract_video_audio,
     "extract_video_frames": handle_extract_video_frames,
     "extract_subtitles": handle_extract_subtitles,
+    "world_discover": handle_world_discover,
+    "world_exec": handle_world_exec,
+    "world_acquire": handle_world_acquire,
+    "world_files": handle_world_files,
 })
