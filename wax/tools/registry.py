@@ -1557,21 +1557,19 @@ async def handle_extract_video_audio(
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out),
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
+    from wax.world.run_tool import run_in_world
+
+    result = await run_in_world(
+        str(principal_id), argv, cwd_rel="workspace", network_mode="none", timeout_sec=120.0
     )
-    try:
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=120.0)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+    if (result.error or "").startswith("Timed out"):
         return {"ok": False, "error": "ffmpeg_timeout"}
-    if proc.returncode != 0 or not out.is_file():
+    if not result.success or not out.is_file():
         return {
             "ok": False,
             "error": "extract_audio_failed",
-            "detail": (err or b"").decode("utf-8", errors="replace")[:300],
+            "detail": (result.stderr or result.error or "")[:300],
+            "backend": result.backend,
         }
     return {
         "ok": True,
@@ -1579,6 +1577,7 @@ async def handle_extract_video_audio(
         "kind": "audio",
         "note": "Audio extracted. Call transcribe_audio on this path if you need a transcript.",
         "capabilities": ["transcribe", "inspect"],
+        "backend": result.backend,
     }
 
 
@@ -1622,22 +1621,20 @@ async def handle_extract_video_frames(
         "-frames:v", str(max_frames),
         pattern,
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
+    from wax.world.run_tool import run_in_world
+
+    result = await run_in_world(
+        str(principal_id), argv, cwd_rel="workspace", network_mode="none", timeout_sec=120.0
     )
-    try:
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=120.0)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+    if (result.error or "").startswith("Timed out"):
         return {"ok": False, "error": "ffmpeg_timeout"}
     frames = sorted(str(f) for f in out_dir.glob("frame-*.jpg"))
     if not frames:
         return {
             "ok": False,
             "error": "no_frames",
-            "detail": (err or b"").decode("utf-8", errors="replace")[:300],
+            "detail": (result.stderr or result.error or "")[:300],
+            "backend": result.backend,
         }
     return {
         "ok": True,
@@ -1690,21 +1687,19 @@ async def handle_extract_subtitles(
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
         "-i", str(src), "-map", "0:s:0", str(out),
     ]
-    proc = await asyncio.create_subprocess_exec(
-        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
+    from wax.world.run_tool import run_in_world
+
+    result = await run_in_world(
+        str(principal_id), argv, cwd_rel="workspace", network_mode="none", timeout_sec=90.0
     )
-    try:
-        _, err = await asyncio.wait_for(proc.communicate(), timeout=90.0)
-    except asyncio.TimeoutError:
-        proc.kill()
-        await proc.wait()
+    if (result.error or "").startswith("Timed out"):
         return {"ok": False, "error": "ffmpeg_timeout"}
-    if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+    if not result.success or not out.is_file() or out.stat().st_size == 0:
         return {
             "ok": False,
             "error": "subtitle_extract_failed",
-            "detail": (err or b"").decode("utf-8", errors="replace")[:300],
+            "detail": (result.stderr or result.error or "")[:300],
+            "backend": result.backend,
         }
     text_out = out.read_text(encoding="utf-8", errors="replace")[:20000]
     return {
