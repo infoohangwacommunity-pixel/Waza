@@ -24,7 +24,8 @@ class MediaCapabilities:
     pdf_text: bool = False
     extract_audio: bool = False
     extract_frames: bool = False
-    vision: bool = False  # optional multimodal; may be unavailable
+    extract_subtitles: bool = False
+    vision: bool = False  # only True when multimodal provider is configured
     read_text_file: bool = False
 
     def as_list(self) -> list[str]:
@@ -36,6 +37,7 @@ class MediaCapabilities:
             "pdf_text",
             "extract_audio",
             "extract_frames",
+            "extract_subtitles",
             "vision",
             "read_text_file",
         ):

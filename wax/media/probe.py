@@ -42,6 +42,7 @@ def _sha256_file(path: Path, limit: int = 32_000_000) -> str | None:
 
 
 def _kind_from_suffix(suffix: str) -> MediaKind:
+    """Supporting metadata only — prefer magic/container when available."""
     s = suffix.lower()
     if s in _IMAGE:
         return "image"
@@ -56,22 +57,78 @@ def _kind_from_suffix(suffix: str) -> MediaKind:
     return "unknown"
 
 
-def _capabilities_for(kind: MediaKind, *, has_audio: bool | None = None) -> MediaCapabilities:
+def _kind_from_magic(path: Path, file_desc: str | None) -> MediaKind | None:
+    """Authoritative kind from magic bytes / file(1) description when possible."""
+    try:
+        head = path.read_bytes()[:32]
+    except Exception:
+        head = b""
+    desc = (file_desc or "").lower()
+    if head.startswith(b"%PDF") or "pdf document" in desc:
+        return "document"
+    if head.startswith(b"\x89PNG") or head[:3] == b"\xff\xd8\xff" or head.startswith(b"GIF8"):
+        return "image"
+    if "png image" in desc or "jpeg image" in desc or "gif image" in desc or "webp" in desc:
+        return "image"
+    if head.startswith(b"OggS") or "ogg" in desc:
+        # Ogg can be audio or video; refine with ffprobe later
+        if "video" in desc:
+            return "video"
+        return "audio"
+    if b"ftyp" in head[4:12] or "mp4" in desc or "quicktime" in desc or "matroska" in desc:
+        if "audio" in desc and "video" not in desc:
+            return "audio"
+        return "video"
+    if "audio" in desc or "mpeg" in desc or "wave" in desc or "flac" in desc:
+        return "audio"
+    if "video" in desc:
+        return "video"
+    if desc.startswith("ascii") or "text" in desc or "utf-8" in desc or "json" in desc:
+        return "text"
+    return None
+
+
+def _vision_provider_configured() -> bool:
+    """Truthful: vision only available when a multimodal provider/key is configured."""
+    try:
+        from wax.config import get_settings
+
+        s = get_settings()
+        if (getattr(s, "multimodal_api_key", None) or "").strip():
+            return True
+        provider = (getattr(s, "multimodal_provider", None) or "none").strip().lower()
+        if provider and provider not in ("none", "null", ""):
+            if (getattr(s, "primary_api_key", None) or "").strip():
+                return True
+        # Primary key alone does not imply vision models
+        return False
+    except Exception:
+        return False
+
+
+def _capabilities_for(
+    kind: MediaKind,
+    *,
+    has_audio: bool | None = None,
+    has_subtitles: bool | None = None,
+) -> MediaCapabilities:
     caps = MediaCapabilities(inspect=True)
+    vision_ok = _vision_provider_configured()
     if kind == "audio":
         caps.transcribe = True
-        caps.extract_audio = True  # already audio; normalize/copy still useful
+        caps.extract_audio = True
     elif kind == "image":
         caps.ocr = True
-        caps.vision = True
+        caps.vision = vision_ok
     elif kind == "video":
         caps.extract_audio = True
         caps.extract_frames = True
         caps.transcribe = bool(has_audio) if has_audio is not None else True
-        caps.vision = True  # frames may need vision later
+        caps.vision = vision_ok
+        caps.extract_subtitles = bool(has_subtitles) if has_subtitles is not None else False
     elif kind == "document":
         caps.pdf_text = True
-        caps.ocr = True  # scanned pages
+        caps.ocr = True
     elif kind == "text":
         caps.read_text_file = True
     return caps
@@ -153,15 +210,23 @@ def probe_local_file(path: str | Path) -> MediaProbe:
         )
 
     suffix = p.suffix.lower()
-    kind = _kind_from_suffix(suffix)
     size = p.stat().st_size
+    file_desc = _file_description(p)
+    magic_kind = _kind_from_magic(p, file_desc)
+    suffix_kind = _kind_from_suffix(suffix)
+    # Magic/container is authoritative when available; suffix is supporting metadata
+    kind = magic_kind or suffix_kind
+    warnings_early: list[str] = []
+    if magic_kind and suffix_kind != "unknown" and magic_kind != suffix_kind:
+        warnings_early.append(f"suffix_kind_mismatch:suffix={suffix_kind},magic={magic_kind}")
     probe = MediaProbe(
         path=str(p.resolve()),
         kind=kind,
         suffix=suffix,
         size_bytes=size,
         sha256=_sha256_file(p),
-        file_description=_file_description(p),
+        file_description=file_desc,
+        warnings=list(warnings_early),
     )
 
     # Refine webm / containers via ffprobe
@@ -230,10 +295,8 @@ def probe_local_file(path: str | Path) -> MediaProbe:
     probe.capabilities = _capabilities_for(
         probe.kind,
         has_audio=probe.has_audio_stream,
+        has_subtitles=probe.has_subtitle_stream,
     )
-    # Vision capability is "possible" only; availability is provider-dependent
-    if probe.kind in ("image", "video") and probe.capabilities.vision:
-        pass  # keep True; tool reports if not configured
 
     if size > 25_000_000:
         warnings.append("file_large")
@@ -241,5 +304,5 @@ def probe_local_file(path: str | Path) -> MediaProbe:
         warnings.append("empty_file")
         probe.capabilities = MediaCapabilities(inspect=True)
 
-    probe.warnings = warnings
+    probe.warnings = list(probe.warnings) + warnings
     return probe

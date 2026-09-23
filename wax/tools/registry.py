@@ -446,9 +446,8 @@ async def handle_inspect_media(
                 return {"ok": False, "error": "path_escape"}
         except Exception:
             return {"ok": False, "error": "invalid_path"}
-    extract_text = args.get("extract_text")
-    if extract_text is None:
-        extract_text = True
+    # Inspection-only by default; OCR/PDF extraction must be explicit.
+    extract_text = bool(args.get("extract_text") or False)
     max_pages = args.get("max_pages")
     terminal = get_terminal()
     result = await terminal.inspect_media_file(
@@ -508,11 +507,22 @@ async def handle_describe_image(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
     """Multimodal fallback — use only when local OCR/inspect is not enough."""
+    from pathlib import Path as P
     from wax.tools.multimodal import describe_local_image
+    from wax.terminal.workspace import principal_workspace
 
-    path = args.get("path")
+    path = (args.get("path") or "").strip()
     if not path:
         return {"ok": False, "error": "path_required"}
+    principal_id = ctx.get("principal_id")
+    if principal_id:
+        base = principal_workspace(principal_id)
+        try:
+            resolved = P(path).resolve()
+            if not str(resolved).startswith(str(base.resolve())):
+                return {"ok": False, "error": "path_escape"}
+        except Exception:
+            return {"ok": False, "error": "invalid_path"}
     return await describe_local_image(path, args.get("question"))
 
 
@@ -1638,6 +1648,74 @@ async def handle_extract_video_frames(
     }
 
 
+
+async def handle_extract_subtitles(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Extract subtitle stream from video when present (ffmpeg)."""
+    from pathlib import Path as P
+    import asyncio
+    import shutil
+    from wax.terminal.workspace import principal_workspace
+    from wax.media.probe import probe_local_file
+
+    path = (args.get("path") or ctx.get("local_media_path") or "").strip()
+    principal_id = ctx.get("principal_id")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    base = principal_workspace(principal_id)
+    try:
+        src = P(path).resolve()
+        if not str(src).startswith(str(base.resolve())):
+            return {"ok": False, "error": "path_escape"}
+    except Exception:
+        return {"ok": False, "error": "invalid_path"}
+    if not src.is_file():
+        return {"ok": False, "error": "file_not_found"}
+    probe = probe_local_file(src)
+    if probe.has_subtitle_stream is False:
+        return {
+            "ok": False,
+            "error": "no_subtitle_stream",
+            "probe": {"kind": probe.kind, "has_subtitle_stream": probe.has_subtitle_stream},
+        }
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"ok": False, "error": "ffmpeg_not_found"}
+    out = base / "tmp" / f"{src.stem}-subs.srt"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    argv = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(src), "-map", "0:s:0", str(out),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
+    )
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=90.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"ok": False, "error": "ffmpeg_timeout"}
+    if proc.returncode != 0 or not out.is_file() or out.stat().st_size == 0:
+        return {
+            "ok": False,
+            "error": "subtitle_extract_failed",
+            "detail": (err or b"").decode("utf-8", errors="replace")[:300],
+        }
+    text_out = out.read_text(encoding="utf-8", errors="replace")[:20000]
+    return {
+        "ok": True,
+        "path": str(out),
+        "text": text_out,
+        "kind": "subtitle",
+        "chars": len(text_out),
+    }
+
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1690,4 +1768,5 @@ HANDLERS.update({
     "ingest_document": handle_ingest_document,
     "extract_video_audio": handle_extract_video_audio,
     "extract_video_frames": handle_extract_video_frames,
+    "extract_subtitles": handle_extract_subtitles,
 })

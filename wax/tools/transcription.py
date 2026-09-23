@@ -103,18 +103,16 @@ def _ensure_vosk_model() -> Path | None:
     )
     # Dev convenience: allow download outside production unless explicitly disabled
     app_env = (getattr(settings, "app_env", None) or os.environ.get("APP_ENV") or "").lower()
-    if not allow_dl and app_env == "production":
-        logger.warning(
-            "vosk_model_missing_no_download",
-            model=name,
-            path=str(model_dir),
-            hint="Bake model into image or mount at WAX_MODEL_ROOT; set WAX_VOSK_ALLOW_DOWNLOAD=1 only intentionally",
-        )
-        return None
-    if not allow_dl and app_env == "production":
-        return None
-
-    # Non-production: allow one-time download for developer convenience
+    if not allow_dl:
+        if app_env == "production":
+            logger.warning(
+                "vosk_model_missing_no_download",
+                model=name,
+                path=str(model_dir),
+                hint="Place model under WAX_MODEL_ROOT or bake into image; set WAX_VOSK_ALLOW_DOWNLOAD=1 only intentionally",
+            )
+            return None
+        # Non-production: allow one-time download for developer convenience
     url = f"https://alphacephei.com/vosk/models/{name}.zip"
     zip_path = root / f"{name}.zip"
     try:

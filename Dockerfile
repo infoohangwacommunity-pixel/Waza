@@ -30,5 +30,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+# Local STT models: mount or bake under /data/wax-models (WAX_MODEL_ROOT).
+# Do not rely on runtime download in production.
+ENV WAX_MODEL_ROOT=/data/wax-models \
+    WAX_VOSK_ALLOW_DOWNLOAD=0 \
+    WAX_AUTO_TRANSCRIBE=0
+
 # Default web start; Railway/worker override via startCommand / Procfile.
 CMD ["bash", "scripts/start_web.sh"]

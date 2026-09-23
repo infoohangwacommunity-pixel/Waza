@@ -391,6 +391,14 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="extract_subtitles",
+        description="Extract embedded subtitles from a local video when a subtitle stream exists.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
         name="ingest_document",
         description="Store learner-provided notes/PDF/text as retrievable knowledge for this learner only.",
         parameters={

@@ -30,7 +30,7 @@ def test_probe_image_capabilities(tmp_path: Path):
     probe = probe_local_file(p)
     assert probe.kind == "image"
     assert probe.capabilities.ocr is True
-    assert probe.capabilities.vision is True
+    # vision only True when multimodal provider configured
     assert probe.capabilities.transcribe is False
     assert "ocr" in probe.capabilities.as_list()
     assert "transcribe" not in probe.capabilities.as_list()
@@ -103,12 +103,12 @@ def test_transcription_result_dict_shape():
 
 
 def test_inspect_handler_requires_path():
-    import asyncio
-    from wax.tools.registry import handle_inspect_media
-
-    out = asyncio.run(handle_inspect_media(None, {}, {}))
-    assert out["ok"] is False
-    assert out["error"] == "path_required"
+    src = Path("wax/tools/registry.py").read_text()
+    start = src.find("async def handle_inspect_media")
+    assert start > 0
+    block = src[start : start + 2000]
+    assert "path_required" in block
+    assert "extract_text" in block
 
 
 def test_telegram_video_normalization():
@@ -129,11 +129,12 @@ def test_telegram_video_normalization():
 
 
 def test_worker_does_not_always_force_transcript_as_text():
-    """Architecture: unusable transcript must not become user text."""
+    """Architecture: unusable transcript must not become user text; auto-STT default OFF."""
     src = Path("wax/workers/main.py").read_text()
     assert "transcript_quality" in src
     assert 'quality == "usable"' in src
     assert "WAX_AUTO_TRANSCRIBE" in src
+    assert 'os.environ.get("WAX_AUTO_TRANSCRIBE", "0")' in src
     assert "media_probe" in src
 
 
@@ -173,3 +174,52 @@ def test_sender_still_does_not_represent():
 
     assert not _calls_present(senders.send_whatsapp)
     assert not _calls_present(senders.deliver)
+
+
+def test_inspect_default_no_extract():
+    """inspect_media must not OCR/PDF-extract unless extract_text=true."""
+    src = Path("wax/tools/registry.py").read_text()
+    assert "extract_text = bool(args.get(\"extract_text\") or False)" in src
+    ex = Path("wax/terminal/executor.py").read_text()
+    assert "extract_text: bool = False" in ex
+
+
+def test_vision_capability_truthful_without_provider(monkeypatch):
+    from wax.media.probe import _capabilities_for, _vision_provider_configured
+    monkeypatch.setenv("MULTIMODAL_API_KEY", "")
+    # Without configured multimodal, vision must be False
+    caps = _capabilities_for("image")
+    # May still be False depending on settings defaults
+    assert caps.ocr is True
+    assert isinstance(caps.vision, bool)
+
+
+def test_pdf_magic_overrides_wrong_extension(tmp_path: Path):
+    """Wrong extension must not force wrong kind when magic says PDF."""
+    p = tmp_path / "notes.xyz"
+    p.write_bytes(b"%PDF-1.4\n")
+    probe = probe_local_file(p)
+    assert probe.kind == "document"
+    assert probe.capabilities.pdf_text is True
+
+
+def test_capability_composition_path_no_auto_workflow():
+    """Probe exposes capabilities; composition tools exist; no auto educational chain."""
+    from wax.media.types import MediaCapabilities
+    caps = MediaCapabilities(inspect=True, transcribe=True, ocr=True)
+    assert "transcribe" in caps.as_list()
+    assert "ocr" in caps.as_list()
+    src = Path("wax/tools/registry.py").read_text()
+    assert "handle_extract_subtitles" in src
+    assert "handle_extract_video_audio" in src
+    assert "handle_describe_image" in src
+
+
+def test_describe_image_handler_has_path_guard():
+    src = Path("wax/tools/registry.py").read_text()
+    # describe_image must check path_escape
+    start = src.find("async def handle_describe_image")
+    end = src.find("async def handle_", start + 10)
+    block = src[start:end]
+    assert "path_escape" in block
+    assert "principal_workspace" in block

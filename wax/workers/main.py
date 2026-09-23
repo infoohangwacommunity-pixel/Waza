@@ -59,7 +59,7 @@ async def process_message_response(session, work: Work) -> None:
 
     # Media prepare: probe + optional compatibility auto-STT (not a permanent workflow).
     # Long-term: fetch + probe only; intelligence calls transcribe_audio when needed.
-    # WAX_AUTO_TRANSCRIBE=0 disables compatibility auto-STT entirely.
+    # Intelligence-driven by default. Set WAX_AUTO_TRANSCRIBE=1 only for temporary compatibility.
     import os
     from wax.media.probe import probe_local_file
 
@@ -84,11 +84,11 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("media_probe_failed")
 
-    auto_stt = os.environ.get("WAX_AUTO_TRANSCRIBE", "1").strip().lower() not in (
-        "0",
-        "false",
-        "no",
-        "off",
+    auto_stt = os.environ.get("WAX_AUTO_TRANSCRIBE", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
     )
     if (
         auto_stt

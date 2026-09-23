@@ -110,7 +110,7 @@ class TerminalExecutor:
         path: str,
         *,
         principal_id: Any | None = None,
-        extract_text: bool = True,
+        extract_text: bool = False,
         max_pages: int | None = None,
     ) -> TerminalResult:
         """
@@ -214,10 +214,11 @@ class TerminalExecutor:
             "probe": probe.to_dict(),
             "evidence": evidence,
             "note": (
-                "Capabilities listed are available for this asset. "
-                "Call transcribe_audio, describe_image, extract_video_audio, "
-                "or extract_video_frames when you need those outputs. "
-                "Do not assume extraction was performed unless evidence is present."
+                "Inspection only unless extract_text=true. "
+                "Capabilities list what you may call next: transcribe_audio, "
+                "inspect_media with extract_text, describe_image, "
+                "extract_video_audio, extract_video_frames, extract_subtitles. "
+                "Do not assume extraction ran unless evidence is present."
             ),
         }
         return TerminalResult(
