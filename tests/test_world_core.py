@@ -50,10 +50,10 @@ def test_two_worlds_isolated_paths(world_root, monkeypatch):
     from wax.world import manager as mgr
 
     mgr._cache.clear()
-    ka = create_world("kennedy", migrate_legacy=False)
-    da = create_world("david", migrate_legacy=False)
-    write_file(ka, "workspace/secret.txt", "kennedy-only")
-    # David cannot resolve Kennedy paths through his world
+    ka = create_world("principal_a", migrate_legacy=False)
+    da = create_world("principal_b", migrate_legacy=False)
+    write_file(ka, "workspace/secret.txt", "principal-a-only")
+    # Principal B cannot resolve Principal A paths through his world
     with pytest.raises(PathEscape):
         resolve_under_world(da.root, str(ka.root / "workspace" / "secret.txt"))
     # Absolute path to other world

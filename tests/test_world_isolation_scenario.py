@@ -1,18 +1,17 @@
 """
-Kennedy scenario (local simulation).
+Cross-principal isolation and persistence scenario (synthetic principals only).
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 
 import pytest
 
 
 @pytest.fixture
-def kennedy_env(tmp_path, monkeypatch):
+def world_env(tmp_path, monkeypatch):
     root = tmp_path / "ws"
     root.mkdir()
     monkeypatch.setenv("WAX_WORKSPACE_ROOT", str(root))
@@ -25,38 +24,39 @@ def kennedy_env(tmp_path, monkeypatch):
     return root
 
 
-def test_kennedy_discover_exec_echo(kennedy_env):
+def test_discover_and_exec_echo(world_env):
     from wax.world.manager import get_or_create_world
     from wax.world.discover import discover
     from wax.world.exec import world_exec
 
     async def _run():
-        w = get_or_create_world("kennedy")
+        w = get_or_create_world("principal_a")
         snap = discover(w)
         assert snap["lifecycle"]["state"] in ("READY", "BUSY", "DEGRADED")
-        r = await world_exec(w, argv=["echo", "hello-world"])
-        return r
+        return await world_exec(w, argv=["echo", "hello-world"])
 
     r = asyncio.run(_run())
-    if r.get("error") == "ISOLATION_UNAVAILABLE" or r.get("error") == "ISOLATION_UNAVAILABLE":
-        pytest.skip("no isolation backend")
-    if not r.get("ok") and "sandbox" in str(r.get("error") or "").lower():
+    if r.get("error") in ("ISOLATION_UNAVAILABLE",) or "sandbox" in str(r.get("error") or "").lower():
         pytest.skip(str(r))
     assert r.get("ok") is True or "hello" in (r.get("stdout") or "")
 
 
-def test_kennedy_acquire_and_reuse_if_possible(kennedy_env):
+def test_acquire_and_reuse_if_possible(world_env):
     from wax.world.manager import get_or_create_world
     from wax.world.acquire import acquire
     from wax.world.providers.base import AcquireRequest
     from wax.world.discover import discover
-    from wax.world.errors import AcquisitionFailed, IsolationUnavailable, AcquisitionUnavailable, VerificationFailed
+    from wax.world.errors import (
+        AcquisitionFailed,
+        IsolationUnavailable,
+        AcquisitionUnavailable,
+        VerificationFailed,
+    )
 
     async def _run():
-        w = get_or_create_world("kennedy")
+        w = get_or_create_world("principal_a")
         req = AcquireRequest(kind="python_package", name="six")
-        r1 = await acquire(w, req)
-        return w, r1
+        return w, await acquire(w, req)
 
     try:
         w, r1 = asyncio.run(_run())
@@ -66,12 +66,11 @@ def test_kennedy_acquire_and_reuse_if_possible(kennedy_env):
         pytest.skip(f"acquire failed: {r1}")
     assert r1["observed"]["verify_status"] == "ok"
     assert list((w.root / "software").glob("*.json"))
-    snap = discover(w)
-    names = [s.get("name") for s in snap.get("software") or []]
+    names = [s.get("name") for s in discover(w).get("software") or []]
     assert "six" in names
 
 
-def test_david_cannot_read_kennedy_file(kennedy_env):
+def test_principal_b_cannot_read_principal_a_file(world_env):
     from wax.world.manager import create_world
     from wax.world.files import write_file
     from wax.world.layout import resolve_under_world
@@ -79,8 +78,8 @@ def test_david_cannot_read_kennedy_file(kennedy_env):
     from wax.world import manager as mgr
 
     mgr._cache.clear()
-    k = create_world("kennedy", migrate_legacy=False)
-    d = create_world("david", migrate_legacy=False)
-    write_file(k, "workspace/notes.txt", "private")
+    a = create_world("principal_a", migrate_legacy=False)
+    b = create_world("principal_b", migrate_legacy=False)
+    write_file(a, "workspace/notes.txt", "private")
     with pytest.raises(PathEscape):
-        resolve_under_world(d.root, str((k.root / "workspace" / "notes.txt").resolve()))
+        resolve_under_world(b.root, str((a.root / "workspace" / "notes.txt").resolve()))
