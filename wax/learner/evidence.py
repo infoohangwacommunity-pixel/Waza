@@ -323,6 +323,26 @@ async def gather_evidence(
             pack.degraded = True
             pack.degradation_reason = "memory_retrieve_failed"
 
+    # Prerequisite gaps for concept hints (general graph, no subject hardcoding)
+    for hint in (plan.concept_hints or [])[:3]:
+        try:
+            from wax.learner.prerequisites import prerequisite_evidence_lines
+
+            for line in await prerequisite_evidence_lines(session, principal_id, hint):
+                pack.items.append(
+                    EvidenceItem(
+                        "learning",
+                        line,
+                        relevance="high",
+                        confidence=0.65,
+                        source="concept_graph",
+                        provenance={"concept": hint},
+                    )
+                )
+                pack.decision_hints.append("possible_prerequisite_gap")
+        except Exception:
+            logger.exception("prerequisite_lookup_failed")
+
     if plan.knowledge_relevant or "knowledge" in need:
         try:
             from wax.knowledge.ingest import KnowledgeIngestService

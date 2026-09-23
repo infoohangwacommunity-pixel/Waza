@@ -30,28 +30,40 @@ ToolHandler = Callable[[AsyncSession, dict[str, Any], dict[str, Any]], Awaitable
 async def handle_schedule_followup(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
+    """Legacy adapter → TemporalIntent (followup)."""
+    from datetime import datetime, timedelta, timezone
+    from wax.learner.temporal import TemporalService
+    from wax.learner.model import build_learner_model
+
     principal_id = ctx.get("principal_id")
     if not principal_id:
         return {"ok": False, "error": "no_principal"}
-    hours = float(args.get("delay_hours") or 24)
-    reason = args.get("reason") or "follow-up"
-    payload = {
-        "message_hint": args.get("message_hint"),
-        "created_by": "tutor_tool",
-    }
-    sched = SchedulerService(session)
-    action = await sched.schedule_in_hours(
+    hours = float(args.get("delay_hours") or args.get("hours") or 24)
+    reason = str(args.get("reason") or "follow-up")
+    hint = args.get("message_hint") or reason
+    tz = "UTC"
+    try:
+        model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+        tz = model.timezone or tz
+    except Exception:
+        pass
+    when = datetime.now(timezone.utc) + timedelta(hours=max(0.05, hours))
+    intent = await TemporalService(session).create_intent(
         principal_id=principal_id,
-        action_type="tutor_followup",
-        hours=hours,
-        reason=reason,
-        payload=payload,
+        purpose="followup",
+        target=reason,
+        execute_at=when,
+        timezone_name=tz,
+        original_request=reason,
+        flexibility="soft",
+        payload={"message_hint": hint, "legacy_schedule_followup": True},
     )
     return {
         "ok": True,
-        "scheduled_action_id": str(action.id),
-        "execute_at": action.execute_at.isoformat(),
-        "reason": reason,
+        "intent_id": str(intent.id),
+        "scheduled_action_id": str(intent.scheduled_action_id) if intent.scheduled_action_id else None,
+        "execute_at": intent.execute_at.isoformat(),
+        "via": "temporal_intent",
     }
 
 
@@ -618,11 +630,10 @@ async def handle_read_workspace_file(
 async def handle_schedule_continuous(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
-    """
-    Schedule a series of follow-ups (e.g. daily reminders, multi-day practice).
-    Not a hardcoded student routine — tutor decides cadence and content hints.
-    """
-    from wax.scheduler.service import SchedulerService
+    """Legacy adapter → multiple TemporalIntents."""
+    from datetime import datetime, timedelta, timezone
+    from wax.learner.temporal import TemporalService
+    from wax.learner.model import build_learner_model
 
     principal_id = ctx.get("principal_id")
     if not principal_id:
@@ -632,26 +643,36 @@ async def handle_schedule_continuous(
         hours_list = [hours_list]
     reason = args.get("reason") or "ongoing follow-up"
     hint = args.get("message_hint") or reason
-    sched = SchedulerService(session)
+    tz = "UTC"
+    try:
+        model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+        tz = model.timezone or tz
+    except Exception:
+        pass
+    svc = TemporalService(session)
     created = []
+    now = datetime.now(timezone.utc)
     for h in list(hours_list)[:12]:
         try:
             hours = float(h)
         except (TypeError, ValueError):
             continue
-        action = await sched.schedule_in_hours(
+        when = now + timedelta(hours=max(0.05, hours))
+        intent = await svc.create_intent(
             principal_id=principal_id,
-            action_type="tutor_followup",
-            hours=max(0.05, hours),
-            reason=reason,
-            payload={"message_hint": hint, "series": True},
+            purpose="followup",
+            target=reason,
+            execute_at=when,
+            timezone_name=tz,
+            original_request=reason,
+            flexibility="soft",
+            payload={"message_hint": hint, "legacy_schedule_continuous": True, "series": True},
         )
-        created.append({"id": str(action.id), "hours": hours, "at": action.execute_at.isoformat()})
-    return {"ok": True, "scheduled": created, "count": len(created)}
+        created.append({"intent_id": str(intent.id), "hours": hours, "at": intent.execute_at.isoformat()})
+    return {"ok": True, "scheduled": created, "count": len(created), "via": "temporal_intent"}
 
 
-HANDLERS["write_workspace_file"] = handle_write_workspace_file
-HANDLERS["read_workspace_file"] = handle_read_workspace_file
+
 HANDLERS["schedule_continuous"] = handle_schedule_continuous
 
 
@@ -1066,18 +1087,35 @@ async def handle_schedule_at(
             when = when.replace(tzinfo=ZoneInfo(str(tz_name)))
         except Exception:
             when = when.replace(tzinfo=timezone.utc)
-    action = await SchedulerService(session).schedule_at(
+    from wax.learner.temporal import TemporalService
+    from wax.learner.model import build_learner_model
+
+    purpose = str(args.get("action_type") or "tutor_followup")
+    if purpose in ("tutor_followup", "reminder", "review"):
+        purpose_map = {"tutor_followup": "followup", "reminder": "reminder", "review": "review"}
+        purpose = purpose_map.get(purpose, "followup")
+    tz = tz_name or "UTC"
+    try:
+        model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+        tz = model.timezone or tz
+    except Exception:
+        pass
+    intent = await TemporalService(session).create_intent(
         principal_id=principal_id,
-        action_type=str(args.get("action_type") or "tutor_followup"),
+        purpose=purpose if purpose in ("reminder", "review", "followup", "deadline") else "followup",
+        target=str(args.get("reason") or args.get("message_hint") or "follow-up"),
         execute_at=when,
-        reason=args.get("reason"),
-        payload={"message_hint": args.get("message_hint")},
-        timezone_name=tz_name,
+        timezone_name=tz,
+        original_request=str(args.get("reason") or ""),
+        flexibility=str(args.get("flexibility") or "hard"),
+        payload={"message_hint": args.get("message_hint"), "legacy_schedule_at": True},
     )
     return {
         "ok": True,
-        "scheduled_action_id": str(action.id),
-        "execute_at": action.execute_at.isoformat() if action.execute_at else None,
+        "scheduled_action_id": str(intent.scheduled_action_id) if intent.scheduled_action_id else None,
+        "intent_id": str(intent.id),
+        "execute_at": intent.execute_at.isoformat() if intent.execute_at else None,
+        "via": "temporal_intent",
     }
 
 

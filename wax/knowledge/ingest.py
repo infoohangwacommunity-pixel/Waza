@@ -38,6 +38,31 @@ class KnowledgeIngestService:
         text: str,
         kind: str = "text",
     ) -> KnowledgeSource:
+        fp = await self.content_fingerprint(text)
+        # Exact duplicate for this principal → return existing (no uncontrolled duplication)
+        stmt = (
+            select(KnowledgeSource)
+            .where(KnowledgeSource.principal_id == principal_id)
+            .order_by(KnowledgeSource.created_at.desc())
+            .limit(40)
+        )
+        existing_rows = list((await self.session.execute(stmt)).scalars().all())
+        for s in existing_rows:
+            meta = s.metadata_ if isinstance(s.metadata_, dict) else {}
+            structured = s.structured if isinstance(s.structured, dict) else {}
+            old_fp = meta.get("content_fingerprint") or structured.get("content_fingerprint")
+            if old_fp and old_fp == fp:
+                logger.info(
+                    "knowledge_duplicate_detected",
+                    source_id=str(s.id),
+                    principal_id=str(principal_id),
+                )
+                return s
+            # Same extract body
+            if (s.text_extract or "").strip() == (text or "").strip()[:200000]:
+                logger.info("knowledge_duplicate_text", source_id=str(s.id))
+                return s
+
         source = KnowledgeSource(
             id=uuid4(),
             principal_id=principal_id,
@@ -45,7 +70,20 @@ class KnowledgeIngestService:
             title=title[:500],
             status="extracted",
             text_extract=text[:200000],
+            structured={"content_fingerprint": fp},
+            metadata_={"content_fingerprint": fp, "version": 1},
         )
+        # version chain if same title exists with different fingerprint
+        for s in existing_rows:
+            if (s.title or "").strip().lower() == (title or "").strip().lower():
+                prev = (s.metadata_ or {}).get("version") if isinstance(s.metadata_, dict) else 1
+                source.metadata_ = {
+                    **(source.metadata_ or {}),
+                    "version": int(prev or 1) + 1,
+                    "supersedes_source_id": str(s.id),
+                    "content_fingerprint": fp,
+                }
+                break
         self.session.add(source)
         await self.session.flush()
         parts = _chunk_text(text)

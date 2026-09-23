@@ -975,6 +975,19 @@ class TutorService:
                 await self.session.flush()
             except Exception:
                 logger.exception("memory_work_enqueue_failed")
+            # Lightweight post-turn teaching continuity (meaningful turns only)
+            try:
+                from wax.learner.continuity import maybe_update_teaching_after_turn
+
+                await maybe_update_teaching_after_turn(
+                    self.session,
+                    principal_id=principal_id,
+                    user_text=user_text,
+                    reply_text=reply_text,
+                    tool_notes=tool_notes,
+                )
+            except Exception:
+                logger.exception("teaching_state_post_turn_failed")
 
         await agent.complete(reply_preview=reply_text)
         return {
