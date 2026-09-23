@@ -49,6 +49,33 @@ class Principal(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="principal")
 
 
+
+class World(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Personal computing world — durable system state in Postgres.
+    Volume holds files/runtimes; this row is identity + lifecycle authority.
+    world_id is independent of principal_id (owner).
+    """
+
+    __tablename__ = "worlds"
+    __table_args__ = (
+        UniqueConstraint("principal_id", name="uq_world_principal"),
+        Index("ix_world_lifecycle", "lifecycle_state"),
+    )
+
+    # independent world identity is the PK (id from UUIDPrimaryKeyMixin)
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    lifecycle_state: Mapped[str] = mapped_column(String(40), default="READY", nullable=False)
+    lifecycle_reason: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    schema_version: Mapped[int] = mapped_column(Integer, default=1)
+    disk_used_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    env_size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    root_path: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
 class InterfaceIdentity(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """Channel identity (WhatsApp number, Telegram id, etc.) linked to a Principal."""
 

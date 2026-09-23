@@ -273,7 +273,7 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="run_python",
-        description="Run a short Python snippet when calculation or generation helps.",
+        description="Run Python in the learner World (isolated). Prefer world_exec for general commands.",
         parameters={
             "type": "object",
             "properties": {"code": {"type": "string"}},
@@ -305,7 +305,7 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="workspace_command",
-        description="Run one allowed command in the workspace.",
+        description="Deprecated alias for world_exec — runs a shell command line in the World (isolated).",
         parameters={
             "type": "object",
             "properties": {"command": {"type": "string"}},

@@ -129,24 +129,18 @@ async def handle_create_artifact(
 async def handle_run_python(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
+    """Deprecated name — executes Python inside the learner World runtime, not the WAX app."""
     code = args.get("code") or ""
     if not code.strip():
         return {"ok": False, "error": "empty_code"}
-    terminal = get_terminal()
-    result = await terminal.run_python(
-        code,
-        principal_id=ctx.get("principal_id"),
-        work_id=ctx.get("work_id"),
-    )
-    return {
-        "ok": result.success,
-        "stdout": result.stdout[:8000],
-        "stderr": result.stderr[:2000],
-        "exit_code": result.exit_code,
-        "duration_ms": result.duration_ms,
-        "error": result.error,
-        "cwd": result.cwd,
-    }
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    from wax.world.manager import get_or_create_world
+    from wax.world.exec import world_exec
+
+    world = get_or_create_world(str(principal_id))
+    return await world_exec(world, script=code, budget_class="interactive")
 
 
 async def handle_present_choices(
@@ -474,26 +468,23 @@ async def handle_inspect_media(
 async def handle_workspace_command(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
-    """Run one allowed command inside the learner workspace."""
-    from wax.terminal.executor import get_terminal
+    """Deprecated — use world_exec. Runs argv in World isolation (no binary allowlist)."""
+    import shlex
+    from wax.world.manager import get_or_create_world
+    from wax.world.exec import world_exec
 
     line = (args.get("command") or "").strip()
     if not line:
         return {"ok": False, "error": "command_required"}
-    terminal = get_terminal()
-    result = await terminal.run_shell_line(
-        line,
-        principal_id=ctx.get("principal_id"),
-        work_id=ctx.get("work_id"),
-    )
-    return {
-        "ok": result.success,
-        "stdout": result.stdout[:8000],
-        "stderr": result.stderr[:2000],
-        "exit_code": result.exit_code,
-        "error": result.error,
-        "cwd": result.cwd,
-    }
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    try:
+        argv = shlex.split(line)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    world = get_or_create_world(str(principal_id))
+    return await world_exec(world, argv=argv, budget_class="interactive")
 
 
 HANDLERS["fetch_inbound_media"] = handle_fetch_inbound_media
@@ -1452,6 +1443,7 @@ async def handle_transcribe_audio(
         path,
         language=args.get("language"),
         work_id=str(ctx.get("work_id") or "") or None,
+        principal_id=str(ctx.get("principal_id") or "") or None,
     )
 
 

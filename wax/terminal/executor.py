@@ -12,7 +12,7 @@ from typing import Any
 
 from wax.config import get_settings
 from wax.observability.logging import get_logger
-from wax.terminal.sandbox import ALLOWED_BINARIES, run_sandboxed
+from wax.terminal.sandbox import run_sandboxed
 from wax.terminal.workspace import principal_workspace, work_workspace
 
 logger = get_logger(__name__)
@@ -54,14 +54,13 @@ class TerminalExecutor:
         return path
 
     def _guard_args(self, argv: list[str], cwd: Path) -> list[str] | None:
+        """Path hygiene only — no binary allowlist. Prefer World isolation."""
         if not argv:
-            return None
-        if os.path.basename(argv[0]) not in ALLOWED_BINARIES:
             return None
         safe = [argv[0]]
         for arg in argv[1:]:
             if arg.startswith("/") and "/wax-workspaces/" not in arg and not arg.startswith("/tmp/"):
-                if not str(cwd.resolve()) in arg and "/wax-artifacts/" not in arg:
+                if str(cwd.resolve()) not in arg and "/wax-artifacts/" not in arg:
                     return None
             safe.append(arg)
         return safe
@@ -147,9 +146,19 @@ class TerminalExecutor:
 
         # Optional OCR for images — only when extract_text=True (explicit)
         if extract_text and probe.kind == "image" and probe.capabilities.ocr:
-            from wax.media.ocr import ocr_image
+            from wax.media.ocr import ocr_image_async
 
-            ev = ocr_image(p, preprocess=True)
+            world_root = None
+            try:
+                from wax.world.manager import get_or_create_world
+
+                if principal_id:
+                    world_root = get_or_create_world(str(principal_id)).root
+            except Exception:
+                pass
+            ev = await ocr_image_async(
+                p, preprocess=True, principal_id=str(principal_id) if principal_id else None, world_root=world_root
+            )
             evidence.append(ev.to_dict())
             text = (ev.payload or {}).get("text") or ""
             if text:

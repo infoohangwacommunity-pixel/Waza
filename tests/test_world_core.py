@@ -111,9 +111,11 @@ def test_no_allowed_binaries_in_isolation_module():
     assert "ALLOWED_BINARIES =" not in src
 
 
-def test_sandbox_allowlist_still_documented_legacy():
+def test_sandbox_has_no_product_allowlist():
     src = Path("wax/terminal/sandbox.py").read_text()
-    assert "WAX_DISABLE_BINARY_ALLOWLIST" in src
+    assert "Command not permitted" not in src
+    from wax.terminal.sandbox import ALLOWED_BINARIES
+    assert not ALLOWED_BINARIES
 
 
 def test_path_escape_symlink(world_root, monkeypatch, tmp_path):

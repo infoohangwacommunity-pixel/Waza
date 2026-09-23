@@ -27,11 +27,9 @@ from wax.observability.logging import get_logger
 logger = get_logger(__name__)
 settings = get_settings()
 
-ALLOWED_BINARIES = {
-    "python3", "python", "node", "echo", "date", "wc", "head", "tail", "cat", "ls",
-    "file", "stat", "uname", "ffmpeg", "ffprobe", "identify", "convert", "tesseract",
-    "pdftotext", "pdfinfo", "sox", "mediainfo", "bash", "sh",
-}
+# DEPRECATED: semantic command allowlist removed. Isolation is the security boundary.
+# Kept as empty set for any residual imports; do not reintroduce product allowlists.
+ALLOWED_BINARIES: set[str] = set()
 
 
 @dataclass
@@ -103,14 +101,8 @@ async def run_sandboxed(
 ) -> SandboxResult:
     if not argv:
         return SandboxResult(False, "", "", None, 0, error="empty_command")
-    binary = os.path.basename(argv[0])
-    # Legacy path: allowlist remains for old workspace_command only.
-    # World execution uses wax.world.isolation (no semantic allowlist).
-    # Set WAX_DISABLE_BINARY_ALLOWLIST=1 to disable this product restriction during migration.
-    import os as _os
-    if _os.environ.get("WAX_DISABLE_BINARY_ALLOWLIST", "").lower() not in ("1", "true", "yes"):
-        if binary not in ALLOWED_BINARIES:
-            return SandboxResult(False, "", "", None, 0, error=f"Command not permitted: {binary}")
+    # No semantic binary allowlist. Security is isolation (bwrap/docker) + resources.
+    # Prefer wax.world.isolation.run_isolated for new code.
 
     timeout = timeout or float(settings.terminal_timeout_seconds)
     max_output = max_output or int(settings.terminal_max_output_bytes)

@@ -182,7 +182,7 @@ def _ffmpeg_bin() -> str | None:
     return shutil.which("ffmpeg")
 
 
-async def _ffmpeg_to_wav(src: Path, wav_out: Path) -> dict[str, Any]:
+async def _ffmpeg_to_wav(src: Path, wav_out: Path, *, principal_id: str | None = None) -> dict[str, Any]:
     src = src.resolve()
     wav_out = wav_out.resolve()
     if not src.is_file():
@@ -225,6 +225,37 @@ async def _ffmpeg_to_wav(src: Path, wav_out: Path) -> dict[str, Any]:
         "LC_ALL": "C.UTF-8",
     }
     try:
+        if principal_id:
+            from wax.world.run_tool import run_in_world
+
+            r = await run_in_world(
+                str(principal_id),
+                argv,
+                cwd_rel="workspace",
+                network_mode="none",
+                timeout_sec=90.0,
+            )
+            stderr = (r.stderr or r.error or "")[:800]
+            if (r.error or "").startswith("Timed out"):
+                return {"ok": False, "error": "ffmpeg_timeout"}
+            if not r.success:
+                logger.warning("ffmpeg_failed", stderr=stderr, src=str(src), backend=r.backend)
+                return {
+                    "ok": False,
+                    "error": "ffmpeg_failed",
+                    "detail": stderr or "no_stderr",
+                    "backend": r.backend,
+                }
+            if not wav_out.is_file() or wav_out.stat().st_size < 44:
+                return {"ok": False, "error": "ffmpeg_no_output", "detail": stderr}
+            return {
+                "ok": True,
+                "wav": str(wav_out),
+                "sample_rate": 16000,
+                "channels": 1,
+                "codec": "pcm_s16le",
+                "backend": r.backend,
+            }
         proc = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
@@ -518,6 +549,7 @@ async def transcribe_local_audio(
     language: str | None = None,
     work_id: str | None = None,
     asset_id: str | None = None,
+    principal_id: str | None = None,
 ) -> dict[str, Any]:
     """
     Transcribe local audio. Returns TranscriptionResult as dict (tool-friendly).
@@ -538,7 +570,7 @@ async def transcribe_local_audio(
     preprocessing: dict[str, Any] = {}
     if model_dir is not None:
         wav_path = p.parent / f".wax-{p.stem}-16k.wav"
-        conv = await _ffmpeg_to_wav(p, wav_path)
+        conv = await _ffmpeg_to_wav(p, wav_path, principal_id=principal_id)
         preprocessing = {k: v for k, v in conv.items() if k != "wav"}
         if conv.get("ok"):
             local = _vosk_transcribe_wav(Path(conv["wav"]), model_dir)
