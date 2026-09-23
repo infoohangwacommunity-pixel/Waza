@@ -144,13 +144,22 @@ class WorkEngine:
                 key=key,
             )
             return row
+        # Render text content for the destination channel; artifact placeholders pass through.
+        delivery_content = content
+        if content and not str(content).startswith("[artifact:"):
+            try:
+                from wax.delivery.presentation import present_for_channel
+
+                delivery_content = present_for_channel(content, channel)
+            except Exception:
+                delivery_content = content
         d = Delivery(
             id=uuid4(),
             work_id=work_id,
             principal_id=principal_id,
             channel=channel,
             target_external_id=target,
-            content=content,
+            content=delivery_content,
             status="pending",
             idempotency_key=key,
             metadata_=metadata or {},

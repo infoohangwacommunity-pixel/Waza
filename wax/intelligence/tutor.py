@@ -797,15 +797,21 @@ class TutorService:
 
         delivery_id = None
         if principal_id and target and reply_text:
+            # Message.content stays canonical (channel-neutral).
+            # Delivery.content is the channel-rendered form that will be sent.
+            from wax.delivery.presentation import present_for_channel
+
+            rendered = present_for_channel(reply_text, channel)
             delivery = Delivery(
                 id=uuid4(),
                 work_id=work.id,
                 principal_id=principal_id,
                 channel=channel,
                 target_external_id=str(target),
-                content=reply_text,
+                content=rendered,
                 status="pending",
                 idempotency_key=f"delivery:{work.id}",
+                metadata_={"canonical_preview": reply_text[:500]},
             )
             self.session.add(delivery)
             await self.session.flush()

@@ -282,15 +282,19 @@ async def process_scheduled_action(session, work: Work) -> None:
             target = await primary_channel_target(session, work.principal_id)
             if target:
                 channel, external_id = target
+                from wax.delivery.presentation import present_for_channel
+
+                rendered = present_for_channel(reply, channel)
                 delivery = Delivery(
                     id=uuid4(),
                     work_id=work.id,
                     principal_id=work.principal_id,
                     channel=channel,
                     target_external_id=external_id,
-                    content=reply,
+                    content=rendered,
                     status="pending",
                     idempotency_key=f"sched-delivery:{work.id}",
+                    metadata_={"canonical_preview": reply[:500]},
                 )
                 session.add(delivery)
                 await session.flush()

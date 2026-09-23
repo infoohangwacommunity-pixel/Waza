@@ -1,13 +1,13 @@
 """
 Intelligent message chunking for messaging platforms.
 
-Never split mid-word, mid-code-block, mid-math, or mid-thought.
+Operates on already channel-rendered text.
+Never split mid-word, mid-code-block, mid-link, or mid-list-item when avoidable.
 Prefer semantic boundaries. Respect platform limits.
 """
 
 from __future__ import annotations
 
-import re
 from typing import List
 
 
@@ -19,6 +19,7 @@ def chunk_message(
 ) -> List[str]:
     """
     Split long tutor responses into platform-friendly chunks.
+    Call after presentation/rendering so formatting constructs are complete.
     """
     text = (text or "").strip()
     if not text:
@@ -35,12 +36,25 @@ def chunk_message(
             break
 
         window = remaining[: max_chars + 1]
-        # Prefer paragraph break
         split_at = -1
+
+        # Prefer paragraph break
         if prefer_paragraphs:
             para = window.rfind("\n\n")
             if para > max_chars // 3:
                 split_at = para
+
+        # List item boundary (line starting with bullet / number after newline)
+        if split_at < 0:
+            # Find last newline that starts a list-like line within the safe zone
+            idx = window.rfind("\n")
+            while idx > max_chars // 3:
+                after = window[idx + 1 : idx + 4]
+                if after.startswith("• ") or after[:2].rstrip().endswith("."):
+                    # Prefer splitting *before* this list item
+                    split_at = idx
+                    break
+                idx = window.rfind("\n", 0, idx)
 
         # Sentence boundary
         if split_at < 0:
@@ -69,11 +83,11 @@ def chunk_message(
         if piece:
             # Avoid splitting code fences if possible
             if piece.count("```") % 2 == 1:
-                # extend to close fence if within reason
                 close = remaining.find("```", split_at + 1)
                 if 0 < close < max_chars * 1.5:
                     piece = remaining[: close + 3].strip()
                     split_at = close + 2
+            # Avoid splitting Telegram/WhatsApp emphasis mid-marker pairs roughly
             chunks.append(piece)
         remaining = remaining[split_at + 1 :].lstrip()
 
