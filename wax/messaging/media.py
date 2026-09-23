@@ -97,11 +97,23 @@ async def fetch_telegram_media(file_id: str, principal_id: Any, filename_hint: s
             name = f"{name}.oga"
     dest_dir = principal_workspace(principal_id) / "media"
     path = safe_write_bytes(dest_dir, name, data)
+    lower = str(path).lower()
+    mime = None
+    if lower.endswith((".oga", ".ogg", ".opus")):
+        mime = "audio/ogg"
+    elif lower.endswith((".mp4", ".mov", ".mkv", ".m4v")):
+        mime = "video/mp4"
+    elif lower.endswith((".jpg", ".jpeg")):
+        mime = "image/jpeg"
+    elif lower.endswith(".png"):
+        mime = "image/png"
+    elif lower.endswith(".pdf"):
+        mime = "application/pdf"
     return {
         "ok": True,
         "path": str(path),
         "size": len(data),
-        "mime": "audio/ogg" if str(path).lower().endswith((".oga", ".ogg", ".opus")) else None,
+        "mime": mime,
         "sha256": content_hash(data),
         "channel": "telegram",
         "file_id": file_id,

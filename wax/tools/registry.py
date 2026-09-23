@@ -429,20 +429,47 @@ async def handle_list_workspace(
 async def handle_inspect_media(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
+    """Probe media and optionally extract text (OCR/PDF). Does not auto-transcribe."""
     from wax.terminal.executor import get_terminal
+    from wax.terminal.workspace import principal_workspace
+    from pathlib import Path as P
 
-    path = args.get("path")
+    path = args.get("path") or ctx.get("local_media_path")
     if not path:
         return {"ok": False, "error": "path_required"}
+    principal_id = ctx.get("principal_id")
+    if principal_id:
+        base = principal_workspace(principal_id)
+        try:
+            resolved = P(path).resolve()
+            if not str(resolved).startswith(str(base.resolve())):
+                return {"ok": False, "error": "path_escape"}
+        except Exception:
+            return {"ok": False, "error": "invalid_path"}
+    extract_text = args.get("extract_text")
+    if extract_text is None:
+        extract_text = True
+    max_pages = args.get("max_pages")
     terminal = get_terminal()
-    result = await terminal.inspect_media_file(path, principal_id=ctx.get("principal_id"))
-    return {
+    result = await terminal.inspect_media_file(
+        path,
+        principal_id=principal_id,
+        extract_text=bool(extract_text),
+        max_pages=int(max_pages) if max_pages is not None else None,
+    )
+    out: dict[str, Any] = {
         "ok": result.success,
         "stdout": result.stdout[:8000],
         "stderr": result.stderr[:1500],
         "error": result.error,
         "cwd": result.cwd,
     }
+    if result.structured:
+        out["probe"] = result.structured.get("probe")
+        out["evidence"] = result.structured.get("evidence")
+        out["capabilities"] = (result.structured.get("probe") or {}).get("capability_list")
+        out["note"] = result.structured.get("note")
+    return out
 
 
 async def handle_workspace_command(
@@ -1411,7 +1438,11 @@ async def handle_transcribe_audio(
                 return {"ok": False, "error": "path_escape"}
         except Exception:
             return {"ok": False, "error": "invalid_path"}
-    return await transcribe_local_audio(path, language=args.get("language"))
+    return await transcribe_local_audio(
+        path,
+        language=args.get("language"),
+        work_id=str(ctx.get("work_id") or "") or None,
+    )
 
 
 async def handle_ingest_document(
@@ -1482,6 +1513,131 @@ async def handle_ingest_document(
 
 
 
+
+async def handle_extract_video_audio(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Extract audio track from a video into workspace (ffmpeg). Does not transcribe."""
+    from pathlib import Path as P
+    import asyncio
+    import shutil
+    from wax.terminal.workspace import principal_workspace
+
+    path = (args.get("path") or ctx.get("local_media_path") or "").strip()
+    principal_id = ctx.get("principal_id")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    base = principal_workspace(principal_id)
+    try:
+        src = P(path).resolve()
+        if not str(src).startswith(str(base.resolve())):
+            return {"ok": False, "error": "path_escape"}
+    except Exception:
+        return {"ok": False, "error": "invalid_path"}
+    if not src.is_file():
+        return {"ok": False, "error": "file_not_found"}
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"ok": False, "error": "ffmpeg_not_found"}
+    out = base / "tmp" / f"{src.stem}-audio.wav"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    argv = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out),
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
+    )
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"ok": False, "error": "ffmpeg_timeout"}
+    if proc.returncode != 0 or not out.is_file():
+        return {
+            "ok": False,
+            "error": "extract_audio_failed",
+            "detail": (err or b"").decode("utf-8", errors="replace")[:300],
+        }
+    return {
+        "ok": True,
+        "path": str(out),
+        "kind": "audio",
+        "note": "Audio extracted. Call transcribe_audio on this path if you need a transcript.",
+        "capabilities": ["transcribe", "inspect"],
+    }
+
+
+async def handle_extract_video_frames(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Extract a limited number of frames from video (ffmpeg). Cap enforced."""
+    from pathlib import Path as P
+    import asyncio
+    import shutil
+    from wax.terminal.workspace import principal_workspace
+
+    path = (args.get("path") or ctx.get("local_media_path") or "").strip()
+    principal_id = ctx.get("principal_id")
+    if not path:
+        return {"ok": False, "error": "path_required"}
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    base = principal_workspace(principal_id)
+    try:
+        src = P(path).resolve()
+        if not str(src).startswith(str(base.resolve())):
+            return {"ok": False, "error": "path_escape"}
+    except Exception:
+        return {"ok": False, "error": "invalid_path"}
+    if not src.is_file():
+        return {"ok": False, "error": "file_not_found"}
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return {"ok": False, "error": "ffmpeg_not_found"}
+    max_frames = min(int(args.get("max_frames") or 3), 8)
+    fps = float(args.get("fps") or 0.2)  # ~1 frame / 5s default sampling intent
+    out_dir = base / "tmp" / f"{src.stem}-frames"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    pattern = str(out_dir / "frame-%03d.jpg")
+    # fps filter with frame limit via -frames:v
+    argv = [
+        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+        "-i", str(src),
+        "-vf", f"fps={fps}",
+        "-frames:v", str(max_frames),
+        pattern,
+    ]
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        env={"PATH": "/usr/local/bin:/usr/bin:/bin", "LANG": "C.UTF-8"},
+    )
+    try:
+        _, err = await asyncio.wait_for(proc.communicate(), timeout=120.0)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.wait()
+        return {"ok": False, "error": "ffmpeg_timeout"}
+    frames = sorted(str(f) for f in out_dir.glob("frame-*.jpg"))
+    if not frames:
+        return {
+            "ok": False,
+            "error": "no_frames",
+            "detail": (err or b"").decode("utf-8", errors="replace")[:300],
+        }
+    return {
+        "ok": True,
+        "frames": frames[:max_frames],
+        "count": len(frames[:max_frames]),
+        "note": "Frames extracted. Call inspect_media or describe_image on a frame path if needed.",
+        "capabilities": ["ocr", "vision", "inspect"],
+    }
+
+
 # Final registry — must run AFTER every handle_* is defined
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
@@ -1532,4 +1688,6 @@ HANDLERS.update({
     "schedule_hypothesis_recheck": handle_schedule_hypothesis_recheck,
     "transcribe_audio": handle_transcribe_audio,
     "ingest_document": handle_ingest_document,
+    "extract_video_audio": handle_extract_video_audio,
+    "extract_video_frames": handle_extract_video_frames,
 })

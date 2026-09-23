@@ -332,10 +332,18 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="inspect_media",
-        description="Inspect a local media file (type, OCR) when the learner sent a photo or document.",
+        description=(
+            "Probe a local media file: kind, metadata, available capabilities, "
+            "and optional text extraction (OCR/PDF). Does not transcribe audio. "
+            "Use capabilities listed to decide next tools."
+        ),
         parameters={
             "type": "object",
-            "properties": {"path": {"type": "string"}},
+            "properties": {
+                "path": {"type": "string"},
+                "extract_text": {"type": "boolean"},
+                "max_pages": {"type": "number"},
+            },
             "required": ["path"],
         },
     ),
@@ -350,12 +358,35 @@ AVAILABLE_TOOLS = [
     ),
     ToolSpec(
         name="transcribe_audio",
-        description="Transcribe a local voice note or audio file into text. Use after media is on disk.",
+        description=(
+            "Transcribe a local audio/voice file. Returns transcript plus quality "
+            "(usable/uncertain/unusable). Do not treat uncertain/unusable as reliable user text."
+        ),
         parameters={
             "type": "object",
             "properties": {
                 "path": {"type": "string"},
                 "language": {"type": "string"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="extract_video_audio",
+        description="Extract audio track from a local video to a WAV path. Then transcribe_audio if needed.",
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="extract_video_frames",
+        description="Extract a small number of frames from a local video (capped). Inspect/OCR/describe frames as needed.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "path": {"type": "string"},
+                "max_frames": {"type": "number"},
+                "fps": {"type": "number"},
             },
         },
     ),
@@ -672,29 +703,35 @@ class TutorService:
             media_note = (
                 f"\n\n[System: inbound media available. channel={channel} "
                 f"content_type={payload.get('content_type')} media_id={payload.get('media_id')}. "
-                f"You can fetch_inbound_media then inspect_media.]"
+                f"fetch_inbound_media if not on disk, then inspect_media to see capabilities.]"
             )
         if payload.get("local_media_path"):
-            media_note += f"\n[System: media already on disk at {payload.get('local_media_path')}]"
-        if payload.get("content_type") == "audio" or (
-            payload.get("local_media_path")
-            and str(payload.get("local_media_path")).lower().endswith(
-                (".ogg", ".oga", ".mp3", ".m4a", ".wav", ".webm")
-            )
-        ):
+            media_note += f"\n[System: media on disk at {payload.get('local_media_path')}]"
+        probe = payload.get("media_probe") or {}
+        caps = payload.get("media_capabilities") or probe.get("capability_list") or []
+        if probe or caps:
             media_note += (
-                "\n[System: this looks like audio/voice. "
-                "Use transcribe_audio on the local path, then tutor from the transcript. "
-                "Do not claim you listened unless transcription succeeded.]"
+                f"\n[System: media kind={probe.get('kind', payload.get('content_type'))}; "
+                f"capabilities={caps}. "
+                f"Compose tools as needed (inspect_media, transcribe_audio, extract_video_audio, "
+                f"extract_video_frames, describe_image, ingest_document). "
+                f"Do not claim you processed media unless a tool succeeded.]"
             )
-        if payload.get("transcript"):
+        tq = payload.get("transcript_quality")
+        if payload.get("transcript") and tq == "usable":
             media_note += (
-                f"\n[System: transcript available:\n{str(payload.get('transcript'))[:4000]}]"
+                f"\n[System: usable transcript available:\n{str(payload.get('transcript'))[:4000]}]"
             )
-        if payload.get("content_type") in ("document", "image") or payload.get("local_media_path"):
+        elif payload.get("transcript") and tq in ("uncertain", "unusable"):
             media_note += (
-                "\n[System: for learner notes/PDF/photos you may inspect_media and "
-                "ingest_document so material is retrievable later for this learner only.]"
+                f"\n[System: transcription quality={tq}. "
+                f"Do not treat as reliable user text. You may ask the learner to resend or type, "
+                f"or call transcribe_audio again if appropriate. "
+                f"Snippet: {str(payload.get('transcript'))[:500]}]"
+            )
+        elif payload.get("transcript"):
+            media_note += (
+                f"\n[System: transcript present (quality unknown):\n{str(payload.get('transcript'))[:2000]}]"
             )
         user_content = user_text + media_note
         if not recent or recent[-1].get("content") != user_text:

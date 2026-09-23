@@ -17,7 +17,7 @@ class NormalizedInbound:
     external_event_id: str
     external_user_id: str
     text: str
-    content_type: str = "text"  # text | image | audio | document | interactive | other
+    content_type: str = "text"  # text | image | audio | video | document | interactive | other
     interactive_id: str | None = None
     media_id: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -113,6 +113,13 @@ def normalize_telegram_update(payload: dict[str, Any]) -> NormalizedInbound | No
         media_id = str(((message.get("voice") or message.get("audio")) or {}).get("file_id") or "")
         if not text:
             text = "[audio received]"
+    elif message.get("video") or message.get("video_note"):
+        content_type = "video"
+        media_id = str(
+            ((message.get("video") or message.get("video_note")) or {}).get("file_id") or ""
+        )
+        if not text:
+            text = "[video received]"
     elif not text:
         text = "[message]"
         content_type = "other"

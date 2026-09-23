@@ -57,40 +57,84 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("media_prepare_inline_failed")
 
-    # Auto-transcribe voice notes so the tutor receives text equivalent to typing
+    # Media prepare: probe + optional compatibility auto-STT (not a permanent workflow).
+    # Long-term: fetch + probe only; intelligence calls transcribe_audio when needed.
+    # WAX_AUTO_TRANSCRIBE=0 disables compatibility auto-STT entirely.
+    import os
+    from wax.media.probe import probe_local_file
+
     local_path = payload.get("local_media_path")
     content_type = (payload.get("content_type") or "").lower()
+    if local_path and not payload.get("media_probe"):
+        try:
+            probe = probe_local_file(str(local_path))
+            payload = {
+                **payload,
+                "media_probe": probe.to_dict(),
+                "media_capabilities": probe.capabilities.as_list(),
+            }
+            work.input_payload = payload
+            await session.flush()
+            logger.info(
+                "media_probed",
+                work_id=str(work.id),
+                kind=probe.kind,
+                capabilities=probe.capabilities.as_list(),
+            )
+        except Exception:
+            logger.exception("media_probe_failed")
+
+    auto_stt = os.environ.get("WAX_AUTO_TRANSCRIBE", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
     if (
-        local_path
+        auto_stt
+        and local_path
         and not payload.get("transcript")
         and (
             content_type == "audio"
-            or str(local_path).lower().endswith((".ogg", ".oga", ".mp3", ".m4a", ".wav", ".webm"))
+            or (payload.get("media_probe") or {}).get("kind") == "audio"
+            or str(local_path).lower().endswith((".ogg", ".oga", ".mp3", ".m4a", ".wav", ".opus"))
         )
     ):
         try:
             from wax.tools.transcription import transcribe_local_audio
 
-            tr = await transcribe_local_audio(str(local_path))
-            if tr.get("ok") and tr.get("transcript"):
-                payload = {
-                    **payload,
-                    "transcript": tr["transcript"],
-                    "text": tr["transcript"],
-                }
-                work.input_payload = payload
-                await session.flush()
+            tr = await transcribe_local_audio(
+                str(local_path), work_id=str(work.id)
+            )
+            quality = (tr.get("quality") or {}).get("status") or "unknown"
+            payload = {
+                **payload,
+                "transcription": tr,
+                "transcript_quality": quality,
+            }
+            if tr.get("ok") and tr.get("transcript") and quality == "usable":
+                # Only treat as user text when quality is usable
+                payload["transcript"] = tr["transcript"]
+                payload["text"] = tr["transcript"]
                 logger.info(
                     "audio_auto_transcribed",
                     work_id=str(work.id),
+                    quality=quality,
                     chars=len(tr["transcript"]),
+                    mean_conf=(tr.get("quality") or {}).get("mean_word_conf"),
                 )
             else:
+                # Do not substitute garbage as user text
+                if tr.get("transcript"):
+                    payload["transcript"] = tr["transcript"]
                 logger.info(
-                    "audio_auto_transcribe_skipped",
+                    "audio_auto_transcribe_not_usable",
                     work_id=str(work.id),
+                    quality=quality,
                     error=tr.get("error"),
                 )
+            work.input_payload = payload
+            await session.flush()
         except Exception:
             logger.exception("audio_auto_transcribe_failed")
 

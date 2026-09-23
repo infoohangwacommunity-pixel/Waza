@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import os
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +17,10 @@ from wax.terminal.workspace import principal_workspace, work_workspace
 
 logger = get_logger(__name__)
 settings = get_settings()
+
+# Safety ceilings for document extraction (intelligence may request less)
+DEFAULT_PDF_MAX_PAGES = 20
+HARD_PDF_MAX_PAGES = 50
 
 
 @dataclass
@@ -29,6 +33,8 @@ class TerminalResult:
     error: str | None = None
     cwd: str | None = None
     isolation: str | None = None
+    # Structured fields (optional; tools prefer these)
+    structured: dict[str, Any] = field(default_factory=dict)
 
 
 class TerminalExecutor:
@@ -55,7 +61,6 @@ class TerminalExecutor:
         safe = [argv[0]]
         for arg in argv[1:]:
             if arg.startswith("/") and "/wax-workspaces/" not in arg and not arg.startswith("/tmp/"):
-                # allow absolute only inside workspace roots
                 if not str(cwd.resolve()) in arg and "/wax-artifacts/" not in arg:
                     return None
             safe.append(arg)
@@ -67,7 +72,6 @@ class TerminalExecutor:
         if not self.enabled:
             return TerminalResult(False, "", "", None, 0, error="Terminal disabled")
         cwd = self._resolve_cwd(principal_id, work_id)
-        # Write code to workspace file then execute — avoids shell injection
         script = cwd / "_wax_run.py"
         script.write_text(code, encoding="utf-8")
         return await self.run_command(
@@ -102,38 +106,129 @@ class TerminalExecutor:
         return await self.run_command(argv, principal_id=principal_id, work_id=work_id)
 
     async def inspect_media_file(
-        self, path: str, *, principal_id: Any | None = None
+        self,
+        path: str,
+        *,
+        principal_id: Any | None = None,
+        extract_text: bool = True,
+        max_pages: int | None = None,
     ) -> TerminalResult:
+        """
+        Probe media + optionally extract text (OCR / pdftotext) when useful.
+
+        Returns TerminalResult with structured MediaProbe + optional evidence.
+        Does NOT auto-transcribe audio or call vision — intelligence decides.
+        """
+        from wax.media.probe import probe_local_file
+        from wax.media.types import ExtractionEvidence
+
         p = Path(path)
         if not p.is_file():
             return TerminalResult(False, "", "", None, 0, error="file_not_found")
-        parts: list[str] = []
-        r1 = await self.run_command(["file", str(p)], principal_id=principal_id)
-        parts.append(f"file: {r1.stdout.strip() or r1.error}")
-        if p.suffix.lower() in {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}:
-            r2 = await self.run_command(["identify", str(p)], principal_id=principal_id)
-            if r2.success:
-                parts.append(f"identify: {r2.stdout.strip()}")
+
+        probe = probe_local_file(p)
+        parts: list[str] = [
+            f"kind: {probe.kind}",
+            f"capabilities: {', '.join(probe.capabilities.as_list())}",
+            f"size_bytes: {probe.size_bytes}",
+        ]
+        if probe.file_description:
+            parts.append(f"file: {probe.file_description}")
+        if probe.duration_sec is not None:
+            parts.append(f"duration_sec: {probe.duration_sec}")
+        if probe.page_count is not None:
+            parts.append(f"page_count: {probe.page_count}")
+        if probe.width and probe.height:
+            parts.append(f"dimensions: {probe.width}x{probe.height}")
+
+        evidence: list[dict[str, Any]] = []
+        pages = max_pages if max_pages is not None else DEFAULT_PDF_MAX_PAGES
+        pages = max(1, min(int(pages), HARD_PDF_MAX_PAGES))
+
+        # Optional OCR for images (capability exists; running extract_text is a tool choice)
+        if extract_text and probe.kind == "image" and probe.capabilities.ocr:
             r3 = await self.run_command(["tesseract", str(p), "stdout"], principal_id=principal_id)
             if r3.success and r3.stdout.strip():
-                parts.append(f"ocr:\n{r3.stdout.strip()[:4000]}")
-        if p.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm", ".mp3", ".ogg", ".wav", ".m4a"}:
-            r4 = await self.run_command(
-                ["ffprobe", "-v", "error", "-show_format", "-show_streams", str(p)],
-                principal_id=principal_id,
-            )
-            if r4.success:
-                parts.append(f"ffprobe:\n{r4.stdout[:3000]}")
-        if p.suffix.lower() == ".pdf":
+                text = r3.stdout.strip()[:8000]
+                parts.append(f"ocr:\n{text[:4000]}")
+                status = "usable" if len(text) > 20 else "uncertain"
+                evidence.append(
+                    ExtractionEvidence(
+                        kind="ocr",
+                        processor="tesseract",
+                        payload={"text": text},
+                        quality_status=status,  # type: ignore[arg-type]
+                        provenance={"path": str(p.resolve())},
+                    ).to_dict()
+                )
+            elif extract_text:
+                evidence.append(
+                    ExtractionEvidence(
+                        kind="ocr",
+                        processor="tesseract",
+                        payload={"text": ""},
+                        quality_status="unusable",
+                        warnings=["ocr_empty_or_failed"],
+                        provenance={"path": str(p.resolve())},
+                    ).to_dict()
+                )
+
+        if extract_text and probe.kind == "document" and p.suffix.lower() == ".pdf":
             r5 = await self.run_command(["pdfinfo", str(p)], principal_id=principal_id)
             if r5.success:
                 parts.append(f"pdfinfo:\n{r5.stdout[:2000]}")
             r6 = await self.run_command(
-                ["pdftotext", "-l", "3", str(p), "-"], principal_id=principal_id
+                ["pdftotext", "-l", str(pages), str(p), "-"], principal_id=principal_id
             )
             if r6.success and r6.stdout.strip():
-                parts.append(f"pdftotext:\n{r6.stdout[:4000]}")
-        return TerminalResult(True, "\n\n".join(parts), "", 0, 0, cwd=str(p.parent))
+                text = r6.stdout.strip()[:50000]
+                parts.append(f"pdftotext:\n{text[:4000]}")
+                evidence.append(
+                    ExtractionEvidence(
+                        kind="pdf_text",
+                        processor="pdftotext",
+                        payload={"text": text, "max_pages": pages},
+                        quality_status="usable" if len(text) > 40 else "uncertain",
+                        span={"max_pages": pages, "page_count": probe.page_count},
+                        provenance={"path": str(p.resolve())},
+                    ).to_dict()
+                )
+            else:
+                evidence.append(
+                    ExtractionEvidence(
+                        kind="pdf_text",
+                        processor="pdftotext",
+                        payload={"text": "", "max_pages": pages},
+                        quality_status="unusable",
+                        warnings=["pdf_text_empty", "may_be_scanned"],
+                        span={"max_pages": pages, "page_count": probe.page_count},
+                        provenance={"path": str(p.resolve())},
+                    ).to_dict()
+                )
+
+        # Video/audio: probe only here (no auto STT)
+        if probe.kind in ("video", "audio") and probe.raw_probe.get("ffprobe"):
+            parts.append("ffprobe: available (see structured.probe)")
+
+        structured = {
+            "probe": probe.to_dict(),
+            "evidence": evidence,
+            "note": (
+                "Capabilities listed are available for this asset. "
+                "Call transcribe_audio, describe_image, extract_video_audio, "
+                "or extract_video_frames when you need those outputs. "
+                "Do not assume extraction was performed unless evidence is present."
+            ),
+        }
+        return TerminalResult(
+            True,
+            "\n\n".join(parts),
+            "",
+            0,
+            0,
+            cwd=str(p.parent),
+            structured=structured,
+        )
 
 
 def get_terminal() -> TerminalExecutor:
