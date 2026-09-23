@@ -81,9 +81,22 @@ class LearningStateService:
                 "assistance": assistance_level,
             },
         )
+        retention_info = {}
+        try:
+            from wax.learner.retention import RetentionService
+
+            retention_info = await RetentionService(self.session).record_retrieval(
+                principal_id=principal_id,
+                concept_key=label,
+                success=bool(is_correct) if is_correct is not None else True,
+                assisted=assistance_level != "independent",
+            )
+        except Exception:
+            pass
         return {
             "evidence_id": str(ev.id),
             "claim_key": claim_key,
             "mastery": getattr(state, "mastery", None),
             "confidence": getattr(state, "confidence", None),
+            "retention": retention_info,
         }

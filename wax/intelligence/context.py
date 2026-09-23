@@ -50,6 +50,36 @@ class ContextAssembler:
         tutor_system: str,
         budget: int = DEFAULT_CONTEXT_BUDGET,
     ) -> AssembledContext:
+        # Primary path: Learner Context Resolver (connected model)
+        try:
+            from wax.learner.resolver import ContextResolver
+
+            pack = await ContextResolver(self.session).resolve(
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                channel=channel,
+                user_text=user_text,
+                tutor_system=tutor_system,
+                budget=budget,
+            )
+            blocks = pack.as_assembled_blocks()
+            recent = pack.recent_messages
+            ctx = AssembledContext(
+                system_prefix=pack.system_prefix,
+                memory_block=blocks.get("memory_block") or "",
+                learning_block=blocks.get("learning_block") or "",
+                goals_block=blocks.get("goals_block") or "",
+                recent_messages=recent,
+                memories_used=pack.memories_used,
+            )
+            # attach hints for tutor if supported
+            ctx.total_chars = pack.total_chars
+            if blocks.get("decision_hints"):
+                hint_txt = "\n".join(f"- {h}" for h in blocks["decision_hints"])
+                ctx.goals_block = (ctx.goals_block or "") + f"\n--- Decision hints ---\n{hint_txt}\n"
+            return ctx
+        except Exception:
+            logger.exception("context_resolver_failed_fallback")
         platform = platform_context_block(channel)
         system_prefix = tutor_system + platform
 

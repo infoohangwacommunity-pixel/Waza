@@ -502,6 +502,15 @@ class LearnerConceptState(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     last_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    stability: Mapped[float] = mapped_column(Float, default=1.0)  # days-scale memory stability
+    difficulty: Mapped[float] = mapped_column(Float, default=0.3)  # 0 easy .. 1 hard
+    retrievability: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    lapse_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    next_review_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    independent_successes: Mapped[int] = mapped_column(Integer, default=0)
+    assisted_successes: Mapped[int] = mapped_column(Integer, default=0)
+    review_count: Mapped[int] = mapped_column(Integer, default=0)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
 
@@ -678,6 +687,88 @@ class Interaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     consumed_choice_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
+
+
+
+class LearningEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Longitudinal learner event — connects memory, mastery, schedule, teaching."""
+
+    __tablename__ = "learning_events"
+    __table_args__ = (
+        Index("ix_learning_event_principal_time", "principal_id", "observed_at"),
+        Index("ix_learning_event_kind", "principal_id", "kind"),
+        Index("ix_learning_event_concept", "principal_id", "concept_key"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    concept_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("goals.id", ondelete="SET NULL"), nullable=True
+    )
+    activity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
+    )
+    evidence_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("evidence.id", ondelete="SET NULL"), nullable=True
+    )
+    memory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
+    )
+    scheduled_action_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("scheduled_actions.id", ondelete="SET NULL"), nullable=True
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    confidence: Mapped[float] = mapped_column(Float, default=0.7)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class TemporalIntent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Scheduled intention — wake the tutor to reassess, not fire fixed wording.
+    status: requested|scheduled|due|delivered|acknowledged|completed|skipped|
+            cancelled|superseded|rescheduled|expired|suppressed
+    """
+
+    __tablename__ = "temporal_intents"
+    __table_args__ = (
+        Index("ix_temporal_intent_due", "status", "execute_at"),
+        Index("ix_temporal_intent_principal", "principal_id", "status"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    purpose: Mapped[str] = mapped_column(String(80), nullable=False)  # reminder|review|followup|deadline
+    target: Mapped[str] = mapped_column(Text, nullable=False)
+    execute_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    timezone: Mapped[str] = mapped_column(String(80), default="UTC")
+    status: Mapped[str] = mapped_column(String(40), default="scheduled")
+    urgency: Mapped[str] = mapped_column(String(40), default="normal")
+    flexibility: Mapped[str] = mapped_column(String(40), default="hard")  # hard|soft|window
+    completion_condition: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    original_request: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    original_context: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    scheduled_action_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("scheduled_actions.id", ondelete="SET NULL"), nullable=True
+    )
+    concept_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    goal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("goals.id", ondelete="SET NULL"), nullable=True
+    )
+    fulfilled_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    evaluation: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
 
 
 class ChannelLinkChallenge(Base, UUIDPrimaryKeyMixin, TimestampMixin):

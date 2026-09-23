@@ -960,6 +960,86 @@ async def handle_get_learner_state(
     return {"ok": True, "state": snap}
 
 
+
+async def handle_resolve_natural_time(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Resolve natural language time using authoritative clock + learner timezone."""
+    from wax.learner.temporal import resolve_natural_time, now_in_tz
+    from wax.learner.model import build_learner_model
+
+    principal_id = ctx.get("principal_id")
+    text = args.get("text") or args.get("when") or ""
+    tz = args.get("timezone") or "UTC"
+    if principal_id:
+        try:
+            model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+            tz = model.timezone or tz
+        except Exception:
+            pass
+    ref = now_in_tz(tz)
+    resolved = resolve_natural_time(text, reference=ref, tz_name=tz)
+    if not resolved:
+        return {"ok": False, "error": "unresolved", "timezone": tz, "now_local": ref.isoformat()}
+    return {"ok": True, **{k: v for k, v in resolved.items() if k != "execute_at"}, "execute_at": resolved["execute_at"].isoformat()}
+
+
+async def handle_schedule_intent(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Schedule a temporal *intent* (reminder/review/followup) — not fixed wording."""
+    from wax.learner.temporal import TemporalService, resolve_natural_time, now_in_tz
+    from wax.learner.model import build_learner_model
+    from datetime import datetime, timezone
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    target = (args.get("target") or args.get("reason") or "").strip()
+    if not target:
+        return {"ok": False, "error": "target_required"}
+    purpose = (args.get("purpose") or "reminder").strip()
+    tz = args.get("timezone") or "UTC"
+    try:
+        model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+        tz = model.timezone or tz
+    except Exception:
+        pass
+    when = args.get("execute_at")
+    if not when and args.get("when_text"):
+        resolved = resolve_natural_time(str(args["when_text"]), reference=now_in_tz(tz), tz_name=tz)
+        if not resolved:
+            return {"ok": False, "error": "could_not_resolve_time", "timezone": tz}
+        execute_at = resolved["execute_at"]
+        flexibility = resolved.get("flexibility") or "hard"
+    else:
+        if not when:
+            return {"ok": False, "error": "execute_at_or_when_text_required"}
+        execute_at = datetime.fromisoformat(str(when).replace("Z", "+00:00"))
+        if execute_at.tzinfo is None:
+            execute_at = execute_at.replace(tzinfo=timezone.utc)
+        flexibility = args.get("flexibility") or "hard"
+    intent = await TemporalService(session).create_intent(
+        principal_id=principal_id,
+        purpose=purpose,
+        target=target,
+        execute_at=execute_at,
+        timezone_name=tz,
+        original_request=args.get("original_request") or target,
+        flexibility=flexibility,
+        completion_condition=args.get("completion_condition"),
+        concept_key=args.get("concept_key"),
+    )
+    return {
+        "ok": True,
+        "intent_id": str(intent.id),
+        "execute_at": intent.execute_at.isoformat(),
+        "timezone": intent.timezone,
+        "status": intent.status,
+        "purpose": intent.purpose,
+    }
+
+
 async def handle_schedule_at(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1851,6 +1931,8 @@ HANDLERS.update({
     "get_current_time": handle_get_current_time,
     "get_learner_state": handle_get_learner_state,
     "schedule_at": handle_schedule_at,
+    "resolve_natural_time": handle_resolve_natural_time,
+    "schedule_intent": handle_schedule_intent,
     "pause_activity": handle_pause_activity,
     "resume_activity": handle_resume_activity,
     "set_preference": handle_set_preference,

@@ -142,6 +142,33 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
+        name="resolve_natural_time",
+        description="Resolve 'tomorrow at 10am' etc. to absolute time using learner timezone and authoritative clock. Prefer this over guessing.",
+        parameters={
+            "type": "object",
+            "properties": {"text": {"type": "string"}, "timezone": {"type": "string"}},
+            "required": ["text"],
+        },
+    ),
+    ToolSpec(
+        name="schedule_intent",
+        description="Schedule a learner intention (reminder/review/followup). Stores intent to reassess at wake time — not fixed wording. Prefer when_text for natural language times.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "purpose": {"type": "string"},
+                "target": {"type": "string"},
+                "when_text": {"type": "string"},
+                "execute_at": {"type": "string"},
+                "timezone": {"type": "string"},
+                "flexibility": {"type": "string"},
+                "completion_condition": {"type": "string"},
+                "concept_key": {"type": "string"},
+            },
+            "required": ["target"],
+        },
+    ),
+    ToolSpec(
         name="schedule_continuous",
         description="Schedule several future follow-ups. Use only when the person wants ongoing support.",
         parameters={
@@ -962,24 +989,83 @@ class TutorService:
         }
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
-        """Proactive / scheduled turn — still goes through intelligence when appropriate."""
+        """Scheduled wake: rebuild Learner Model, reassess intent, then tutor decides."""
         payload = work.input_payload or {}
         principal_id = work.principal_id
         action_type = payload.get("action_type", "tutor_followup")
         reason = payload.get("reason") or ""
         hint = (payload.get("payload") or {}).get("message_hint") or reason
+        inner = payload.get("payload") or {}
 
-        memory_summary = ""
+        decision = "deliver"
+        decision_reason = "due"
+        model_summary = ""
         if principal_id:
-            memory_summary = await self.memory.get_active_summary(principal_id)
+            try:
+                from wax.learner.model import build_learner_model
+                from wax.learner.temporal import TemporalService
+
+                model = await build_learner_model(self.session, principal_id)
+                model_summary = (
+                    f"Goals: {[g.get('title') for g in model.goals[:3]]}\n"
+                    f"Activity: {(model.activities[0] if model.activities else None)}\n"
+                    f"Fragile: {[f.get('label') for f in model.fragile[:3]]}\n"
+                    f"Prefs: {[p.get('content')[:80] for p in model.preferences[:3]]}\n"
+                    f"Timezone: {model.timezone}\n"
+                )
+                # if this is a temporal_intent, evaluate
+                if action_type == "temporal_intent" or payload.get("action_type") == "temporal_intent":
+                    from wax.db.models import ScheduledAction, TemporalIntent
+                    from sqlalchemy import select
+
+                    intent = None
+                    sa_id = payload.get("scheduled_action_id") or work.input_payload.get("scheduled_action_id")
+                    # load by target match
+                    stmt = (
+                        select(TemporalIntent)
+                        .where(
+                            TemporalIntent.principal_id == principal_id,
+                            TemporalIntent.status.in_(["scheduled", "due", "rescheduled"]),
+                        )
+                        .order_by(TemporalIntent.execute_at.asc())
+                        .limit(5)
+                    )
+                    intents = list((await self.session.execute(stmt)).scalars().all())
+                    for it in intents:
+                        if it.target and reason and it.target[:80] in reason or (reason and reason[:80] in (it.target or "")):
+                            intent = it
+                            break
+                    if not intent and intents:
+                        intent = intents[0]
+                    if intent:
+                        ev = await TemporalService(self.session).evaluate_due_intent(
+                            intent, model.to_dict()
+                        )
+                        decision = ev.get("decision") or "deliver"
+                        decision_reason = ev.get("reason") or ""
+                        if decision in ("suppress", "fulfilled"):
+                            return {
+                                "reply": None,
+                                "action_type": action_type,
+                                "decision": decision,
+                                "reason": decision_reason,
+                                "suppressed": True,
+                            }
+            except Exception:
+                from wax.observability.logging import get_logger
+                get_logger(__name__).exception("scheduled_learner_model_failed")
+                model_summary = await self.memory.get_active_summary(principal_id)
 
         system = (
             TUTOR_SYSTEM
-            + "\n\nThis is a scheduled follow-up you previously decided was useful.\n"
-            + f"Reason: {reason}\nHint: {hint}\n\n"
-            + "--- Learner understanding ---\n"
-            + (memory_summary or "Sparse history.")
-            + "\nWrite a natural, useful follow-up message. Do not spam. If it no longer seems useful, keep it brief and gentle.\n"
+            + "\n\nThis is a scheduled wake. You must reassess whether the intention is still useful.\n"
+            + f"Original reason: {reason}\nHint: {hint}\n"
+            + f"Evaluation decision: {decision} ({decision_reason})\n\n"
+            + "--- Learner model now ---\n"
+            + (model_summary or "Sparse history.")
+            + "\n\nIf the learner is deep in study and the reminder is non-urgent, acknowledge gently without derailing.\n"
+            + "If the intention appears already completed, say almost nothing or skip.\n"
+            + "Do not spam. Write a natural useful message only if still valuable.\n"
         )
 
         response = await self.intelligence.complete(
@@ -988,7 +1074,7 @@ class TutorService:
                     ChatMessage(role="system", content=system),
                     ChatMessage(
                         role="user",
-                        content="Compose the follow-up message for this learner now.",
+                        content="Compose the follow-up message for this learner now, using current learner state.",
                     ),
                 ],
                 temperature=0.6,
@@ -996,5 +1082,10 @@ class TutorService:
             ),
             allow_fallback=True,
         )
-        reply = (response.content or "Just checking in — how is your learning going?").strip()
-        return {"reply": reply, "action_type": action_type}
+        reply = (response.content or "").strip()
+        return {
+            "reply": reply,
+            "action_type": action_type,
+            "decision": decision,
+            "reason": decision_reason,
+        }
