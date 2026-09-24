@@ -711,8 +711,9 @@ async def recovery_loop() -> None:
                     from wax.publication.service import PublicationService
                     n_exp = await PublicationService(session).expire_due(limit=200)
                     n_clean = await PublicationService(session).cleanup_expired(limit=50)
+                    n_rec = await PublicationService(session).recover_failed(limit=20)
                     if n_exp or n_clean:
-                        logger.info("publication_lifecycle", expired=n_exp, cleaned=n_clean)
+                        logger.info("publication_lifecycle", expired=n_exp, cleaned=n_clean, recovered=n_rec)
                 except Exception:
                     logger.exception("publication_lifecycle_error")
                 if cycle % 10 == 0:

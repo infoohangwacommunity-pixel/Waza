@@ -158,3 +158,25 @@ def read_bytes(uri_or_key: str) -> bytes:
             key = key[len(prefix) :]
         return storage.get(key)
     return storage.get(uri_or_key)
+
+
+def delete_uri(uri: str) -> None:
+    """Idempotent delete by storage URI (local:// or s3://)."""
+    if not uri:
+        return
+    storage = get_storage()
+    try:
+        if uri.startswith("local://"):
+            storage.delete(uri[len("local://") :])
+            return
+        if uri.startswith("s3://"):
+            parts = uri[5:].split("/", 1)
+            key = parts[1] if len(parts) > 1 else parts[0]
+            prefix = (os.environ.get("WAX_S3_PREFIX") or "wax/").rstrip("/") + "/"
+            if key.startswith(prefix):
+                key = key[len(prefix) :]
+            storage.delete(key)
+            return
+        storage.delete(uri)
+    except Exception as e:
+        logger.warning("storage_delete_uri_failed", uri_prefix=uri[:40], error=str(e)[:120])

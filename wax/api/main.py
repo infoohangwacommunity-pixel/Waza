@@ -243,7 +243,7 @@ async def serve_publication(token: str):
             content=data,
             media_type="text/html; charset=utf-8",
             headers={
-                "Cache-Control": "private, max-age=60",
+                "Cache-Control": "private, no-cache, must-revalidate",
                 "X-Robots-Tag": "noindex, nofollow, noarchive",
                 "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; media-src https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
                 "X-Content-Type-Options": "nosniff",

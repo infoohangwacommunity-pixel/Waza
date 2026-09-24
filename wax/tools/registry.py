@@ -1444,6 +1444,7 @@ async def handle_publish_web_surface(
 
     The AI decides WHEN this is useful. Do not use merely because content is long.
     Not a chat replacement. Not a permanent website.
+    Pass semantic nodes/blocks — never HTML/CSS/JS.
     """
     from wax.publication.service import PublicationService
     from wax.artifacts.access import make_download_token, public_download_url
@@ -1455,7 +1456,7 @@ async def handle_publish_web_surface(
     document = args.get("document")
     if not document:
         title = (args.get("title") or "Notes").strip()[:500]
-        blocks = args.get("blocks")
+        blocks = args.get("blocks") or args.get("nodes")
         if not blocks:
             content = args.get("content") or args.get("body") or ""
             blocks = [{"type": "paragraph", "text": content}] if content else []
@@ -1463,37 +1464,49 @@ async def handle_publish_web_surface(
             "title": title,
             "subtitle": args.get("subtitle"),
             "summary": args.get("summary"),
-            "blocks": blocks,
+            "nodes": blocks,
             "preferred_lifetime_hours": args.get("preferred_lifetime_hours"),
             "share_title": args.get("share_title"),
             "share_description": args.get("share_description"),
         }
 
     artifact_urls: dict[str, str] = {}
-    raw_blocks = document.get("blocks") if isinstance(document, dict) else []
-    for b in raw_blocks or []:
-        if not isinstance(b, dict):
-            continue
-        aid = None
-        if isinstance(b.get("artifact"), dict):
-            aid = b["artifact"].get("artifact_id")
-        if isinstance(b.get("media"), dict):
-            aid = aid or b["media"].get("artifact_id")
-        if aid and str(aid) not in artifact_urls:
-            try:
-                tok = make_download_token(str(aid), str(principal_id), ttl_seconds=86400 * 7)
-                url = public_download_url(str(aid), tok)
-                if url:
-                    artifact_urls[str(aid)] = url
-            except Exception:
-                pass
+    raw_nodes = (document.get("nodes") or document.get("blocks") or []) if isinstance(document, dict) else []
 
+    def _collect(nodes):
+        for b in nodes or []:
+            if not isinstance(b, dict):
+                continue
+            aid = None
+            if isinstance(b.get("artifact"), dict):
+                aid = b["artifact"].get("artifact_id")
+            if isinstance(b.get("media"), dict):
+                aid = aid or b["media"].get("artifact_id")
+            if aid and str(aid) not in artifact_urls:
+                try:
+                    tok = make_download_token(str(aid), str(principal_id), ttl_seconds=86400 * 7)
+                    url = public_download_url(str(aid), tok)
+                    if url:
+                        artifact_urls[str(aid)] = url
+                except Exception:
+                    pass
+            if b.get("children"):
+                _collect(b["children"])
+            if b.get("columns"):
+                for col in b["columns"]:
+                    _collect(col)
+
+    _collect(raw_nodes)
+
+    idem = args.get("idempotency_key") or ctx.get("tool_call_id") or ctx.get("work_id")
     svc = PublicationService(session)
     try:
         return await svc.create(
             principal_id=principal_id,
             document=document,
             work_id=ctx.get("work_id"),
+            parent_publication_id=args.get("parent_publication_id"),
+            idempotency_key=str(idem) if idem else None,
             artifact_download_urls=artifact_urls or None,
         )
     except Exception as e:
@@ -1504,58 +1517,16 @@ async def handle_publish_web_surface(
 async def handle_create_html_page(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
-    """Create a branded HTML artifact (ephemeral study page)."""
-    from uuid import uuid4
-    from wax.artifacts.html_page import render_branded_html
-    from wax.artifacts.storage import get_storage
-    from wax.db.models import Artifact
-    from wax.config import get_settings
-
-    if not getattr(get_settings(), "allow_html_artifacts", True):
-        return {"ok": False, "error": "html_artifacts_disabled"}
-    principal_id = ctx.get("principal_id")
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    title = args.get("title") or "Notes"
-    content = args.get("content") or args.get("body") or ""
-    html = render_branded_html(title=title, body=content)
-    from wax.artifacts.storage import store_bytes
-    uri = store_bytes(
-        principal_id,
-        f"{uuid4().hex[:8]}-page.html",
-        html.encode("utf-8"),
-        content_type="text/html; charset=utf-8",
+    """Legacy adapter → publish_web_surface (semantic paragraph body)."""
+    return await handle_publish_web_surface(
+        session,
+        {
+            "title": args.get("title") or "Notes",
+            "content": args.get("content") or args.get("body") or "",
+            "preferred_lifetime_hours": args.get("preferred_lifetime_hours"),
+        },
+        ctx,
     )
-    art = Artifact(
-        id=uuid4(),
-        principal_id=principal_id,
-        kind="html_page",
-        title=title[:500],
-        content_type="text/html",
-        storage_path=uri,
-        structured={"format": "html", "ephemeral": True, "storage_uri": uri},
-        metadata_={"source": "create_html_page"},
-    )
-    session.add(art)
-    await session.flush()
-    from wax.artifacts.access import make_download_token, public_page_url, public_download_url
-    token = make_download_token(str(art.id), str(principal_id), ttl_seconds=86400 * 7)
-    page_url = public_page_url(str(art.id), token)
-    dl_url = public_download_url(str(art.id), token)
-    return {
-        "ok": True,
-        "artifact_id": str(art.id),
-        "uri": uri,
-        "title": title,
-        "page_url": page_url,
-        "download_url": dl_url,
-        "note": (
-            "Share page_url with the learner so they can open the mini page in a browser. "
-            "Requires PUBLIC_BASE_URL (your Railway web URL). Link expires in 7 days."
-            if page_url
-            else "Set PUBLIC_BASE_URL to your Railway web URL (e.g. https://web-xxx.up.railway.app) to get openable page links."
-        ),
-    }
 
 
 async def handle_request_channel_link(
@@ -2043,6 +2014,21 @@ async def handle_world_files(
 
 
 # Final registry — must run AFTER every handle_* is defined
+
+async def handle_revoke_publication(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Revoke a publication owned by this principal (infrastructure control)."""
+    from wax.publication.service import PublicationService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    pub_id = args.get("publication_id")
+    if not pub_id:
+        return {"ok": False, "error": "publication_id_required"}
+    return await PublicationService(session).revoke(pub_id, principal_id)
+
+
 HANDLERS.update({
     "schedule_followup": handle_schedule_followup,
     "create_artifact": handle_create_artifact,
@@ -2070,6 +2056,7 @@ HANDLERS.update({
     "confirm_channel_link": handle_confirm_channel_link,
     "create_html_page": handle_create_html_page,
     "publish_web_surface": handle_publish_web_surface,
+    "revoke_publication": handle_revoke_publication,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,

@@ -291,6 +291,17 @@ AVAILABLE_TOOLS = [
         },
     ),
 
+    
+    ToolSpec(
+        name="revoke_publication",
+        description="Revoke a temporary browser surface you previously published (same learner only).",
+        parameters={
+            "type": "object",
+            "properties": {"publication_id": {"type": "string"}},
+            "required": ["publication_id"],
+        },
+    ),
+
     ToolSpec(
         name="create_html_page",  # legacy thin page; prefer publish_web_surface
 

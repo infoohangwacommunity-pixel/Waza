@@ -1,43 +1,86 @@
 # WAX Ephemeral Web Publication Architecture
 
-## Principle
+## Philosophy
 
-WAX is an AI tutor. The temporary browser surface is a **capability**, not a content type.
-The main tutor intelligence decides when a browser surface materially helps the learner.
-Infrastructure never hardcodes educational page types (no TimetablePage, NotesPage, etc.).
+WAX is an AI tutor. The temporary browser surface is a **capability**, not a content type
+and not a second chat application. The main tutor intelligence decides when a browser
+surface materially helps. Infrastructure never hardcodes educational page types.
 
-## Flow
+```
+Learner → Channel → Tutor Intelligence
+                      ↓
+              Capability decision
+                      ↓
+         publish_web_surface (semantic doc)
+                      ↓
+    validate → plan → render → store snapshot
+                      ↓
+         opaque capability URL (/p/{token})
+                      ↓
+              Browser (immutable)
+                      ↓
+         lifecycle: active → expired/revoked → cleaned
+```
 
-1. Tutor invokes `publish_web_surface` with a **semantic document** (title + blocks).
-2. `PublicationService` validates, renders via trusted renderer (WAX logo + design system), stores immutable HTML in object storage, persists `Publication` row with opaque token hash.
-3. Tool returns `page_url` = `{PUBLIC_BASE_URL}/p/{token}`.
-4. Channel delivery shares the link; learner opens it.
-5. Web service resolves token → serves snapshot (no LLM, no tutor).
-6. Worker expires and cleans storage after lifecycle policy.
+## Layers
 
-## Semantic model
+| Layer | Responsibility |
+|-------|----------------|
+| **Semantic model** (`schema.py`) | Compositional nodes: content, structure, assets, soft present-hints |
+| **Planner** (`planner.py`) | Structure analysis → TOC, counts, asset list (no educational rules) |
+| **Policy** (`policy.py`) | Lifetime bounds, state machine transitions |
+| **Renderer** (`renderer.py`) | Registry of trusted node renderers → branded HTML |
+| **Service** (`service.py`) | Create (preparing→active), access, revoke, expire, cleanup, recovery |
+| **Tokens** (`tokens.py`) | Opaque capability issuance + constant-time verify |
+| **HTTP** (`/p/{token}`) | Serve snapshot or branded unavailable state |
 
-See `wax/publication/schema.py`. Primitives include title, heading, paragraph, list, table, callout, code, artifact ref, media, section, columns, etc.
-AI never sends HTML/CSS/JS.
+## Semantic model (v1.1)
+
+Document → nodes (tree). Containers: section, card, columns, grid, expandable.
+Leaves: paragraph, heading, list, table, callout, code, formula, artifact, media, …
+AI never sends HTML/CSS/JS. Unknown fields are preserved but ignored by the renderer.
+
+## State machine
+
+`preparing → active → expired|revoked → cleaned`  
+Also: `preparing|active → failed → cleaned`
 
 ## Security
 
-- Opaque URL-safe tokens (256-bit); only keyed hash stored.
-- Principal ownership on every publication.
-- CSP, noindex, nosniff, no-referrer.
-- No arbitrary JS. Static first.
-- Artifact refs verified same-principal before embedding download links.
+- Opaque tokens (256-bit); only HMAC hash stored
+- Principal ownership on Publication + artifact refs verified same-principal
+- Strict CSP (no scripts by default), noindex, nosniff, no-referrer
+- XSS: all text escaped in trusted renderer
+- URL allowlist: http(s)/mailto only
+- Never log raw tokens or private content
 
-## Lifecycle
+## Artifact integration
 
-`active` → (`expired` | `revoked`) → `cleaned`
+Publications **reference** Artifacts; they do not copy large files.
+Expiry of a publication does not delete shared Artifacts.
+Download links are principal-bound signed URLs injected at render time.
 
-Defaults: 48h lifetime, max 7d, 24h cleanup grace after expiry.
+## Idempotency & recovery
+
+- Optional `idempotency_key` (tool_call_id / work_id) prevents duplicate active pubs
+- Create writes `preparing` row before storage; storage failure → `failed`
+- Worker recovers stuck `preparing` and cleans expired snapshots via `delete_uri`
+
+## Caching
+
+Active publications: `private, no-cache, must-revalidate` so revocation/expiry is visible.
+Expired responses: `no-store`.
 
 ## Legacy
 
-`create_html_page` remains as a thin compatibility path but new tutoring should use `publish_web_surface`.
+`create_html_page` is a thin adapter to `publish_web_surface`. Prefer the latter.
 
-## Branding
+## Extension boundary
 
-Logo: `wax/static/brand/wax-prep-logo.png` (embedded as data-URI in renderer for self-contained pages).
+Static trusted publication (this system) vs future **controlled interactive publication**
+(separate privilege, sandbox, CSP). Do not inject arbitrary JS into static publications.
+
+## Tests
+
+See `tests/test_publication.py` — tokens, policy, composition, XSS, planner TOC,
+tables, forward-compat, content-agnostic materials.

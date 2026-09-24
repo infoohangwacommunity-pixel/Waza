@@ -1,7 +1,7 @@
 """
-Cryptographically secure, opaque publication access tokens.
+Temporary capability tokens for publications.
 
-Public URL contains ONLY the token — never principal_id, work_id, or storage paths.
+Opaque, high-entropy, hashed at rest. Never log raw tokens.
 """
 
 from __future__ import annotations
@@ -13,6 +13,9 @@ import secrets
 from datetime import datetime, timezone
 
 from wax.config import get_settings
+
+# Minimum entropy: 32 bytes → 43-char urlsafe
+DEFAULT_TOKEN_BYTES = 32
 
 
 def _token_secret() -> bytes:
@@ -26,18 +29,18 @@ def _token_secret() -> bytes:
     return hashlib.sha256(raw).digest()
 
 
-def generate_public_token(nbytes: int = 32) -> str:
-    """URL-safe opaque token (default 256 bits of entropy)."""
+def generate_public_token(nbytes: int = DEFAULT_TOKEN_BYTES) -> str:
     return secrets.token_urlsafe(nbytes)
 
 
 def hash_token(token: str) -> str:
-    """Store only a keyed hash of the public token."""
     return hmac.new(_token_secret(), token.encode("utf-8"), hashlib.sha256).hexdigest()
 
 
 def tokens_match(presented: str, stored_hash: str) -> bool:
     if not presented or not stored_hash:
+        return False
+    if len(presented) < 16:
         return False
     expected = hash_token(presented)
     return hmac.compare_digest(expected, stored_hash)
