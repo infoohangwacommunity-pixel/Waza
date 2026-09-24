@@ -13,7 +13,7 @@ from datetime import timedelta
 from typing import Any, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.artifacts.storage import delete_uri, read_bytes, store_bytes
@@ -253,13 +253,38 @@ class SurfaceService:
         if html is not None:
             if len(html.encode("utf-8")) > MAX_ENTRY_BYTES:
                 return {"ok": False, "error": "entry_too_large"}
+            # Atomic optimistic concurrency: claim next revision only if still at expected.
+            base_rev = int(surface.current_revision or 0)
+            if expected_revision is not None:
+                base_rev = int(expected_revision)
+            next_rev = base_rev + 1
+            cas = await self.session.execute(
+                update(Surface)
+                .where(
+                    Surface.id == surface.id,
+                    Surface.current_revision == base_rev,
+                    Surface.principal_id == UUID(str(principal_id)),
+                )
+                .values(current_revision=next_rev)
+            )
+            if cas.rowcount != 1:
+                await self.session.refresh(surface)
+                return {
+                    "ok": False,
+                    "error": "revision_conflict",
+                    "current_revision": surface.current_revision,
+                    "expected_revision": base_rev,
+                }
+            # Keep in-memory object aligned with CAS result before writing revision bytes
+            surface.current_revision = base_rev  # _write_revision increments from this
             rev = await self._write_revision(
                 surface=surface,
                 html=html,
                 source_note=source_note,
                 scopes=list(surface.granted_scopes or []),
             )
-            surface.current_revision = rev.revision
+            # _write_revision sets current_revision = base+1; ensure matches CAS
+            surface.current_revision = next_rev
 
         surface.last_activity_at = utcnow()
         if surface.status in (SurfaceStatus.IDLE.value, SurfaceStatus.DORMANT.value):
@@ -661,6 +686,21 @@ class SurfaceService:
         await self.session.flush()
         return {"ok": True, "related_surface_ids": ids}
 
+    def _opaque_request_token(self, surface_id: UUID | str, idempotency_key: str | None) -> str:
+        """Opaque poll token. Deterministic when idempotency_key is set so retries re-derive it."""
+        if idempotency_key:
+            import hmac
+            import hashlib
+            import base64
+            from wax.surfaces.tokens import _secret
+            dig = hmac.new(
+                _secret(),
+                f"{surface_id}:{str(idempotency_key)[:200]}".encode(),
+                hashlib.sha256,
+            ).digest()
+            return base64.urlsafe_b64encode(dig).decode("ascii").rstrip("=")[:43]
+        return generate_token(24)
+
     async def accept_ai_request(
         self,
         *,
@@ -680,15 +720,17 @@ class SurfaceService:
             )
             row = existing.scalar_one_or_none()
             if row:
-                # Re-issue public request token is not stored raw; return status only
+                # Re-derive the same opaque request_id so the client can keep polling.
+                req_token = self._opaque_request_token(surface.id, idempotency_key)
                 return {
                     "ok": True,
-                    "request_id": None,
+                    "request_id": req_token,
                     "status": row.status,
                     "idempotent": True,
+                    "revision": surface.current_revision,
                 }
 
-        req_token = generate_token(24)
+        req_token = self._opaque_request_token(surface.id, idempotency_key)
         req = SurfaceAiRequest(
             id=uuid4(),
             surface_id=surface.id,

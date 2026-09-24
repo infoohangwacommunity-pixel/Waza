@@ -163,3 +163,15 @@ Expiry disables access; cleanup removes revision bytes only — never Work, memo
 - Bridge unregisters service workers
 - Capability scopes enforced server-side
 - Token remains surface-scoped, not a master credential
+
+
+## Legacy publication compatibility
+
+`wax/publication/` and `GET /p/{token}` remain as a **read-only compatibility layer**
+for capability URLs already issued before Surfaces became canonical.
+
+- AI tools `publish_web_surface`, `create_html_page`, and `revoke_publication` are
+  **removed from the active tool catalog** — the intelligence cannot create new
+  publications.
+- No new code path queues publication Work.
+- Operators may delete the package once all issued `/p/` tokens have expired.

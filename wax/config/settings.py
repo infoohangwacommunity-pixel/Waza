@@ -226,5 +226,22 @@ def validate_production_settings(settings: Settings | None = None) -> None:
         # Soft-enforce: document that production implies require
         # Actual refusal is in sandbox when app_env=production
         pass
+    # Surface origin isolation: missing dedicated origin means same-origin HTML.
+    # This is NOT the same security boundary as SURFACE_PUBLIC_ORIGIN — warn loudly.
+    so = (getattr(s, "surface_public_origin", None) or "").strip()
+    if not so:
+        import logging
+        logging.getLogger("wax.config").warning(
+            "SURFACE_PUBLIC_ORIGIN is unset in production. "
+            "AI-authored Surface HTML will be served from PUBLIC_BASE_URL "
+            "(same origin as the main app). Set SURFACE_PUBLIC_ORIGIN to a "
+            "dedicated subdomain for a real browser security principal boundary."
+        )
+    elif so.rstrip("/") == (s.public_base_url or "").rstrip("/"):
+        import logging
+        logging.getLogger("wax.config").warning(
+            "SURFACE_PUBLIC_ORIGIN equals PUBLIC_BASE_URL — no origin isolation. "
+            "Use a distinct host (e.g. https://s.example.com) for Surfaces."
+        )
     if problems:
         raise RuntimeError("Production configuration invalid: " + "; ".join(problems))
