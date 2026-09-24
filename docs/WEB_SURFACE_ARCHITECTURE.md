@@ -175,3 +175,24 @@ for capability URLs already issued before Surfaces became canonical.
   publications.
 - No new code path queues publication Work.
 - Operators may delete the package once all issued `/p/` tokens have expired.
+
+
+## Production origin (fail closed)
+
+In `APP_ENV=production`:
+
+- `SURFACE_PUBLIC_ORIGIN` **must** be set
+- It **must** differ from `PUBLIC_BASE_URL`
+- Otherwise: startup validation fails, and `GET /s/{token}` returns 503
+
+Development may fall back to `PUBLIC_BASE_URL` when `SURFACE_PUBLIC_ORIGIN` is unset.
+
+## Idempotency
+
+- `create_surface`: unique `(principal_id, idempotency_key)`; token is deterministic from those parts so URL recovers on retry
+- Surface AI: unique `(surface_id, idempotency_key)` (migration 016); request_id re-derived via HMAC
+- IntegrityError on concurrent insert → return existing resource safely
+
+## State concurrency
+
+`state_revision` column + CAS on PUT/PATCH state. Conflict → `state_conflict`.

@@ -45,3 +45,16 @@ def tokens_match(presented: str, stored_hash: str) -> bool:
 
 def scope_set(*scopes: str) -> list[str]:
     return sorted(set(scopes))
+
+
+def deterministic_token(*parts: str, nbytes: int = 32) -> str:
+    """Re-derivable opaque token from stable parts (idempotency recovery).
+
+    Not a password hash — HMAC of joined parts under the surface token secret.
+    Same inputs always yield the same url-safe token.
+    """
+    import base64
+    msg = "|".join(str(p) for p in parts).encode("utf-8")
+    dig = hmac.new(_secret(), msg, hashlib.sha256).digest()
+    # urlsafe, no padding; truncate to nbytes*4/3-ish chars
+    return base64.urlsafe_b64encode(dig).decode("ascii").rstrip("=")[: max(32, nbytes + 8)]

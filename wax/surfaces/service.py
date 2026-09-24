@@ -29,7 +29,7 @@ from wax.surfaces.policy import (
     utcnow,
 )
 from wax.surfaces.runtime import inject_runtime_bridge, render_unavailable, wrap_ai_html
-from wax.surfaces.tokens import generate_token, hash_token, tokens_match
+from wax.surfaces.tokens import generate_token, hash_token, tokens_match, deterministic_token
 
 logger = get_logger(__name__)
 
@@ -49,7 +49,30 @@ class SurfaceService:
         origin = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
         if origin:
             return origin
+        # Dev/test fallback only — production must use surface_public_origin (fail-closed at serve).
         return (self.settings.public_base_url or "").rstrip("/")
+
+    def isolated_origin_configured(self) -> bool:
+        """True when SURFACE_PUBLIC_ORIGIN is set and distinct from PUBLIC_BASE_URL."""
+        so = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
+        if not so:
+            return False
+        main = (self.settings.public_base_url or "").rstrip("/")
+        if main and so == main:
+            return False
+        return True
+
+    def require_origin_isolation(self) -> Optional[str]:
+        """In production, refuse Surfaces unless a distinct SURFACE_PUBLIC_ORIGIN is set.
+
+        Returns an error code string when serving must fail closed; None when OK.
+        """
+        env = getattr(self.settings, "app_env", "development") or "development"
+        if env != "production":
+            return None
+        if not self.isolated_origin_configured():
+            return "origin_isolation_required"
+        return None
 
     def public_url(self, token: str) -> Optional[str]:
         base = self.surface_origin()
@@ -62,7 +85,6 @@ class SurfaceService:
         dedicated = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
         if dedicated:
             return dedicated
-        # Same-origin relative: bridge uses path-only /s/{token}/api
         return ""
 
     def _default_scopes(self) -> list[str]:
@@ -109,14 +131,17 @@ class SurfaceService:
                 SurfaceStatus.ACTIVE.value,
                 SurfaceStatus.IDLE.value,
             ):
-                token_hint = None  # cannot re-issue raw token
+                # Re-derive capability token deterministically so URL is recoverable.
+                recovered = deterministic_token(
+                    "surface", str(pid), str(idempotency_key)[:200], nbytes=32
+                )
                 return {
                     "ok": True,
                     "surface_id": str(row.id),
                     "title": row.title,
                     "status": row.status,
                     "revision": row.current_revision,
-                    "page_url": None,
+                    "page_url": self.public_url(recovered),
                     "idempotent": True,
                     "expires_at": row.expires_at.isoformat() if row.expires_at else None,
                     "note": "Surface already exists for this request.",
@@ -135,7 +160,12 @@ class SurfaceService:
 
         expires = now + self.policy.resolve_lifetime(preferred_lifetime_hours)
         surface_id = uuid4()
-        token = generate_token(32)
+        if idempotency_key:
+            token = deterministic_token(
+                "surface", str(pid), str(idempotency_key)[:200], nbytes=32
+            )
+        else:
+            token = generate_token(32)
         token_h = hash_token(token)
 
         surface = Surface(
@@ -157,7 +187,40 @@ class SurfaceService:
             metadata_={"source": "create_surface"},
         )
         self.session.add(surface)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except Exception as e:
+            # Race: concurrent create with same idempotency_key
+            from sqlalchemy.exc import IntegrityError
+            if isinstance(e, IntegrityError) and idempotency_key:
+                try:
+                    await self.session.rollback()
+                except Exception:
+                    pass
+                # Re-open path via select (caller session may need refresh)
+                existing = await self.session.execute(
+                    select(Surface).where(
+                        Surface.principal_id == pid,
+                        Surface.idempotency_key == str(idempotency_key)[:200],
+                    )
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    recovered = deterministic_token(
+                        "surface", str(pid), str(idempotency_key)[:200], nbytes=32
+                    )
+                    return {
+                        "ok": True,
+                        "surface_id": str(row.id),
+                        "title": row.title,
+                        "status": row.status,
+                        "revision": row.current_revision,
+                        "page_url": self.public_url(recovered),
+                        "idempotent": True,
+                        "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+                        "note": "Surface already exists for this request.",
+                    }
+            raise
 
         try:
             rev = await self._write_revision(
@@ -418,20 +481,67 @@ class SurfaceService:
             surface.status = SurfaceStatus.ACTIVE.value
 
     async def get_state(self, surface: Surface) -> dict[str, Any]:
-        return dict(surface.state_json or {})
+        return {
+            "state": dict(surface.state_json or {}),
+            "state_revision": int(getattr(surface, "state_revision", 0) or 0),
+        }
 
-    async def set_state(self, surface: Surface, state: dict[str, Any]) -> dict[str, Any]:
+    async def set_state(
+        self,
+        surface: Surface,
+        state: dict[str, Any],
+        *,
+        expected_state_revision: int | None = None,
+    ) -> dict[str, Any]:
         if len(str(state).encode()) > MAX_STATE_JSON_BYTES:
             return {"ok": False, "error": "state_too_large"}
+        base = int(getattr(surface, "state_revision", 0) or 0)
+        if expected_state_revision is not None:
+            base = int(expected_state_revision)
+        next_rev = base + 1
+        cas = await self.session.execute(
+            update(Surface)
+            .where(
+                Surface.id == surface.id,
+                Surface.state_revision == base,
+            )
+            .values(state_json=state, state_revision=next_rev, last_activity_at=utcnow())
+        )
+        if cas.rowcount != 1:
+            await self.session.refresh(surface)
+            return {
+                "ok": False,
+                "error": "state_conflict",
+                "state_revision": getattr(surface, "state_revision", 0),
+                "expected_state_revision": base,
+            }
         surface.state_json = state
+        surface.state_revision = next_rev
         surface.last_activity_at = utcnow()
         await self.session.flush()
-        return {"ok": True}
+        return {"ok": True, "state_revision": next_rev}
 
-    async def patch_state(self, surface: Surface, patch: dict[str, Any]) -> dict[str, Any]:
+    async def patch_state(
+        self,
+        surface: Surface,
+        patch: dict[str, Any],
+        *,
+        expected_state_revision: int | None = None,
+    ) -> dict[str, Any]:
+        # CAS-read-merge-write: fail if concurrent writer changed state_revision
+        base = int(getattr(surface, "state_revision", 0) or 0)
+        if expected_state_revision is not None and int(expected_state_revision) != base:
+            return {
+                "ok": False,
+                "error": "state_conflict",
+                "state_revision": base,
+                "expected_state_revision": expected_state_revision,
+            }
         st = dict(surface.state_json or {})
         st.update(patch)
-        return await self.set_state(surface, st)
+        return await self.set_state(
+            surface, st, expected_state_revision=base
+        )
 
     async def record_event(
         self,
@@ -763,7 +873,31 @@ class SurfaceService:
         self.session.add(req)
         surface.last_ai_request_at = utcnow()
         surface.last_activity_at = utcnow()
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except Exception as e:
+            from sqlalchemy.exc import IntegrityError
+            if isinstance(e, IntegrityError) and idempotency_key:
+                try:
+                    await self.session.rollback()
+                except Exception:
+                    pass
+                existing = await self.session.execute(
+                    select(SurfaceAiRequest).where(
+                        SurfaceAiRequest.surface_id == surface.id,
+                        SurfaceAiRequest.idempotency_key == str(idempotency_key)[:200],
+                    )
+                )
+                row = existing.scalar_one_or_none()
+                if row:
+                    return {
+                        "ok": True,
+                        "request_id": self._opaque_request_token(surface.id, idempotency_key),
+                        "status": row.status,
+                        "idempotent": True,
+                        "revision": surface.current_revision,
+                    }
+            raise
         await self.record_event(
             surface=surface,
             event_type="ai_requested",

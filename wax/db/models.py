@@ -1188,6 +1188,7 @@ class SurfaceAiRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         Index("ix_surface_ai_req_surface", "surface_id", "created_at"),
         UniqueConstraint("request_token_hash", name="uq_surface_ai_request_token"),
         Index("ix_surface_ai_req_status", "status"),
+        Index("uq_surface_ai_req_idempotency", "surface_id", "idempotency_key", unique=True),
     )
 
     surface_id: Mapped[uuid.UUID] = mapped_column(

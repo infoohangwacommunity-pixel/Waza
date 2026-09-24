@@ -242,6 +242,24 @@ async def serve_surface(token: str):
     from wax.db.session import session_scope
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.runtime import render_unavailable
+    from wax.config import get_settings
+
+    # Production fail-closed: refuse AI HTML without distinct Surface origin.
+    _settings = get_settings()
+    if (_settings.app_env or "") == "production":
+        so = (getattr(_settings, "surface_public_origin", None) or "").rstrip("/")
+        main = (_settings.public_base_url or "").rstrip("/")
+        if not so or (main and so == main):
+            html = render_unavailable(reason="failed")
+            return HTMLResponse(
+                content=html,
+                status_code=503,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "X-WAX-Error": "origin_isolation_required",
+                },
+            )
 
     async with session_scope() as session:
         svc = SurfaceService(session)
@@ -292,7 +310,8 @@ async def serve_surface(token: str):
             "object-src 'none'; "
             "base-uri 'none'; "
             "form-action 'none'; "
-            "frame-ancestors 'none'"
+            "frame-ancestors 'none'; "
+            "navigate-to 'self'"
         )
         return Response(
             content=data,
@@ -333,9 +352,14 @@ async def surface_get_state(token: str, request: Request):
             return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.STATE_READ.value not in (surface.granted_scopes or []):
             return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
-        state = await svc.get_state(surface)
+        st = await svc.get_state(surface)
         return JSONResponse(
-            {"ok": True, "state": state, "revision": surface.current_revision},
+            {
+                "ok": True,
+                "state": st.get("state", st) if isinstance(st, dict) else st,
+                "state_revision": st.get("state_revision", 0) if isinstance(st, dict) else 0,
+                "revision": surface.current_revision,
+            },
             headers=cors,
         )
 
@@ -360,10 +384,19 @@ async def surface_set_state(token: str, request: Request):
             return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.STATE_WRITE.value not in (surface.granted_scopes or []):
             return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
+        body = body if isinstance(body, dict) else {}
+        expected_sr = body.pop("expected_state_revision", None)
         if request.method == "PATCH":
-            result = await svc.patch_state(surface, body if isinstance(body, dict) else {})
+            # Allow {patch: {...}} or flat merge body
+            patch = body.get("patch") if isinstance(body.get("patch"), dict) else body
+            result = await svc.patch_state(
+                surface, patch, expected_state_revision=expected_sr
+            )
         else:
-            result = await svc.set_state(surface, body if isinstance(body, dict) else {})
+            state = body.get("state") if isinstance(body.get("state"), dict) else body
+            result = await svc.set_state(
+                surface, state, expected_state_revision=expected_sr
+            )
         await session.commit()
         return JSONResponse(result, status_code=200 if result.get("ok") else 400, headers=cors)
 

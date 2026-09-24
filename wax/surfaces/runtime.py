@@ -61,7 +61,8 @@ def inject_runtime_bridge(
   const API = (API_BASE ? API_BASE.replace(/\\/$/, "") : "") + "/s/" + TOKEN + "/api";
   window.WAX = window.WAX || {{}};
   window.WAX.surface = {{
-    token: TOKEN,
+    // Capability token is intentionally NOT exposed on the object.
+    // It remains in this closure only; AI-authored code should use the methods.
     async getState() {{
       const r = await fetch(API + "/state", {{ credentials: "omit", mode: "cors" }});
       if (!r.ok) throw new Error("state_read_failed");
