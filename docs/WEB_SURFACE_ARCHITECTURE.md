@@ -123,3 +123,37 @@ Worker: expire, idle/dormant, cleanup (revision files via delete_uri).
 
 Run `alembic upgrade head` (014_web_surfaces).
 Existing publications continue to work on `/p/{token}`.
+
+## Intelligence loop (completed)
+
+```
+Learner (surface) → POST /s/{token}/api/ai
+                 → SurfaceAiRequest (opaque request_id)
+                 → Work(kind=surface_ai) queued
+                 → Worker → TutorService.handle_surface_request
+                 → SAME tutor + memory + tools
+                 → apply_ai_result (state + events; update_surface if AI chose)
+                 → GET /s/{token}/api/ai/{request_id}
+                 → GET /s/{token}/api/revision  (open tab can watch)
+```
+
+Browser never receives `work_id`.
+
+## AI tools (canonical)
+
+create_surface, update_surface, list_surfaces, inspect_surface, retain_surface, revoke_surface
+
+Publication tools removed from the tutor tool list. `/p/{token}` remains only to serve already-issued legacy URLs.
+
+## Activity vs expiry
+
+Surfaces track last_opened, last_learner_interaction, last_ai_request/response, last_revision.
+`retain_surface` sets retention_requested and extends expires_at within max policy.
+Expiry disables access; cleanup removes revision bytes only — never Work, memory, or Artifacts.
+
+## Security additions
+
+- CSP default-src none; no external img/media; worker-src none; form-action none
+- Bridge unregisters service workers
+- Capability scopes enforced server-side
+- Token remains surface-scoped, not a master credential

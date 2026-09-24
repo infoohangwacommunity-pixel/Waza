@@ -189,6 +189,57 @@ async def process_message_response(session, work: Work) -> None:
 
 
 
+
+async def process_surface_ai(session, work: Work) -> None:
+    """Surface channel → same TutorService intelligence → apply result to surface."""
+    from wax.surfaces.service import SurfaceService
+    from wax.intelligence.tutor import TutorService
+
+    payload = work.input_payload or {}
+    request_id = payload.get("request_id")
+    tutor = TutorService(session)
+    svc = SurfaceService(session)
+    try:
+        await renew_lease(session, work, work.claimed_by or "worker")
+        result = await tutor.handle_surface_request(work)
+        work.status = "completed"
+        work.completed_at = datetime.now(timezone.utc)
+        work.result_payload = {
+            "reply_preview": (result.get("reply") or "")[:400],
+            "tools": result.get("tools") or [],
+        }
+        if request_id:
+            await svc.apply_ai_result(
+                request_row_id=request_id,
+                reply=result.get("reply"),
+                tools=result.get("tools") or [],
+            )
+        await session.flush()
+        logger.info("surface_ai_completed", work_id=str(work.id))
+        # Optional channel delivery if surface work is also tied to a conversation
+        try:
+            await _attempt_deliveries(session, work.id)
+        except Exception:
+            logger.exception("surface_ai_delivery_skipped")
+    except Exception as e:
+        logger.exception("surface_ai_failed", work_id=str(work.id))
+        work.error = str(e)[:500]
+        work.error_class = "execution_failure"
+        if request_id:
+            try:
+                await svc.apply_ai_result(request_row_id=request_id, reply=None, error=str(e)[:300])
+            except Exception:
+                pass
+        if work.attempt < work.max_attempts:
+            work.status = "retrying"
+            delay = min(300, 2 ** work.attempt * 5)
+            work.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+        else:
+            work.status = "failed"
+            work.completed_at = datetime.now(timezone.utc)
+        await session.flush()
+
+
 async def process_memory_work(session, work: Work) -> None:
     """Post-turn memory — never blocks learner-facing reply."""
     from wax.memory.service import MemoryService
@@ -620,6 +671,8 @@ async def worker_loop(worker_id: str) -> None:
                     continue
                 if work.kind == "message_response":
                     await process_message_response(session, work)
+                elif work.kind == "surface_ai":
+                    await process_surface_ai(session, work)
                 elif work.kind == "memory_process":
                     await process_memory_work(session, work)
                 elif work.kind == "media_prepare":
@@ -714,6 +767,8 @@ async def recovery_loop() -> None:
                     n_rec = await PublicationService(session).recover_failed(limit=20)
                     if n_exp or n_clean:
                         logger.info("publication_lifecycle", expired=n_exp, cleaned=n_clean, recovered=n_rec)
+                except Exception:
+                    logger.exception("publication_lifecycle_error")
 
                 try:
                     from wax.surfaces.service import SurfaceService

@@ -1078,6 +1078,13 @@ class Surface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     cleaned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_learner_interaction_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_ai_request_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_ai_response_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_revision_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    retention_requested: Mapped[bool] = mapped_column(Boolean, default=False)
+    related_surface_ids: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
     # Current revision pointer
     current_revision: Mapped[int] = mapped_column(Integer, default=0)
     # Capability grants (server-side list of scopes)
@@ -1170,3 +1177,34 @@ class SurfaceEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     source: Mapped[str] = mapped_column(String(40), default="browser")
+
+
+
+class SurfaceAiRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Opaque surface→intelligence request. Browser sees request_id, never work_id."""
+
+    __tablename__ = "surface_ai_requests"
+    __table_args__ = (
+        Index("ix_surface_ai_req_surface", "surface_id", "created_at"),
+        UniqueConstraint("request_token_hash", name="uq_surface_ai_request_token"),
+        Index("ix_surface_ai_req_status", "status"),
+    )
+
+    surface_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("surfaces.id", ondelete="CASCADE"), nullable=False
+    )
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    request_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(40), default="accepted")
+    # accepted | processing | completed | failed
+    message_preview: Mapped[Optional[str]] = mapped_column(String(240), nullable=True)
+    reply_preview: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    error: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    result: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")

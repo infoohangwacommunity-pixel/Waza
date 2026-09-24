@@ -246,17 +246,19 @@ async def serve_surface(token: str):
         # CSP allows scripts from self only (AI JS runs same-origin); no remote scripts.
         # connect-src limited to same origin for gateway.
         csp = (
-            "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
-            "style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data: https:; "
-            "media-src 'self' https:; "
-            "font-src 'self' data:; "
+            "default-src 'none'; "
+            "script-src 'unsafe-inline'; "
+            "style-src 'unsafe-inline'; "
+            "img-src data: blob:; "
+            "media-src data: blob:; "
+            "font-src data:; "
             "connect-src 'self'; "
+            "worker-src 'none'; "
+            "manifest-src 'none'; "
             "frame-src 'none'; "
             "object-src 'none'; "
             "base-uri 'none'; "
-            "form-action 'self'; "
+            "form-action 'none'; "
             "frame-ancestors 'none'"
         )
         return Response(
@@ -349,16 +351,12 @@ async def surface_post_event(token: str, request: Request):
         return JSONResponse({"ok": True})
 
 
+
 @app.post("/s/{token}/api/ai")
 async def surface_ai_request(token: str, request: Request):
-    """
-    Controlled AI interaction from a surface.
-    Queues Work for the same principal — does not run LLM in the web request path.
-    """
+    """Queue same-intelligence work. Returns opaque request_id, never work_id."""
     from fastapi.responses import JSONResponse
-    from uuid import uuid4
     from wax.db.session import session_scope
-    from wax.db.models import Work
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.policy import CapabilityScope
 
@@ -369,6 +367,9 @@ async def surface_ai_request(token: str, request: Request):
     message = str((body or {}).get("message") or "").strip()
     if not message or len(message) > 8000:
         return JSONResponse({"error": "invalid_message"}, status_code=400)
+    idem = None
+    if isinstance(body, dict):
+        idem = body.get("idempotency_key") or request.headers.get("Idempotency-Key")
 
     async with session_scope() as session:
         svc = SurfaceService(session)
@@ -377,38 +378,57 @@ async def surface_ai_request(token: str, request: Request):
             return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
         if CapabilityScope.AI_REQUEST.value not in (surface.granted_scopes or []):
             return JSONResponse({"error": "forbidden"}, status_code=403)
-
-        await svc.record_event(
+        result = await svc.accept_ai_request(
             surface=surface,
-            event_type="ai_requested",
-            payload={"message_preview": message[:200]},
+            message=message,
+            context=(body or {}).get("context") if isinstance(body, dict) else {},
+            idempotency_key=str(idem) if idem else None,
         )
-        # Durable work for worker/tutor — same intelligence as channels
-        work = Work(
-            id=uuid4(),
-            principal_id=surface.principal_id,
-            kind="surface_ai",
-            status="queued",
-            input_payload={
-                "source": "surface",
-                "surface_id": str(surface.id),
-                "revision": surface.current_revision,
-                "user_text": message,
-                "context": (body or {}).get("context") if isinstance(body, dict) else {},
-                "surface_title": surface.title,
-                "surface_state_keys": list((surface.state_json or {}).keys())[:40],
-            },
-        )
-        session.add(work)
         await session.commit()
+        return JSONResponse(result)
+
+
+@app.get("/s/{token}/api/ai/{request_id}")
+async def surface_ai_status(token: str, request_id: str):
+    from fastapi.responses import JSONResponse
+    from wax.db.session import session_scope
+    from wax.surfaces.service import SurfaceService
+    from wax.surfaces.policy import CapabilityScope
+
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+        if CapabilityScope.AI_REQUEST.value not in (surface.granted_scopes or []):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        row = await svc.get_ai_request_by_token(request_id, surface)
+        if not row:
+            return JSONResponse({"error": "not_found"}, status_code=404)
         return JSONResponse(
             {
                 "ok": True,
-                "status": "accepted",
-                "work_id": str(work.id),
-                "note": "WAX is thinking — updates may appear on this surface or via chat.",
+                "status": row.status,
+                "reply": row.reply_preview,
+                "revision": surface.current_revision,
+                "error": row.error,
             }
         )
+
+
+@app.get("/s/{token}/api/revision")
+async def surface_revision_poll(token: str):
+    """Let an open browser detect updates without exposing internals."""
+    from fastapi.responses import JSONResponse
+    from wax.db.session import session_scope
+    from wax.surfaces.service import SurfaceService
+
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+        return JSONResponse(svc.revision_status(surface), headers={"Cache-Control": "no-store"})
 
 
 @app.get("/p/{token}")

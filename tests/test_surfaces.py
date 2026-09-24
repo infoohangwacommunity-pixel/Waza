@@ -113,3 +113,28 @@ def test_bridge_has_no_secrets():
     assert "SECRET" not in b
     assert "API_KEY" not in b
     assert "/s/" in b and "/api" in b
+
+
+def test_bridge_exposes_status_and_revision_not_work_id():
+    from wax.surfaces.runtime import inject_runtime_bridge
+    b = inject_runtime_bridge("TOK")
+    assert "aiStatus" in b
+    assert "watchRevision" in b
+    assert "work_id" not in b
+    assert "DATABASE" not in b
+    assert "serviceWorker" in b  # unregister
+
+
+def test_wrap_does_not_require_title_document():
+    from wax.surfaces.runtime import wrap_ai_html
+    out = wrap_ai_html("<canvas></canvas>", title="")
+    assert "canvas" in out
+    assert "WAX.surface" in out
+
+
+def test_scopes_are_least_privilege_names():
+    from wax.surfaces.policy import CapabilityScope
+    names = {s.value for s in CapabilityScope}
+    assert "view" in names
+    assert "database" not in names
+    assert "admin" not in names

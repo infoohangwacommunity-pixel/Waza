@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.artifacts.storage import delete_uri, read_bytes, store_bytes
 from wax.config import get_settings
-from wax.db.models import Surface, SurfaceEvent, SurfaceRevision, SurfaceSession
+from wax.db.models import Surface, SurfaceAiRequest, SurfaceEvent, SurfaceRevision, SurfaceSession
 from wax.observability.logging import get_logger
 from wax.surfaces.policy import (
     DEFAULT_SURFACE_POLICY,
@@ -296,6 +296,7 @@ class SurfaceService:
             source_note=(source_note or None),
         )
         self.session.add(rev)
+        surface.last_revision_at = utcnow()
         await self.session.flush()
         return rev
 
@@ -354,8 +355,10 @@ class SurfaceService:
         return text.encode("utf-8")
 
     async def record_access(self, surface: Surface) -> None:
+        now = utcnow()
         surface.access_count = int(surface.access_count or 0) + 1
-        surface.last_activity_at = utcnow()
+        surface.last_activity_at = now
+        surface.last_opened_at = now
         if surface.status in (SurfaceStatus.IDLE.value, SurfaceStatus.DORMANT.value):
             surface.status = SurfaceStatus.ACTIVE.value
 
@@ -395,7 +398,10 @@ class SurfaceService:
             source=source[:40],
         )
         self.session.add(ev)
-        surface.last_activity_at = utcnow()
+        now = utcnow()
+        surface.last_activity_at = now
+        if event_type in ("interaction", "learner_interaction", "state_changed", "save_requested"):
+            surface.last_learner_interaction_at = now
         await self.session.flush()
 
     async def list_for_principal(
@@ -542,3 +548,202 @@ class SurfaceService:
         if n:
             await self.session.flush()
         return n
+
+
+    async def inspect(self, surface_id: UUID | str, principal_id: UUID | str) -> dict[str, Any]:
+        surface = await self.session.get(Surface, UUID(str(surface_id)))
+        if not surface or str(surface.principal_id) != str(principal_id):
+            return {"ok": False, "error": "not_found"}
+        return {
+            "ok": True,
+            "surface_id": str(surface.id),
+            "title": surface.title,
+            "description": surface.description,
+            "status": surface.status,
+            "revision": surface.current_revision,
+            "expires_at": surface.expires_at.isoformat() if surface.expires_at else None,
+            "retention_requested": bool(surface.retention_requested),
+            "lifecycle_intent": surface.lifecycle_intent,
+            "related_surface_ids": list(surface.related_surface_ids or []),
+            "last_activity_at": surface.last_activity_at.isoformat() if surface.last_activity_at else None,
+            "last_opened_at": surface.last_opened_at.isoformat() if surface.last_opened_at else None,
+            "last_learner_interaction_at": (
+                surface.last_learner_interaction_at.isoformat()
+                if surface.last_learner_interaction_at
+                else None
+            ),
+            "last_ai_request_at": surface.last_ai_request_at.isoformat() if surface.last_ai_request_at else None,
+            "last_ai_response_at": surface.last_ai_response_at.isoformat() if surface.last_ai_response_at else None,
+            "work_id": str(surface.work_id) if surface.work_id else None,
+        }
+
+    async def set_retention(
+        self, surface_id: UUID | str, principal_id: UUID | str, *, keep: bool = True
+    ) -> dict[str, Any]:
+        surface = await self.session.get(Surface, UUID(str(surface_id)))
+        if not surface or str(surface.principal_id) != str(principal_id):
+            return {"ok": False, "error": "not_found"}
+        surface.retention_requested = bool(keep)
+        if keep:
+            # Extend toward max policy without exceeding it
+            surface.expires_at = utcnow() + self.policy.max_lifetime
+            surface.lifecycle_intent = "retain"
+        await self.session.flush()
+        return {
+            "ok": True,
+            "surface_id": str(surface.id),
+            "retention_requested": surface.retention_requested,
+            "expires_at": surface.expires_at.isoformat(),
+        }
+
+    async def relate(
+        self, surface_id: UUID | str, related_id: UUID | str, principal_id: UUID | str
+    ) -> dict[str, Any]:
+        surface = await self.session.get(Surface, UUID(str(surface_id)))
+        other = await self.session.get(Surface, UUID(str(related_id)))
+        if (
+            not surface
+            or not other
+            or str(surface.principal_id) != str(principal_id)
+            or str(other.principal_id) != str(principal_id)
+        ):
+            return {"ok": False, "error": "not_found"}
+        ids = list(surface.related_surface_ids or [])
+        rid = str(other.id)
+        if rid not in ids:
+            ids.append(rid)
+        surface.related_surface_ids = ids
+        await self.session.flush()
+        return {"ok": True, "related_surface_ids": ids}
+
+    async def accept_ai_request(
+        self,
+        *,
+        surface: Surface,
+        message: str,
+        context: dict[str, Any] | None = None,
+        idempotency_key: str | None = None,
+    ) -> dict[str, Any]:
+        from wax.db.models import Work
+
+        if idempotency_key:
+            existing = await self.session.execute(
+                select(SurfaceAiRequest).where(
+                    SurfaceAiRequest.surface_id == surface.id,
+                    SurfaceAiRequest.idempotency_key == str(idempotency_key)[:200],
+                )
+            )
+            row = existing.scalar_one_or_none()
+            if row:
+                # Re-issue public request token is not stored raw; return status only
+                return {
+                    "ok": True,
+                    "request_id": None,
+                    "status": row.status,
+                    "idempotent": True,
+                }
+
+        req_token = generate_token(24)
+        req = SurfaceAiRequest(
+            id=uuid4(),
+            surface_id=surface.id,
+            principal_id=surface.principal_id,
+            request_token_hash=hash_token(req_token),
+            status="accepted",
+            message_preview=(message or "")[:240],
+            idempotency_key=str(idempotency_key)[:200] if idempotency_key else None,
+        )
+        work = Work(
+            id=uuid4(),
+            principal_id=surface.principal_id,
+            kind="surface_ai",
+            status="queued",
+            input_payload={
+                "source": "surface",
+                "channel": "surface",
+                "surface_id": str(surface.id),
+                "revision": surface.current_revision,
+                "user_text": message,
+                "text": message,
+                "context": context or {},
+                "surface_title": surface.title,
+                "surface_state": surface.state_json or {},
+                "request_id": str(req.id),
+            },
+        )
+        self.session.add(work)
+        req.work_id = work.id
+        self.session.add(req)
+        surface.last_ai_request_at = utcnow()
+        surface.last_activity_at = utcnow()
+        await self.session.flush()
+        await self.record_event(
+            surface=surface,
+            event_type="ai_requested",
+            payload={"request_id": str(req.id)},
+        )
+        logger.info("surface_ai_accepted", surface_id=str(surface.id), request_id=str(req.id))
+        return {
+            "ok": True,
+            "request_id": req_token,
+            "status": "accepted",
+            "revision": surface.current_revision,
+        }
+
+    async def get_ai_request_by_token(self, token: str, surface: Surface) -> SurfaceAiRequest | None:
+        if not token or len(token) < 16:
+            return None
+        result = await self.session.execute(
+            select(SurfaceAiRequest).where(
+                SurfaceAiRequest.surface_id == surface.id,
+                SurfaceAiRequest.request_token_hash == hash_token(token),
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def apply_ai_result(
+        self,
+        *,
+        request_row_id: UUID | str,
+        reply: str | None,
+        tools: list | None = None,
+        error: str | None = None,
+    ) -> None:
+        row = await self.session.get(SurfaceAiRequest, UUID(str(request_row_id)))
+        if not row:
+            return
+        surface = await self.session.get(Surface, row.surface_id)
+        if error:
+            row.status = "failed"
+            row.error = str(error)[:300]
+        else:
+            row.status = "completed"
+            row.reply_preview = (reply or "")[:4000]
+            row.result = {"tools": tools or []}
+        if surface:
+            surface.last_ai_response_at = utcnow()
+            surface.last_activity_at = utcnow()
+            # Store latest reply in surface state under reserved key (not memory)
+            st = dict(surface.state_json or {})
+            st["_wax_last_ai"] = {
+                "status": row.status,
+                "reply": (reply or "")[:4000],
+                "revision": surface.current_revision,
+            }
+            if len(str(st).encode()) <= MAX_STATE_JSON_BYTES:
+                surface.state_json = st
+            await self.record_event(
+                surface=surface,
+                event_type="ai_completed" if not error else "ai_failed",
+                payload={"status": row.status},
+                source="worker",
+            )
+        await self.session.flush()
+
+    def revision_status(self, surface: Surface) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "revision": surface.current_revision,
+            "status": surface.status,
+            "title": surface.title,
+        }

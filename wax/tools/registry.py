@@ -1437,6 +1437,37 @@ async def handle_link_channel_identity(
 
 
 
+
+async def handle_retain_surface(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Mark a surface as important so infrastructure extends retention within policy."""
+    from wax.surfaces.service import SurfaceService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    sid = args.get("surface_id") or ctx.get("surface_id")
+    if not sid:
+        return {"ok": False, "error": "surface_id_required"}
+    keep = args.get("keep", True)
+    if isinstance(keep, str):
+        keep = keep.lower() not in ("0", "false", "no")
+    return await SurfaceService(session).set_retention(sid, principal_id, keep=bool(keep))
+
+
+async def handle_inspect_surface(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    from wax.surfaces.service import SurfaceService
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    sid = args.get("surface_id") or ctx.get("surface_id")
+    if not sid:
+        return {"ok": False, "error": "surface_id_required"}
+    return await SurfaceService(session).inspect(sid, principal_id)
+
+
 async def handle_create_surface(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1485,7 +1516,7 @@ async def handle_update_surface(
     principal_id = ctx.get("principal_id")
     if not principal_id:
         return {"ok": False, "error": "no_principal"}
-    surface_id = args.get("surface_id")
+    surface_id = args.get("surface_id") or ctx.get("surface_id")
     if not surface_id:
         return {"ok": False, "error": "surface_id_required"}
     svc = SurfaceService(session)
@@ -2158,6 +2189,8 @@ HANDLERS.update({
     "request_channel_link": handle_request_channel_link,
     "confirm_channel_link": handle_confirm_channel_link,
     "create_html_page": handle_create_html_page,
+    "retain_surface": handle_retain_surface,
+    "inspect_surface": handle_inspect_surface,
     "create_surface": handle_create_surface,
     "update_surface": handle_update_surface,
     "list_surfaces": handle_list_surfaces,

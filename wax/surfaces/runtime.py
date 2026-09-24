@@ -94,8 +94,37 @@ def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
       }}
       return r.json();
     }},
+    async aiStatus(requestId) {{
+      const r = await fetch(API + "/ai/" + encodeURIComponent(requestId), {{ credentials: "same-origin" }});
+      if (!r.ok) throw new Error("ai_status_failed");
+      return r.json();
+    }},
+    async revision() {{
+      const r = await fetch(API + "/revision", {{ credentials: "same-origin" }});
+      if (!r.ok) throw new Error("revision_failed");
+      return r.json();
+    }},
+    watchRevision(cb, ms) {{
+      ms = ms || 4000;
+      let last = null;
+      const tick = async () => {{
+        try {{
+          const info = await window.WAX.surface.revision();
+          if (last !== null && info.revision !== last && typeof cb === "function") cb(info);
+          last = info.revision;
+        }} catch (e) {{}}
+      }};
+      tick();
+      return setInterval(tick, ms);
+    }},
   }};
-  // Mark opened
+  try {{
+    if (navigator.serviceWorker) {{
+      navigator.serviceWorker.getRegistrations().then(function(rs) {{
+        rs.forEach(function(r) {{ r.unregister(); }});
+      }}).catch(function(){{}});
+    }}
+  }} catch (e) {{}}
   try {{ window.WAX.surface.event("opened", {{}}); }} catch (e) {{}}
 }})();
 </script>

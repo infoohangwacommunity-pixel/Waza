@@ -323,53 +323,24 @@ AVAILABLE_TOOLS = [
         },
     ),
 
+
     ToolSpec(
-        name="publish_web_surface",
-        description=(
-            "Publish a temporary browser surface when richer presentation, navigation, "
-            "tables, structured viewing, or downloads would materially help the learner. "
-            "Do NOT use merely because content is long. Not a chat replacement. "
-            "Pass semantic blocks (title, sections, tables, lists, callouts, artifact refs) — not HTML. "
-            "Returns page_url to share in the conversation."
-        ),
+        name="inspect_surface",
+        description="Inspect one of this learner's surfaces (title, status, revision, activity).",
+        parameters={
+            "type": "object",
+            "properties": {"surface_id": {"type": "string"}},
+        },
+    ),
+    ToolSpec(
+        name="retain_surface",
+        description="Mark a surface as important / keep it. Use when the learner asks not to delete it.",
         parameters={
             "type": "object",
             "properties": {
-                "title": {"type": "string"},
-                "subtitle": {"type": "string"},
-                "summary": {"type": "string"},
-                "blocks": {
-                    "type": "array",
-                    "description": "Semantic blocks: type in title|heading|paragraph|list|ordered_list|table|callout|code|artifact|quote|divider|section|...",
-                    "items": {"type": "object"},
-                },
-                "content": {"type": "string", "description": "Optional plain body if blocks omitted"},
-                "preferred_lifetime_hours": {"type": "number"},
-                "document": {"type": "object", "description": "Full semantic document alternative"},
+                "surface_id": {"type": "string"},
+                "keep": {"type": "boolean"},
             },
-            "required": ["title"],
-        },
-    ),
-
-    
-    ToolSpec(
-        name="revoke_publication",
-        description="Revoke a temporary browser surface you previously published (same learner only).",
-        parameters={
-            "type": "object",
-            "properties": {"publication_id": {"type": "string"}},
-            "required": ["publication_id"],
-        },
-    ),
-
-    ToolSpec(
-        name="create_html_page",  # legacy thin page; prefer publish_web_surface
-
-        description="Create a branded HTML study page; returns page_url when PUBLIC_BASE_URL is set.",
-        parameters={
-            "type": "object",
-            "properties": {"title": {"type": "string"}, "content": {"type": "string"}},
-            "required": ["title", "content"],
         },
     ),
     ToolSpec(
@@ -948,6 +919,7 @@ class TutorService:
             "content_type": payload.get("content_type"),
             "local_media_path": payload.get("local_media_path"),
             "target_external_id": payload.get("target_external_id"),
+            "surface_id": payload.get("surface_id"),
         }
 
         # Tool loop: up to a few rounds so the model can act then respond
@@ -1101,6 +1073,37 @@ class TutorService:
             "interactive": interactive_payload,
             "execution_id": str(agent.execution.id) if agent.execution else None,
         }
+
+
+    async def handle_surface_request(self, work: Work) -> dict[str, Any]:
+        """Same intelligence as messaging — surface is another channel."""
+        payload = work.input_payload or {}
+        payload.setdefault("channel", "surface")
+        payload.setdefault("text", payload.get("user_text") or "")
+        work.input_payload = payload
+        # Enrich user text with surface context (not a second brain)
+        extra = []
+        extra.append(f"[Surface channel. Title: {payload.get('surface_title') or 'untitled'}]")
+        extra.append(f"[Surface revision: {payload.get('revision')}]")
+        st = payload.get("surface_state") or {}
+        keys = list(st.keys())[:30]
+        if keys:
+            extra.append(f"[Surface state keys: {', '.join(str(k) for k in keys)}]")
+        ctx = payload.get("context") or {}
+        if ctx:
+            extra.append(f"[Surface client context keys: {', '.join(list(ctx.keys())[:20])}]")
+        extra.append(
+            "If the learner asked to change this environment, use update_surface with this surface_id. "
+            "If they asked to keep it, use retain_surface. Prefer updating this surface over creating a new one."
+        )
+        note = "\n".join(extra)
+        text = payload.get("text") or ""
+        payload["text"] = f"{text}\n\n{note}"
+        work.input_payload = payload
+        # Inject surface_id into tool context via payload
+        payload["surface_id"] = payload.get("surface_id")
+        result = await self.handle_message(work)
+        return result
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
         """Scheduled wake: rebuild Learner Model, reassess intent, then tutor decides."""
