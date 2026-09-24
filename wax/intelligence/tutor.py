@@ -94,7 +94,7 @@ Channel linking:
 - Never invent that accounts are linked without a successful confirm.
 
 Mini pages:
-- publish_web_surface publishes a temporary branded browser surface (semantic blocks, not HTML). Use when richer layout/tables/downloads help; share page_url. Prefer over create_html_page.
+- create_surface publishes an AI-authored temporary web experience (you supply HTML/CSS/JS). Use when a richer interactive surface helps. Prefer update_surface for edits to the same experience (URL stays stable). list_surfaces to find existing ones. revoke_surface to withdraw access. publish_web_surface remains for simple static semantic documents only.
 
 Activities and assessments:
 - Long-running or timed work should use durable activity/assessment tools, not only chat text.
@@ -263,6 +263,66 @@ AVAILABLE_TOOLS = [
         },
     ),
     
+    
+    ToolSpec(
+        name="create_surface",
+        description=(
+            "Create a temporary AI-authored web surface. YOU write the HTML (and optional CSS/JS) experience. "
+            "WAX hosts it securely at a stable URL. Prefer this for interactive/visual experiences. "
+            "Do not create a new surface for ordinary edits — use update_surface. "
+            "Not a chat replacement. Local UI interactions need not call AI."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "html": {"type": "string", "description": "Full HTML document or body fragment"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "lifecycle_intent": {"type": "string", "description": "temporary|workspace|session|experiment"},
+                "preferred_lifetime_hours": {"type": "number"},
+                "initial_state": {"type": "object"},
+                "parent_surface_id": {"type": "string"},
+            },
+            "required": ["html"],
+        },
+    ),
+    ToolSpec(
+        name="update_surface",
+        description="Update an existing surface in place (same URL): title, HTML revision, or state merge.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "surface_id": {"type": "string"},
+                "html": {"type": "string"},
+                "title": {"type": "string"},
+                "description": {"type": "string"},
+                "merge_state": {"type": "object"},
+                "extend_hours": {"type": "number"},
+            },
+            "required": ["surface_id"],
+        },
+    ),
+    ToolSpec(
+        name="list_surfaces",
+        description="List this learner's surfaces to continue or reference an existing one.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "number"},
+                "active_only": {"type": "boolean"},
+            },
+        },
+    ),
+    ToolSpec(
+        name="revoke_surface",
+        description="Revoke access to a surface. Does not delete durable Work or Artifacts.",
+        parameters={
+            "type": "object",
+            "properties": {"surface_id": {"type": "string"}},
+            "required": ["surface_id"],
+        },
+    ),
+
     ToolSpec(
         name="publish_web_surface",
         description=(

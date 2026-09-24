@@ -714,6 +714,18 @@ async def recovery_loop() -> None:
                     n_rec = await PublicationService(session).recover_failed(limit=20)
                     if n_exp or n_clean:
                         logger.info("publication_lifecycle", expired=n_exp, cleaned=n_clean, recovered=n_rec)
+
+                try:
+                    from wax.surfaces.service import SurfaceService
+                    ss = SurfaceService(session)
+                    n_se = await ss.expire_due(limit=200)
+                    n_si = await ss.mark_idle_dormant(limit=200)
+                    n_sc = await ss.cleanup_expired(limit=50)
+                    if n_se or n_si or n_sc:
+                        logger.info("surface_lifecycle", expired=n_se, idle_dormant=n_si, cleaned=n_sc)
+                except Exception:
+                    logger.exception("surface_lifecycle_error")
+
                 except Exception:
                     logger.exception("publication_lifecycle_error")
                 if cycle % 10 == 0:

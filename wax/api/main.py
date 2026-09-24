@@ -206,6 +206,211 @@ def run() -> None:
 
 
 
+
+
+# ─── Web Surfaces (AI-authored interactive environments) ──────────────────────
+
+@app.get("/s/{token}")
+async def serve_surface(token: str):
+    """Serve current revision of an AI-authored surface. No LLM on open."""
+    from fastapi.responses import HTMLResponse, Response
+    from wax.db.session import session_scope
+    from wax.surfaces.service import SurfaceService
+    from wax.surfaces.runtime import render_unavailable
+
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            html = render_unavailable(reason=deny or "not_found")
+            return HTMLResponse(
+                content=html,
+                status_code=410 if deny in ("expired", "revoked") else 404,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Robots-Tag": "noindex, nofollow, noarchive",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
+                },
+            )
+        data = await svc.load_entry_html(surface, public_token=token)
+        if not data:
+            html = render_unavailable(reason="failed")
+            return HTMLResponse(content=html, status_code=404, headers={"Cache-Control": "no-store"})
+        try:
+            await svc.record_access(surface)
+            await session.commit()
+        except Exception:
+            pass
+        # CSP allows scripts from self only (AI JS runs same-origin); no remote scripts.
+        # connect-src limited to same origin for gateway.
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: https:; "
+            "media-src 'self' https:; "
+            "font-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-src 'none'; "
+            "object-src 'none'; "
+            "base-uri 'none'; "
+            "form-action 'self'; "
+            "frame-ancestors 'none'"
+        )
+        return Response(
+            content=data,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "private, no-cache, must-revalidate",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+                "Content-Security-Policy": csp,
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+                "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+                "X-Frame-Options": "DENY",
+            },
+        )
+
+
+@app.get("/s/{token}/api/state")
+async def surface_get_state(token: str):
+    from fastapi.responses import JSONResponse
+    from wax.db.session import session_scope
+    from wax.surfaces.service import SurfaceService
+    from wax.surfaces.policy import CapabilityScope
+
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+        if CapabilityScope.STATE_READ.value not in (surface.granted_scopes or []):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        state = await svc.get_state(surface)
+        return JSONResponse({"ok": True, "state": state, "revision": surface.current_revision})
+
+
+@app.put("/s/{token}/api/state")
+@app.patch("/s/{token}/api/state")
+async def surface_set_state(token: str, request: Request):
+    from fastapi.responses import JSONResponse
+    from wax.db.session import session_scope
+    from wax.surfaces.service import SurfaceService
+    from wax.surfaces.policy import CapabilityScope
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+        if CapabilityScope.STATE_WRITE.value not in (surface.granted_scopes or []):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        if request.method == "PATCH":
+            result = await svc.patch_state(surface, body if isinstance(body, dict) else {})
+        else:
+            result = await svc.set_state(surface, body if isinstance(body, dict) else {})
+        await session.commit()
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+@app.post("/s/{token}/api/events")
+async def surface_post_event(token: str, request: Request):
+    from fastapi.responses import JSONResponse
+    from wax.db.session import session_scope
+    from wax.surfaces.service import SurfaceService
+    from wax.surfaces.policy import CapabilityScope
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+        if CapabilityScope.EVENT_WRITE.value not in (surface.granted_scopes or []):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+        et = str((body or {}).get("type") or "interaction")[:80]
+        payload = (body or {}).get("payload") if isinstance(body, dict) else {}
+        if not isinstance(payload, dict):
+            payload = {}
+        # Strip oversized payloads
+        if len(str(payload)) > 8000:
+            payload = {"truncated": True}
+        await svc.record_event(surface=surface, event_type=et, payload=payload)
+        await session.commit()
+        return JSONResponse({"ok": True})
+
+
+@app.post("/s/{token}/api/ai")
+async def surface_ai_request(token: str, request: Request):
+    """
+    Controlled AI interaction from a surface.
+    Queues Work for the same principal — does not run LLM in the web request path.
+    """
+    from fastapi.responses import JSONResponse
+    from uuid import uuid4
+    from wax.db.session import session_scope
+    from wax.db.models import Work
+    from wax.surfaces.service import SurfaceService
+    from wax.surfaces.policy import CapabilityScope
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+    message = str((body or {}).get("message") or "").strip()
+    if not message or len(message) > 8000:
+        return JSONResponse({"error": "invalid_message"}, status_code=400)
+
+    async with session_scope() as session:
+        svc = SurfaceService(session)
+        surface, deny = await svc.resolve_by_token(token)
+        if deny or not surface:
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+        if CapabilityScope.AI_REQUEST.value not in (surface.granted_scopes or []):
+            return JSONResponse({"error": "forbidden"}, status_code=403)
+
+        await svc.record_event(
+            surface=surface,
+            event_type="ai_requested",
+            payload={"message_preview": message[:200]},
+        )
+        # Durable work for worker/tutor — same intelligence as channels
+        work = Work(
+            id=uuid4(),
+            principal_id=surface.principal_id,
+            kind="surface_ai",
+            status="queued",
+            input_payload={
+                "source": "surface",
+                "surface_id": str(surface.id),
+                "revision": surface.current_revision,
+                "user_text": message,
+                "context": (body or {}).get("context") if isinstance(body, dict) else {},
+                "surface_title": surface.title,
+                "surface_state_keys": list((surface.state_json or {}).keys())[:40],
+            },
+        )
+        session.add(work)
+        await session.commit()
+        return JSONResponse(
+            {
+                "ok": True,
+                "status": "accepted",
+                "work_id": str(work.id),
+                "note": "WAX is thinking — updates may appear on this surface or via chat.",
+            }
+        )
+
+
 @app.get("/p/{token}")
 async def serve_publication(token: str):
     """Serve immutable ephemeral publication by opaque public token."""

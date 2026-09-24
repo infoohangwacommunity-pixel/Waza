@@ -48,6 +48,7 @@ class Principal(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     goals: Mapped[list["Goal"]] = relationship(back_populates="principal")
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="principal")
     publications: Mapped[list["Publication"]] = relationship(back_populates="principal")
+    surfaces: Mapped[list["Surface"]] = relationship()
 
 
 
@@ -1041,3 +1042,131 @@ class Publication(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
     principal: Mapped["Principal"] = relationship(back_populates="publications")
+
+
+class Surface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    AI-authored temporary web environment.
+
+    Identity is stable across renames and revisions.
+    Public access is via opaque token only — never expose internal IDs in learner UI.
+    """
+
+    __tablename__ = "surfaces"
+    __table_args__ = (
+        Index("ix_surface_principal", "principal_id"),
+        Index("ix_surface_token_hash", "token_hash", unique=True),
+        Index("ix_surface_lifecycle", "status", "expires_at"),
+        Index("ix_surface_activity", "status", "last_activity_at"),
+        Index("ix_surface_idempotency", "principal_id", "idempotency_key", unique=True),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    # Opaque public capability (hashed)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    # AI-controlled human title (rename does not change URL)
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="WAX Surface")
+    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    # Lifecycle
+    status: Mapped[str] = mapped_column(String(40), default="creating", nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cleaned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_activity_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Current revision pointer
+    current_revision: Mapped[int] = mapped_column(Integer, default=0)
+    # Capability grants (server-side list of scopes)
+    granted_scopes: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    # Idempotency for create
+    idempotency_key: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    # Lineage
+    parent_surface_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("surfaces.id", ondelete="SET NULL"), nullable=True
+    )
+    # Soft counters
+    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    # AI lifecycle intent (hint only)
+    lifecycle_intent: Mapped[Optional[str]] = mapped_column(String(80), nullable=True)
+    # Runtime state blob ref (small JSON) — large state in object storage
+    state_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+    principal: Mapped["Principal"] = relationship()
+
+
+class SurfaceRevision(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Immutable AI-generated experience bundle for a surface."""
+
+    __tablename__ = "surface_revisions"
+    __table_args__ = (
+        UniqueConstraint("surface_id", "revision", name="uq_surface_revision"),
+        Index("ix_surface_revision_surface", "surface_id"),
+    )
+
+    surface_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("surfaces.id", ondelete="CASCADE"), nullable=False
+    )
+    revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Entry point storage (HTML bundle)
+    entry_uri: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    content_type: Mapped[str] = mapped_column(String(100), default="text/html; charset=utf-8")
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    checksum: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
+    # Manifest: assets, required capabilities, runtime policy
+    manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    # Optional source note from AI (not shown to learner unless intended)
+    source_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class SurfaceSession(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Browser session bound to a surface + principal."""
+
+    __tablename__ = "surface_sessions"
+    __table_args__ = (
+        Index("ix_surface_session_surface", "surface_id"),
+        Index("ix_surface_session_token", "session_token_hash", unique=True),
+        Index("ix_surface_session_expires", "expires_at"),
+    )
+
+    surface_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("surfaces.id", ondelete="CASCADE"), nullable=False
+    )
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    session_token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    scopes: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class SurfaceEvent(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """Generic surface interaction event — not an educational taxonomy."""
+
+    __tablename__ = "surface_events"
+    __table_args__ = (
+        Index("ix_surface_event_surface", "surface_id", "created_at"),
+        Index("ix_surface_event_type", "event_type"),
+    )
+
+    surface_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("surfaces.id", ondelete="CASCADE"), nullable=False
+    )
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    session_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("surface_sessions.id", ondelete="SET NULL"), nullable=True
+    )
+    event_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    # opened | interaction | state_changed | ai_requested | save_requested | error | session_started | ...
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    revision: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    source: Mapped[str] = mapped_column(String(40), default="browser")

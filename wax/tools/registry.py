@@ -1436,6 +1436,109 @@ async def handle_link_channel_identity(
 
 
 
+
+async def handle_create_surface(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Create a temporary AI-authored web surface (HTML/CSS/JS experience).
+
+    The AI authors the experience. WAX hosts and isolates it.
+    Prefer updating an existing surface over creating a new one for ordinary edits.
+    """
+    from wax.surfaces.service import SurfaceService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    html = args.get("html") or args.get("content") or ""
+    if not str(html).strip():
+        return {"ok": False, "error": "html_required"}
+    idem = args.get("idempotency_key") or ctx.get("tool_call_id") or ctx.get("work_id")
+    svc = SurfaceService(session)
+    try:
+        return await svc.create(
+            principal_id=principal_id,
+            html=str(html),
+            title=args.get("title"),
+            description=args.get("description"),
+            work_id=ctx.get("work_id") or args.get("work_id"),
+            parent_surface_id=args.get("parent_surface_id"),
+            preferred_lifetime_hours=args.get("preferred_lifetime_hours"),
+            lifecycle_intent=args.get("lifecycle_intent"),
+            requested_scopes=args.get("scopes"),
+            idempotency_key=str(idem) if idem else None,
+            source_note=args.get("source_note"),
+            initial_state=args.get("initial_state") if isinstance(args.get("initial_state"), dict) else None,
+        )
+    except Exception as e:
+        logger.error("create_surface_failed", error=str(e))
+        return {"ok": False, "error": "surface_create_failed", "detail": str(e)[:200]}
+
+
+async def handle_update_surface(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Update an existing surface in place (same URL). Rename, change HTML, merge state."""
+    from wax.surfaces.service import SurfaceService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    surface_id = args.get("surface_id")
+    if not surface_id:
+        return {"ok": False, "error": "surface_id_required"}
+    svc = SurfaceService(session)
+    try:
+        return await svc.update(
+            surface_id=surface_id,
+            principal_id=principal_id,
+            html=args.get("html"),
+            title=args.get("title"),
+            description=args.get("description"),
+            source_note=args.get("source_note"),
+            merge_state=args.get("merge_state") if isinstance(args.get("merge_state"), dict) else None,
+            extend_hours=args.get("extend_hours"),
+        )
+    except Exception as e:
+        logger.error("update_surface_failed", error=str(e))
+        return {"ok": False, "error": "surface_update_failed", "detail": str(e)[:200]}
+
+
+async def handle_list_surfaces(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """List this learner's surfaces for continuation / discovery."""
+    from wax.surfaces.service import SurfaceService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    limit = int(args.get("limit") or 10)
+    active_only = args.get("active_only", True)
+    if isinstance(active_only, str):
+        active_only = active_only.lower() not in ("0", "false", "no")
+    rows = await SurfaceService(session).list_for_principal(
+        principal_id, limit=limit, active_only=bool(active_only)
+    )
+    return {"ok": True, "surfaces": rows, "count": len(rows)}
+
+
+async def handle_revoke_surface(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """Revoke a surface (access stops immediately; durable Work/Artifacts untouched)."""
+    from wax.surfaces.service import SurfaceService
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+    surface_id = args.get("surface_id")
+    if not surface_id:
+        return {"ok": False, "error": "surface_id_required"}
+    return await SurfaceService(session).revoke(surface_id, principal_id)
+
+
 async def handle_publish_web_surface(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
@@ -2055,6 +2158,10 @@ HANDLERS.update({
     "request_channel_link": handle_request_channel_link,
     "confirm_channel_link": handle_confirm_channel_link,
     "create_html_page": handle_create_html_page,
+    "create_surface": handle_create_surface,
+    "update_surface": handle_update_surface,
+    "list_surfaces": handle_list_surfaces,
+    "revoke_surface": handle_revoke_surface,
     "publish_web_surface": handle_publish_web_surface,
     "revoke_publication": handle_revoke_publication,
     "inspect_memories": handle_inspect_memories,
