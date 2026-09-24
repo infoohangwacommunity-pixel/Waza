@@ -4,6 +4,13 @@ Surface runtime shell — hosts AI-authored HTML/CSS/JS safely.
 AI may supply arbitrary browser experience code.
 Infrastructure injects a capability bridge and enforces CSP at the HTTP layer.
 Generated code never receives secrets or unrestricted backend access.
+
+Security model:
+  - Surface HTML is intended to run on a distinct origin (surface_public_origin)
+    from the main WAX application when configured.
+  - The bridge only talks to the Surface gateway paths with the opaque token.
+  - No secrets, no internal IDs, no cookies required.
+  - Service workers are unregistered; worker-src is none in CSP.
 """
 
 from __future__ import annotations
@@ -36,25 +43,35 @@ def _esc(s: str) -> str:
     return html_lib.escape(s or "", quote=True)
 
 
-def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
-    """Minimal client bridge: talk only to same-origin /s/{token}/api/*."""
+def inject_runtime_bridge(
+    token_placeholder: str = "{{SURFACE_TOKEN}}",
+    *,
+    api_base_placeholder: str = "{{SURFACE_API_BASE}}",
+) -> str:
+    """Minimal client bridge: talk only to the Surface gateway with the opaque token.
+
+    api_base is an absolute origin when a dedicated Surface origin is configured,
+    otherwise empty (same-origin relative). Generated code cannot invent other backends.
+    """
     return f"""
 <script>
 (function() {{
   const TOKEN = "{token_placeholder}";
-  const API = "/s/" + TOKEN + "/api";
+  const API_BASE = "{api_base_placeholder}";
+  const API = (API_BASE ? API_BASE.replace(/\\/$/, "") : "") + "/s/" + TOKEN + "/api";
   window.WAX = window.WAX || {{}};
   window.WAX.surface = {{
     token: TOKEN,
     async getState() {{
-      const r = await fetch(API + "/state", {{ credentials: "same-origin" }});
+      const r = await fetch(API + "/state", {{ credentials: "omit", mode: "cors" }});
       if (!r.ok) throw new Error("state_read_failed");
       return r.json();
     }},
     async setState(state) {{
       const r = await fetch(API + "/state", {{
         method: "PUT",
-        credentials: "same-origin",
+        credentials: "omit",
+        mode: "cors",
         headers: {{ "Content-Type": "application/json" }},
         body: JSON.stringify(state || {{}}),
       }});
@@ -64,7 +81,8 @@ def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
     async patchState(patch) {{
       const r = await fetch(API + "/state", {{
         method: "PATCH",
-        credentials: "same-origin",
+        credentials: "omit",
+        mode: "cors",
         headers: {{ "Content-Type": "application/json" }},
         body: JSON.stringify(patch || {{}}),
       }});
@@ -75,7 +93,8 @@ def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
       try {{
         await fetch(API + "/events", {{
           method: "POST",
-          credentials: "same-origin",
+          credentials: "omit",
+          mode: "cors",
           headers: {{ "Content-Type": "application/json" }},
           body: JSON.stringify({{ type: type || "interaction", payload: payload || {{}} }}),
         }});
@@ -84,7 +103,8 @@ def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
     async askAI(message, context) {{
       const r = await fetch(API + "/ai", {{
         method: "POST",
-        credentials: "same-origin",
+        credentials: "omit",
+        mode: "cors",
         headers: {{ "Content-Type": "application/json" }},
         body: JSON.stringify({{ message: String(message || ""), context: context || {{}} }}),
       }});
@@ -95,12 +115,14 @@ def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
       return r.json();
     }},
     async aiStatus(requestId) {{
-      const r = await fetch(API + "/ai/" + encodeURIComponent(requestId), {{ credentials: "same-origin" }});
+      const r = await fetch(API + "/ai/" + encodeURIComponent(requestId), {{
+        credentials: "omit", mode: "cors"
+      }});
       if (!r.ok) throw new Error("ai_status_failed");
       return r.json();
     }},
     async revision() {{
-      const r = await fetch(API + "/revision", {{ credentials: "same-origin" }});
+      const r = await fetch(API + "/revision", {{ credentials: "omit", mode: "cors" }});
       if (!r.ok) throw new Error("revision_failed");
       return r.json();
     }},
@@ -123,6 +145,11 @@ def inject_runtime_bridge(token_placeholder: str = "{{SURFACE_TOKEN}}") -> str:
       navigator.serviceWorker.getRegistrations().then(function(rs) {{
         rs.forEach(function(r) {{ r.unregister(); }});
       }}).catch(function(){{}});
+      if (navigator.serviceWorker.register) {{
+        navigator.serviceWorker.register = function() {{
+          return Promise.reject(new Error("service_workers_disabled"));
+        }};
+      }}
     }}
   }} catch (e) {{}}
   try {{ window.WAX.surface.event("opened", {{}}); }} catch (e) {{}}
@@ -135,29 +162,25 @@ def wrap_ai_html(
     ai_html: str,
     *,
     surface_token_placeholder: str = "{{SURFACE_TOKEN}}",
+    api_base_placeholder: str = "{{SURFACE_API_BASE}}",
     title: str = "WAX Surface",
     scopes: list[str] | None = None,
 ) -> str:
-    """
-    Package AI-authored content into a complete HTML document with runtime bridge.
-
-    If AI already provided a full HTML document, inject bridge before </body>.
-    Otherwise wrap fragment in a minimal shell.
-    """
+    """Package AI-authored content into a complete HTML document with runtime bridge."""
     content = (ai_html or "").strip()
-    bridge = inject_runtime_bridge(surface_token_placeholder)
+    bridge = inject_runtime_bridge(
+        surface_token_placeholder, api_base_placeholder=api_base_placeholder
+    )
     logo = _logo_data_uri()
 
     lower = content[:500].lower()
     is_full = "<html" in lower or content.lower().startswith("<!doctype")
 
     if is_full:
-        # Inject bridge before </body> or at end
         if re.search(r"</body>", content, re.I):
             return re.sub(r"</body>", bridge + "</body>", content, count=1, flags=re.I)
         return content + bridge
 
-    # Fragment → shell
     logo_html = (
         f'<img src="{logo}" alt="WAX Prep" width="36" height="36" style="border-radius:8px"/>'
         if logo

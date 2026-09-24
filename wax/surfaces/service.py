@@ -44,11 +44,26 @@ class SurfaceService:
         self.settings = get_settings()
         self.policy = policy or DEFAULT_SURFACE_POLICY
 
+    def surface_origin(self) -> str:
+        """Origin that hosts AI-authored Surface HTML (security principal boundary)."""
+        origin = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
+        if origin:
+            return origin
+        return (self.settings.public_base_url or "").rstrip("/")
+
     def public_url(self, token: str) -> Optional[str]:
-        base = (self.settings.public_base_url or "").rstrip("/")
+        base = self.surface_origin()
         if not base:
             return None
         return f"{base}/s/{token}"
+
+    def api_base_for_bridge(self) -> str:
+        """Absolute origin for the bridge when a dedicated Surface origin is set; else empty."""
+        dedicated = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
+        if dedicated:
+            return dedicated
+        # Same-origin relative: bridge uses path-only /s/{token}/api
+        return ""
 
     def _default_scopes(self) -> list[str]:
         return [
@@ -196,8 +211,14 @@ class SurfaceService:
         source_note: str | None = None,
         merge_state: dict[str, Any] | None = None,
         extend_hours: float | None = None,
+        expected_revision: int | None = None,
     ) -> dict[str, Any]:
-        """Update existing surface in place — same URL, new revision if html provided."""
+        """Update existing surface in place — same URL, new revision if html provided.
+
+        Concurrency: when expected_revision is provided, reject if current_revision
+        differs (optimistic locking). Without it, still serializes via DB row update
+        of current_revision after read.
+        """
         surface = await self.session.get(Surface, UUID(str(surface_id)))
         if not surface or str(surface.principal_id) != str(principal_id):
             return {"ok": False, "error": "not_found"}
@@ -207,6 +228,13 @@ class SurfaceService:
             SurfaceStatus.DORMANT.value,
         ):
             return {"ok": False, "error": "invalid_state", "status": surface.status}
+        if expected_revision is not None and int(surface.current_revision or 0) != int(expected_revision):
+            return {
+                "ok": False,
+                "error": "revision_conflict",
+                "current_revision": surface.current_revision,
+                "expected_revision": expected_revision,
+            }
 
         if title is not None:
             surface.title = title[:500]
@@ -268,6 +296,7 @@ class SurfaceService:
         entry = wrap_ai_html(
             html,
             surface_token_placeholder="{{SURFACE_TOKEN}}",
+            api_base_placeholder="{{SURFACE_API_BASE}}",
             title=surface.title,
             scopes=scopes,
         )
@@ -349,9 +378,10 @@ class SurfaceService:
         except Exception as e:
             logger.error("surface_storage_miss", surface_id=str(surface.id), error=str(e)[:120])
             return None
-        # Inject actual public token for gateway (placeholder replacement)
+        # Inject actual public token + API base for gateway (placeholder replacement)
         text = data.decode("utf-8", errors="replace")
         text = text.replace("{{SURFACE_TOKEN}}", public_token)
+        text = text.replace("{{SURFACE_API_BASE}}", self.api_base_for_bridge())
         return text.encode("utf-8")
 
     async def record_access(self, surface: Surface) -> None:
@@ -500,14 +530,29 @@ class SurfaceService:
         rows = list(result.scalars())
         cleaned = 0
         for s in rows:
-            # Delete revision entry files
+            # Mark cleanup in progress; only mark CLEANED if all revision bytes removed.
+            if can_transition(s.status, SurfaceStatus.CLEANUP_PENDING):
+                s.status = SurfaceStatus.CLEANUP_PENDING.value
             revs = await self.session.execute(
                 select(SurfaceRevision).where(SurfaceRevision.surface_id == s.id)
             )
+            failed = False
             for rev in revs.scalars():
                 if rev.entry_uri:
-                    delete_uri(rev.entry_uri)
-                    rev.entry_uri = None
+                    try:
+                        delete_uri(rev.entry_uri)
+                        rev.entry_uri = None
+                    except Exception as e:
+                        failed = True
+                        logger.error(
+                            "surface_cleanup_delete_failed",
+                            surface_id=str(s.id),
+                            error=str(e)[:160],
+                        )
+            if failed:
+                # Leave in cleanup_pending / prior state for retry — do NOT claim success.
+                logger.warning("surface_cleanup_incomplete", surface_id=str(s.id))
+                continue
             s.status = SurfaceStatus.CLEANED.value
             s.cleaned_at = now
             cleaned += 1

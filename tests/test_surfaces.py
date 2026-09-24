@@ -41,7 +41,7 @@ def test_lifetime_policy_bounds():
 def test_wrap_fragment_gets_bridge():
     html = wrap_ai_html("<h1>Hello</h1><p>World</p>", title="Test")
     assert "WAX.surface" in html
-    assert "/s/" in html or "{{SURFACE_TOKEN}}" in html
+    assert "/s/" in html or "{{SURFACE_TOKEN}}" in html or "SURFACE_API_BASE" in html
     assert "Hello" in html
     assert "<!DOCTYPE html>" in html
 
@@ -138,3 +138,69 @@ def test_scopes_are_least_privilege_names():
     assert "view" in names
     assert "database" not in names
     assert "admin" not in names
+
+
+def test_bridge_uses_api_base_placeholder():
+    b = inject_runtime_bridge("TOK", api_base_placeholder="https://s.example.com")
+    assert "https://s.example.com" in b
+    assert "credentials: \"omit\"" in b or "credentials: \"omit\"" in b.replace(" ", "")
+    assert "service_workers_disabled" in b
+
+
+def test_bridge_relative_when_no_api_base():
+    b = inject_runtime_bridge("TOK", api_base_placeholder="")
+    assert "SURFACE_API_BASE" not in b or 'API_BASE = ""' in b
+    assert "/s/" in b
+
+
+def test_surface_origin_prefers_dedicated():
+    try:
+        from wax.surfaces.service import SurfaceService
+    except ImportError:
+        import pytest
+        pytest.skip("sqlalchemy not installed in test env")
+    from unittest.mock import MagicMock
+    svc = SurfaceService(MagicMock())
+    class S:
+        public_base_url = "https://app.example.com"
+        surface_public_origin = "https://s.example.com"
+    svc.settings = S()
+    assert svc.surface_origin() == "https://s.example.com"
+    assert svc.public_url("abc") == "https://s.example.com/s/abc"
+    assert svc.api_base_for_bridge() == "https://s.example.com"
+
+
+
+def test_surface_origin_falls_back():
+    try:
+        from wax.surfaces.service import SurfaceService
+    except ImportError:
+        import pytest
+        pytest.skip("sqlalchemy not installed in test env")
+    from unittest.mock import MagicMock
+    svc = SurfaceService(MagicMock())
+    class S:
+        public_base_url = "https://app.example.com"
+        surface_public_origin = ""
+    svc.settings = S()
+    assert svc.surface_origin() == "https://app.example.com"
+    assert svc.api_base_for_bridge() == ""
+
+
+
+def test_wrap_injects_api_base_placeholder():
+    out = wrap_ai_html("<p>x</p>", api_base_placeholder="{{SURFACE_API_BASE}}")
+    assert "{{SURFACE_API_BASE}}" in out
+    assert "{{SURFACE_TOKEN}}" in out
+
+
+def test_no_secrets_in_wrapped_html():
+    out = wrap_ai_html("<p>hi</p>", title="T")
+    for banned in ("DATABASE_URL", "OPENAI", "ANTHROPIC", "API_KEY", "postgres://", "SECRET_KEY"):
+        assert banned not in out
+
+
+def test_service_worker_disabled_in_bridge():
+    b = inject_runtime_bridge("T")
+    assert "service_workers_disabled" in b
+    assert "unregister" in b

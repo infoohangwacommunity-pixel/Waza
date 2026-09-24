@@ -208,6 +208,31 @@ def run() -> None:
 
 
 
+
+def _surface_cors_headers(request: Request) -> dict:
+    """Allow Surface browser origin to call the gateway without credentials."""
+    from wax.config import get_settings
+    s = get_settings()
+    origin = request.headers.get("origin") or ""
+    allowed = set()
+    if s.public_base_url:
+        allowed.add(s.public_base_url.rstrip("/"))
+    so = (getattr(s, "surface_public_origin", None) or "").rstrip("/")
+    if so:
+        allowed.add(so)
+    headers = {
+        "Access-Control-Allow-Methods": "GET, PUT, PATCH, POST, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Idempotency-Key",
+        "Access-Control-Max-Age": "600",
+    }
+    if origin and origin.rstrip("/") in allowed:
+        headers["Access-Control-Allow-Origin"] = origin
+        headers["Vary"] = "Origin"
+    elif not origin:
+        # non-browser or same-origin
+        pass
+    return headers
+
 # ─── Web Surfaces (AI-authored interactive environments) ──────────────────────
 
 @app.get("/s/{token}")
@@ -245,6 +270,13 @@ async def serve_surface(token: str):
             pass
         # CSP allows scripts from self only (AI JS runs same-origin); no remote scripts.
         # connect-src limited to same origin for gateway.
+        # connect-src: allow same origin and configured surface origin only.
+        from wax.config import get_settings as _gs
+        _s = _gs()
+        connect_sources = ["'self'"]
+        so = (getattr(_s, "surface_public_origin", None) or "").rstrip("/")
+        if so:
+            connect_sources.append(so)
         csp = (
             "default-src 'none'; "
             "script-src 'unsafe-inline'; "
@@ -252,8 +284,9 @@ async def serve_surface(token: str):
             "img-src data: blob:; "
             "media-src data: blob:; "
             "font-src data:; "
-            "connect-src 'self'; "
+            f"connect-src {' '.join(connect_sources)}; "
             "worker-src 'none'; "
+            "child-src 'none'; "
             "manifest-src 'none'; "
             "frame-src 'none'; "
             "object-src 'none'; "
@@ -272,26 +305,39 @@ async def serve_surface(token: str):
                 "Referrer-Policy": "no-referrer",
                 "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
                 "X-Frame-Options": "DENY",
+                "Cross-Origin-Opener-Policy": "same-origin",
+                "Cross-Origin-Resource-Policy": "same-origin",
             },
         )
 
 
+
+@app.options("/s/{token}/api/{path:path}")
+async def surface_api_options(token: str, path: str, request: Request):
+    from fastapi.responses import Response
+    h = _surface_cors_headers(request)
+    return Response(status_code=204, headers=h)
+
 @app.get("/s/{token}/api/state")
-async def surface_get_state(token: str):
+async def surface_get_state(token: str, request: Request):
     from fastapi.responses import JSONResponse
     from wax.db.session import session_scope
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.policy import CapabilityScope
 
+    cors = _surface_cors_headers(request)
     async with session_scope() as session:
         svc = SurfaceService(session)
         surface, deny = await svc.resolve_by_token(token)
         if deny or not surface:
-            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.STATE_READ.value not in (surface.granted_scopes or []):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+            return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
         state = await svc.get_state(surface)
-        return JSONResponse({"ok": True, "state": state, "revision": surface.current_revision})
+        return JSONResponse(
+            {"ok": True, "state": state, "revision": surface.current_revision},
+            headers=cors,
+        )
 
 
 @app.put("/s/{token}/api/state")
@@ -302,23 +348,24 @@ async def surface_set_state(token: str, request: Request):
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.policy import CapabilityScope
 
+    cors = _surface_cors_headers(request)
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "invalid_json"}, status_code=400)
+        return JSONResponse({"error": "invalid_json"}, status_code=400, headers=cors)
     async with session_scope() as session:
         svc = SurfaceService(session)
         surface, deny = await svc.resolve_by_token(token)
         if deny or not surface:
-            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.STATE_WRITE.value not in (surface.granted_scopes or []):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+            return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
         if request.method == "PATCH":
             result = await svc.patch_state(surface, body if isinstance(body, dict) else {})
         else:
             result = await svc.set_state(surface, body if isinstance(body, dict) else {})
         await session.commit()
-        return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+        return JSONResponse(result, status_code=200 if result.get("ok") else 400, headers=cors)
 
 
 @app.post("/s/{token}/api/events")
@@ -328,6 +375,7 @@ async def surface_post_event(token: str, request: Request):
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.policy import CapabilityScope
 
+    cors = _surface_cors_headers(request)
     try:
         body = await request.json()
     except Exception:
@@ -336,19 +384,18 @@ async def surface_post_event(token: str, request: Request):
         svc = SurfaceService(session)
         surface, deny = await svc.resolve_by_token(token)
         if deny or not surface:
-            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.EVENT_WRITE.value not in (surface.granted_scopes or []):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+            return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
         et = str((body or {}).get("type") or "interaction")[:80]
         payload = (body or {}).get("payload") if isinstance(body, dict) else {}
         if not isinstance(payload, dict):
             payload = {}
-        # Strip oversized payloads
         if len(str(payload)) > 8000:
             payload = {"truncated": True}
         await svc.record_event(surface=surface, event_type=et, payload=payload)
         await session.commit()
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True}, headers=cors)
 
 
 
@@ -360,13 +407,14 @@ async def surface_ai_request(token: str, request: Request):
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.policy import CapabilityScope
 
+    cors = _surface_cors_headers(request)
     try:
         body = await request.json()
     except Exception:
-        return JSONResponse({"error": "invalid_json"}, status_code=400)
+        return JSONResponse({"error": "invalid_json"}, status_code=400, headers=cors)
     message = str((body or {}).get("message") or "").strip()
     if not message or len(message) > 8000:
-        return JSONResponse({"error": "invalid_message"}, status_code=400)
+        return JSONResponse({"error": "invalid_message"}, status_code=400, headers=cors)
     idem = None
     if isinstance(body, dict):
         idem = body.get("idempotency_key") or request.headers.get("Idempotency-Key")
@@ -375,36 +423,45 @@ async def surface_ai_request(token: str, request: Request):
         svc = SurfaceService(session)
         surface, deny = await svc.resolve_by_token(token)
         if deny or not surface:
-            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.AI_REQUEST.value not in (surface.granted_scopes or []):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+            return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
+        # Browser context is untrusted — only message string + opaque context bag.
+        raw_ctx = (body or {}).get("context") if isinstance(body, dict) else {}
+        if not isinstance(raw_ctx, dict):
+            raw_ctx = {}
+        # Strip any attempt to assert identity / internal ids
+        for k in list(raw_ctx.keys()):
+            if k in ("learner_id", "principal_id", "work_id", "surface_id", "token"):
+                raw_ctx.pop(k, None)
         result = await svc.accept_ai_request(
             surface=surface,
             message=message,
-            context=(body or {}).get("context") if isinstance(body, dict) else {},
+            context=raw_ctx,
             idempotency_key=str(idem) if idem else None,
         )
         await session.commit()
-        return JSONResponse(result)
+        return JSONResponse(result, headers=cors)
 
 
 @app.get("/s/{token}/api/ai/{request_id}")
-async def surface_ai_status(token: str, request_id: str):
+async def surface_ai_status(token: str, request_id: str, request: Request):
     from fastapi.responses import JSONResponse
     from wax.db.session import session_scope
     from wax.surfaces.service import SurfaceService
     from wax.surfaces.policy import CapabilityScope
 
+    cors = _surface_cors_headers(request)
     async with session_scope() as session:
         svc = SurfaceService(session)
         surface, deny = await svc.resolve_by_token(token)
         if deny or not surface:
-            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=cors)
         if CapabilityScope.AI_REQUEST.value not in (surface.granted_scopes or []):
-            return JSONResponse({"error": "forbidden"}, status_code=403)
+            return JSONResponse({"error": "forbidden"}, status_code=403, headers=cors)
         row = await svc.get_ai_request_by_token(request_id, surface)
         if not row:
-            return JSONResponse({"error": "not_found"}, status_code=404)
+            return JSONResponse({"error": "not_found"}, status_code=404, headers=cors)
         return JSONResponse(
             {
                 "ok": True,
@@ -412,23 +469,26 @@ async def surface_ai_status(token: str, request_id: str):
                 "reply": row.reply_preview,
                 "revision": surface.current_revision,
                 "error": row.error,
-            }
+            },
+            headers=cors,
         )
 
 
 @app.get("/s/{token}/api/revision")
-async def surface_revision_poll(token: str):
+async def surface_revision_poll(token: str, request: Request):
     """Let an open browser detect updates without exposing internals."""
     from fastapi.responses import JSONResponse
     from wax.db.session import session_scope
     from wax.surfaces.service import SurfaceService
 
+    cors = _surface_cors_headers(request)
+    headers = {"Cache-Control": "no-store", **cors}
     async with session_scope() as session:
         svc = SurfaceService(session)
         surface, deny = await svc.resolve_by_token(token)
         if deny or not surface:
-            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404)
-        return JSONResponse(svc.revision_status(surface), headers={"Cache-Control": "no-store"})
+            return JSONResponse({"error": deny or "not_found"}, status_code=410 if deny else 404, headers=headers)
+        return JSONResponse(svc.revision_status(surface), headers=headers)
 
 
 @app.get("/p/{token}")

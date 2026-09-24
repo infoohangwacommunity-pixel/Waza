@@ -99,12 +99,18 @@ New work uses `wax/surfaces/`.
 
 ## Security boundary
 
-- AI HTML/CSS/JS runs in the learner's browser only
-- Capability token in URL; scopes granted server-side
+- **Distinct origin (production):** set `SURFACE_PUBLIC_ORIGIN` to a dedicated host
+  (subdomain) that serves `/s/{token}`. Generated HTML runs as a separate browser
+  security principal from the main WAX app origin.
+- Capability token in URL; scopes granted server-side; bridge uses `credentials: omit`
 - Gateway: state, events, AI request (queues Work — no LLM in web process)
-- CSP: no remote scripts; connect-src 'self' only
+- CSP: default-src none; script-src unsafe-inline only; worker-src none; connect-src
+  limited to self + surface origin
+- Service workers forcibly unregistered and `register` stubbed
 - No DATABASE_URL, secrets, or provider keys in browser
+- Browser-supplied context is untrusted (identity keys stripped)
 - Cross-principal: token hash lookup + ownership on mutations
+- Optimistic concurrency on `update_surface` via `expected_revision`
 
 ## Tools (AI)
 

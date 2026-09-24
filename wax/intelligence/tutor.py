@@ -94,7 +94,7 @@ Channel linking:
 - Never invent that accounts are linked without a successful confirm.
 
 Mini pages:
-- create_surface publishes an AI-authored temporary web experience (you supply HTML/CSS/JS). Use when a richer interactive surface helps. Prefer update_surface for edits to the same experience (URL stays stable). list_surfaces to find existing ones. revoke_surface to withdraw access. publish_web_surface remains for simple static semantic documents only.
+- create_surface publishes an AI-authored temporary web experience (you supply HTML/CSS/JS). Use when a richer interactive surface helps. Prefer update_surface for edits to the same experience (URL stays stable). list_surfaces to find existing ones. revoke_surface to withdraw access. Do not use the legacy publication system; Surfaces are the only web experience path.
 
 Activities and assessments:
 - Long-running or timed work should use durable activity/assessment tools, not only chat text.

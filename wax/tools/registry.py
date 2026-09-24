@@ -1530,6 +1530,7 @@ async def handle_update_surface(
             source_note=args.get("source_note"),
             merge_state=args.get("merge_state") if isinstance(args.get("merge_state"), dict) else None,
             extend_hours=args.get("extend_hours"),
+                    expected_revision=args.get("expected_revision"),
         )
     except Exception as e:
         logger.error("update_surface_failed", error=str(e))
@@ -2188,15 +2189,15 @@ HANDLERS.update({
     "link_channel_identity": handle_link_channel_identity,
     "request_channel_link": handle_request_channel_link,
     "confirm_channel_link": handle_confirm_channel_link,
-    "create_html_page": handle_create_html_page,
+    # LEGACY removed from active catalog: "create_html_page": handle_create_html_page,
     "retain_surface": handle_retain_surface,
     "inspect_surface": handle_inspect_surface,
     "create_surface": handle_create_surface,
     "update_surface": handle_update_surface,
     "list_surfaces": handle_list_surfaces,
     "revoke_surface": handle_revoke_surface,
-    "publish_web_surface": handle_publish_web_surface,
-    "revoke_publication": handle_revoke_publication,
+    # LEGACY removed from active catalog: "publish_web_surface": handle_publish_web_surface,
+    # LEGACY removed from active catalog: "revoke_publication": handle_revoke_publication,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,

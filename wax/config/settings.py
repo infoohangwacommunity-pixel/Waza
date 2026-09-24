@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     secret_key: str = Field(default="change-me-in-production")
     public_base_url: str = ""  # e.g. https://web-production-xxx.up.railway.app
+    # Distinct origin for AI-authored Surface HTML (real browser security principal).
+    # When set (e.g. https://s.example.com), Surface public URLs and the runtime bridge
+    # use this origin exclusively. Main app origin never serves untrusted Surface HTML
+    # as the primary path. Leave empty to fall back to public_base_url (dev only).
+    surface_public_origin: str = ""
 
     database_url: str = "postgresql+asyncpg://wax:wax@localhost:5432/wax"
     database_url_sync: str = "postgresql://wax:wax@localhost:5432/wax"
