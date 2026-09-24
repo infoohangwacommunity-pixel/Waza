@@ -204,6 +204,55 @@ def run() -> None:
     uvicorn.run("wax.api.main:app", host="0.0.0.0", port=8000, reload=False)
 
 
+
+
+@app.get("/p/{token}")
+async def serve_publication(token: str):
+    """Serve immutable ephemeral publication by opaque public token."""
+    from fastapi.responses import HTMLResponse, Response
+    from wax.db.session import session_scope
+    from wax.publication.service import PublicationService
+    from wax.publication.renderer import render_expired_page
+
+    async with session_scope() as session:
+        svc = PublicationService(session)
+        pub, deny = await svc.resolve_by_token(token)
+        if deny or not pub:
+            html = render_expired_page(reason=deny or "not_found")
+            return HTMLResponse(
+                content=html,
+                status_code=410 if deny in ("expired", "revoked") else 404,
+                headers={
+                    "Cache-Control": "no-store",
+                    "X-Robots-Tag": "noindex, nofollow",
+                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                    "X-Content-Type-Options": "nosniff",
+                    "Referrer-Policy": "no-referrer",
+                },
+            )
+        data = await svc.load_html(pub)
+        if not data:
+            html = render_expired_page(reason="not_found")
+            return HTMLResponse(content=html, status_code=404, headers={"Cache-Control": "no-store"})
+        try:
+            await svc.record_access(pub)
+            await session.commit()
+        except Exception:
+            pass
+        return Response(
+            content=data,
+            media_type="text/html; charset=utf-8",
+            headers={
+                "Cache-Control": "private, max-age=60",
+                "X-Robots-Tag": "noindex, nofollow, noarchive",
+                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; media-src https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+                "X-Content-Type-Options": "nosniff",
+                "Referrer-Policy": "no-referrer",
+                "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+            },
+        )
+
+
 @app.get("/pages/{artifact_id}")
 async def serve_html_page(artifact_id: str, token: str = ""):
     """Serve branded HTML artifact inline — signed token required (mini page)."""
@@ -225,7 +274,10 @@ async def serve_html_page(artifact_id: str, token: str = ""):
         if not token or not verify_download_token(str(art.id), str(art.principal_id), token):
             return HTMLResponse("<h1>Link expired or invalid</h1>", status_code=403)
         try:
-            data = read_bytes(art.uri)
+            uri = (art.structured or {}).get("storage_uri") or art.storage_path
+            if not uri:
+                return HTMLResponse("<h1>Page unavailable</h1>", status_code=404)
+            data = read_bytes(uri)
         except Exception:
             return HTMLResponse("<h1>Page unavailable</h1>", status_code=404)
         ctype = art.content_type or "text/html; charset=utf-8"

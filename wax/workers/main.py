@@ -706,6 +706,15 @@ async def recovery_loop() -> None:
                         cleanup_old_files()
                     except Exception:
                         logger.exception("workspace_cleanup_error")
+
+                try:
+                    from wax.publication.service import PublicationService
+                    n_exp = await PublicationService(session).expire_due(limit=200)
+                    n_clean = await PublicationService(session).cleanup_expired(limit=50)
+                    if n_exp or n_clean:
+                        logger.info("publication_lifecycle", expired=n_exp, cleaned=n_clean)
+                except Exception:
+                    logger.exception("publication_lifecycle_error")
                 if cycle % 10 == 0:
                     try:
                         from wax.db.models import Principal

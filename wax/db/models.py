@@ -47,6 +47,7 @@ class Principal(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     works: Mapped[list["Work"]] = relationship(back_populates="principal")
     goals: Mapped[list["Goal"]] = relationship(back_populates="principal")
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="principal")
+    publications: Mapped[list["Publication"]] = relationship(back_populates="principal")
 
 
 
@@ -986,3 +987,57 @@ class Hypothesis(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Linked durable memory only when justified
     structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class Publication(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Immutable ephemeral web publication (browser surface).
+
+    Ownership is principal-scoped. Public access is via opaque token only.
+    Lifecycle: created → active → expired|revoked → cleaned.
+    """
+
+    __tablename__ = "publications"
+    __table_args__ = (
+        Index("ix_publication_principal", "principal_id"),
+        Index("ix_publication_token_hash", "token_hash", unique=True),
+        Index("ix_publication_lifecycle", "status", "expires_at"),
+        Index("ix_publication_cleanup", "status", "cleaned_at"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
+    )
+    # Opaque public capability (hashed at rest)
+    token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    # Human / AI title (privacy-safe for share meta)
+    title: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Lifecycle
+    status: Mapped[str] = mapped_column(String(40), default="active", nullable=False)
+    # created | active | expired | revoked | cleaned | failed
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    cleaned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    # Schema / renderer versioning for immutability
+    schema_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    renderer_version: Mapped[str] = mapped_column(String(20), default="1.0")
+    # Semantic source (JSON) + optional rendered snapshot location
+    semantic: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    storage_uri: Mapped[Optional[str]] = mapped_column(String(1000), nullable=True)
+    content_type: Mapped[str] = mapped_column(String(100), default="text/html; charset=utf-8")
+    size_bytes: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    # Lineage
+    parent_publication_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("publications.id", ondelete="SET NULL"), nullable=True
+    )
+    # Artifact ids referenced (for auth + cleanup decisions)
+    artifact_ids: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
+    # Soft counters (privacy-preserving)
+    access_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_accessed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+    principal: Mapped["Principal"] = relationship(back_populates="publications")

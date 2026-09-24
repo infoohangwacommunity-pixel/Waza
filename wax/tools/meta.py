@@ -52,6 +52,7 @@ TOOL_META: dict[str, dict[str, Any]] = {
     "request_channel_link": {"risk": "high", "permissions": [MESSAGE, DATABASE_WRITE]},
     "confirm_channel_link": {"risk": "high", "permissions": [DATABASE_WRITE]},
     "create_html_page": {"risk": "medium", "permissions": [FILE_WRITE]},
+    "publish_web_surface": {"risk": "medium", "permissions": [FILE_WRITE, DATABASE_WRITE]},
     "create_assessment": {"risk": "medium", "permissions": [DATABASE_WRITE]},
     "submit_assessment_answer": {"risk": "medium", "permissions": [DATABASE_WRITE]},
 }

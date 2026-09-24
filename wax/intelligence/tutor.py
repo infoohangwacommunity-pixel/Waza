@@ -94,7 +94,7 @@ Channel linking:
 - Never invent that accounts are linked without a successful confirm.
 
 Mini pages:
-- create_html_page returns page_url when PUBLIC_BASE_URL is set — share that link for browser notes.
+- publish_web_surface publishes a temporary branded browser surface (semantic blocks, not HTML). Use when richer layout/tables/downloads help; share page_url. Prefer over create_html_page.
 
 Activities and assessments:
 - Long-running or timed work should use durable activity/assessment tools, not only chat text.
@@ -262,8 +262,38 @@ AVAILABLE_TOOLS = [
             "required": ["kind", "title", "content"],
         },
     ),
+    
     ToolSpec(
-        name="create_html_page",
+        name="publish_web_surface",
+        description=(
+            "Publish a temporary browser surface when richer presentation, navigation, "
+            "tables, structured viewing, or downloads would materially help the learner. "
+            "Do NOT use merely because content is long. Not a chat replacement. "
+            "Pass semantic blocks (title, sections, tables, lists, callouts, artifact refs) — not HTML. "
+            "Returns page_url to share in the conversation."
+        ),
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "subtitle": {"type": "string"},
+                "summary": {"type": "string"},
+                "blocks": {
+                    "type": "array",
+                    "description": "Semantic blocks: type in title|heading|paragraph|list|ordered_list|table|callout|code|artifact|quote|divider|section|...",
+                    "items": {"type": "object"},
+                },
+                "content": {"type": "string", "description": "Optional plain body if blocks omitted"},
+                "preferred_lifetime_hours": {"type": "number"},
+                "document": {"type": "object", "description": "Full semantic document alternative"},
+            },
+            "required": ["title"],
+        },
+    ),
+
+    ToolSpec(
+        name="create_html_page",  # legacy thin page; prefer publish_web_surface
+
         description="Create a branded HTML study page; returns page_url when PUBLIC_BASE_URL is set.",
         parameters={
             "type": "object",

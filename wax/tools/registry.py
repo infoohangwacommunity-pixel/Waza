@@ -1435,6 +1435,72 @@ async def handle_link_channel_identity(
     }
 
 
+
+async def handle_publish_web_surface(
+    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
+) -> dict[str, Any]:
+    """
+    Publish a temporary browser surface from semantic material.
+
+    The AI decides WHEN this is useful. Do not use merely because content is long.
+    Not a chat replacement. Not a permanent website.
+    """
+    from wax.publication.service import PublicationService
+    from wax.artifacts.access import make_download_token, public_download_url
+
+    principal_id = ctx.get("principal_id")
+    if not principal_id:
+        return {"ok": False, "error": "no_principal"}
+
+    document = args.get("document")
+    if not document:
+        title = (args.get("title") or "Notes").strip()[:500]
+        blocks = args.get("blocks")
+        if not blocks:
+            content = args.get("content") or args.get("body") or ""
+            blocks = [{"type": "paragraph", "text": content}] if content else []
+        document = {
+            "title": title,
+            "subtitle": args.get("subtitle"),
+            "summary": args.get("summary"),
+            "blocks": blocks,
+            "preferred_lifetime_hours": args.get("preferred_lifetime_hours"),
+            "share_title": args.get("share_title"),
+            "share_description": args.get("share_description"),
+        }
+
+    artifact_urls: dict[str, str] = {}
+    raw_blocks = document.get("blocks") if isinstance(document, dict) else []
+    for b in raw_blocks or []:
+        if not isinstance(b, dict):
+            continue
+        aid = None
+        if isinstance(b.get("artifact"), dict):
+            aid = b["artifact"].get("artifact_id")
+        if isinstance(b.get("media"), dict):
+            aid = aid or b["media"].get("artifact_id")
+        if aid and str(aid) not in artifact_urls:
+            try:
+                tok = make_download_token(str(aid), str(principal_id), ttl_seconds=86400 * 7)
+                url = public_download_url(str(aid), tok)
+                if url:
+                    artifact_urls[str(aid)] = url
+            except Exception:
+                pass
+
+    svc = PublicationService(session)
+    try:
+        return await svc.create(
+            principal_id=principal_id,
+            document=document,
+            work_id=ctx.get("work_id"),
+            artifact_download_urls=artifact_urls or None,
+        )
+    except Exception as e:
+        logger.error("publish_web_surface_failed", error=str(e))
+        return {"ok": False, "error": "publication_failed", "detail": str(e)[:200]}
+
+
 async def handle_create_html_page(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
@@ -1466,8 +1532,8 @@ async def handle_create_html_page(
         kind="html_page",
         title=title[:500],
         content_type="text/html",
-        uri=uri,
-        structured={"format": "html", "ephemeral": True},
+        storage_path=uri,
+        structured={"format": "html", "ephemeral": True, "storage_uri": uri},
         metadata_={"source": "create_html_page"},
     )
     session.add(art)
@@ -2003,6 +2069,7 @@ HANDLERS.update({
     "request_channel_link": handle_request_channel_link,
     "confirm_channel_link": handle_confirm_channel_link,
     "create_html_page": handle_create_html_page,
+    "publish_web_surface": handle_publish_web_surface,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,
