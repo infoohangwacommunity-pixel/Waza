@@ -868,6 +868,8 @@ class TutorService:
             user_text=user_text,
             tutor_system=TUTOR_SYSTEM,
         )
+        # Unified intelligence mode: CI produced the final reply (optional)
+        _unified_done = bool((getattr(ctx, "unified_direct_reply", None) or "").strip())
         relevant_memories = []
         system = (
             ctx.system_prefix
@@ -966,7 +968,10 @@ class TutorService:
         agent = AgentRuntime(self.session, work)
         await agent.start()
         max_rounds = agent.max_rounds
-        for _ in range(max_rounds):
+        if _unified_done:
+            reply_text = (ctx.unified_direct_reply or "").strip()
+            tool_notes.append("context_intel:unified")
+        for _ in range(0 if _unified_done else max_rounds):
             if not agent.can_call_tool() and _ > 0:
                 # Budget exhausted — force a text reply next
                 pass

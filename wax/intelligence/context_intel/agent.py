@@ -20,18 +20,25 @@ from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-_ORCH_SYSTEM = """You are Waza Context Intelligence — an internal investigator, not the tutor.
+_ORCH_SYSTEM = """You are Waza Intelligence orchestration for this turn.
 
-Your only job: decide what the main tutor needs to know about THIS learner for THIS message.
-You do not answer the learner. You do not invent biography. You do not write permanent memory.
+You may investigate learner context using tools, evaluate relevance, plan the response strategy,
+and — only when the runtime is in unified mode and the user message is included below with
+UNIFIED_MODE=true — produce a final learner-facing reply in direct_reply.
+
+You do not invent learner biography. You do not write permanent memory from inferences.
+Tools enforce principal isolation.
 
 Rules:
-1. Use only the provided tools. Principal isolation is enforced by tools.
-2. Prefer no context when personalization would not change the response (e.g. simple greeting, pure arithmetic).
-3. Distinguish facts/evidence from inferences. Label inferences clearly.
-4. Stop when more tools would not materially change what the tutor should do.
-5. If critical information is missing, set insufficient_evidence rather than guessing.
-6. Keep the brief small. Relevance over completeness.
+1. Use tools only when results would materially change what should happen next.
+2. Prefer no_context_required for greetings / trivial messages.
+3. Distinguish facts/evidence from inferences.
+4. Set needs_evidence_gather true only if a broader evidence pass would still help after your tools.
+5. Set insufficient_evidence rather than guessing missing facts.
+6. Reject irrelevant candidates in rejected_candidates.
+7. Stop when additional tools would not change the strategy.
+8. If UNIFIED_MODE=false: leave direct_reply empty; the tutor will respond.
+9. If UNIFIED_MODE=true: you may set response_mode to "unified" and fill direct_reply with the full answer.
 
 When finished, respond with ONLY a JSON object (no markdown fences):
 {
@@ -39,10 +46,15 @@ When finished, respond with ONLY a JSON object (no markdown fences):
   "task_intent": "short",
   "no_context_required": false,
   "insufficient_evidence": false,
+  "needs_evidence_gather": false,
+  "response_mode": "tutor",
   "recommended_objective": "short",
+  "response_strategy": "short",
+  "direct_reply": "",
   "items": [
     {"kind": "fact|evidence|inference|hypothesis", "text": "...", "source": "...", "confidence": "high|medium|low", "why": "..."}
   ],
+  "rejected_candidates": [],
   "uncertainties": [],
   "suggested_actions": []
 }
@@ -59,6 +71,8 @@ def _settings_flags() -> dict[str, Any]:
         "temperature": float(getattr(s, "context_intelligence_temperature", 0.2) or 0.2),
         "provider": (getattr(s, "context_intelligence_provider", None) or "none"),
         "fallback_to_primary": bool(getattr(s, "context_intelligence_fallback_to_primary", False)),
+        "mode": (getattr(s, "context_intelligence_mode", None) or "investigate"),
+        "controls_evidence": bool(getattr(s, "context_intelligence_controls_evidence", True)),
     }
 
 
@@ -116,15 +130,26 @@ def _parse_brief_json(raw: str) -> ContextBrief | None:
                 why=str(it.get("why") or "")[:160],
             )
         )
+    mode = str(data.get("response_mode") or "tutor")
+    if mode not in ("tutor", "unified", "defer"):
+        mode = "tutor"
+    needs_ev = data.get("needs_evidence_gather")
+    if needs_ev is None:
+        needs_ev = not bool(data.get("no_context_required"))
     return ContextBrief(
         request_understanding=str(data.get("request_understanding") or "")[:400],
         task_intent=str(data.get("task_intent") or "")[:200],
         no_context_required=bool(data.get("no_context_required")),
         insufficient_evidence=bool(data.get("insufficient_evidence")),
+        needs_evidence_gather=bool(needs_ev),
+        response_mode=mode,  # type: ignore[arg-type]
         items=items[:30],
         recommended_objective=str(data.get("recommended_objective") or "")[:300],
+        response_strategy=str(data.get("response_strategy") or "")[:400],
+        direct_reply=str(data.get("direct_reply") or "")[:8000],
         suggested_actions=[str(a)[:120] for a in (data.get("suggested_actions") or [])[:6]],
         uncertainties=[str(u)[:160] for u in (data.get("uncertainties") or [])[:8]],
+        rejected_candidates=[str(r)[:160] for r in (data.get("rejected_candidates") or [])[:6]],
     )
 
 
@@ -293,8 +318,9 @@ async def _model_investigate(
             role="user",
             content=(
                 f"Channel: {channel or 'unknown'}\n"
+                f"UNIFIED_MODE={'true' if unified_mode else 'false'}\n"
                 f"Learner message:\n{(user_text or '')[:2000]}\n\n"
-                "Investigate only if useful, then return the JSON brief."
+                "Investigate with tools only if useful, then return the JSON brief."
             ),
         ),
     ]
@@ -424,6 +450,7 @@ async def investigate_context(
                     max_tool_calls=flags["max_tool_calls"],
                     max_tokens=flags["max_tokens"],
                     temperature=flags["temperature"],
+                    unified_mode=(str(flags.get("mode") or "").lower() == "unified"),
                 )
             except Exception:
                 logger.exception("context_intelligence_model_failed")

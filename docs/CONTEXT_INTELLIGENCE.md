@@ -77,3 +77,21 @@ CONTEXT_INTELLIGENCE_FALLBACK_TO_PRIMARY=false
 - Not a keyword/subject router
 - Does not replace embeddings (still used inside memory retrieval)
 - Does not replace EvidencePlanner / MemoryService
+
+
+## Orchestration modes
+
+| Mode | Behavior |
+|------|----------|
+| `CONTEXT_INTELLIGENCE_MODE=investigate` | CI investigates + ContextBrief; Tutor (PRIMARY) responds |
+| `CONTEXT_INTELLIGENCE_MODE=unified` | CI may set `response_mode=unified` + `direct_reply`; Tutor skips LLM loop |
+
+## Evidence control
+
+When `CONTEXT_INTELLIGENCE_CONTROLS_EVIDENCE=true` (default), full `gather_evidence()`
+runs only if the brief sets `needs_evidence_gather=true`. Minimal turns can skip it.
+
+## Expanded capabilities
+
+Materials, knowledge graph, conversation summary, cross-channel continuity, plus
+memory/evidence/state/goals/preferences/hypotheses/identity.

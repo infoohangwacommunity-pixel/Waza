@@ -33,6 +33,10 @@ class LearnerContextPack:
     degraded: bool = False
     degradation_reason: str = ""
     pack: EvidencePack | None = None
+    # Context Intelligence orchestration
+    orchestration_brief: object | None = None
+    skip_evidence_gather: bool = False
+    unified_direct_reply: str = ""
 
     def as_assembled_blocks(self) -> dict[str, Any]:
         items = self.evidence
@@ -47,6 +51,8 @@ class LearnerContextPack:
             "decision_hints": self.decision_hints,
             "degraded": self.degraded,
             "degradation_reason": self.degradation_reason,
+            "unified_direct_reply": self.unified_direct_reply,
+            "skip_evidence_gather": self.skip_evidence_gather,
         }
 
 
@@ -99,9 +105,11 @@ class ContextResolver:
             pack.degradation_reason = "no_principal"
             return pack
 
-        # Context Intelligence: model-guided investigation (falls back to bounded probe)
+        # Context Intelligence: orchestration truth for this turn
+        brief = None
         try:
             from wax.intelligence.context_intel import investigate_context, brief_to_tutor_text
+            from wax.config.settings import get_settings as _gs
 
             brief = await investigate_context(
                 self.session,
@@ -110,6 +118,7 @@ class ContextResolver:
                 channel=channel,
                 user_text=user_text,
             )
+            pack.orchestration_brief = brief
             brief_txt = brief_to_tutor_text(brief)
             if brief_txt:
                 pack.system_prefix = pack.system_prefix + brief_txt
@@ -125,23 +134,38 @@ class ContextResolver:
                 pack.decision_hints.append(
                     f"context_intel_degraded:{brief.degradation_reason or 'partial'}"
                 )
+            controls = bool(getattr(_gs(), "context_intelligence_controls_evidence", True))
+            if controls and brief is not None and not brief.needs_evidence_gather:
+                pack.skip_evidence_gather = True
+                pack.decision_hints.append("context_intel:skip_evidence_gather")
+            if (
+                brief
+                and getattr(brief, "response_mode", "") == "unified"
+                and (brief.direct_reply or "").strip()
+            ):
+                pack.unified_direct_reply = brief.direct_reply.strip()
+                pack.decision_hints.append("context_intel:unified_direct_reply")
         except Exception:
             logger.exception("context_intelligence_integration_failed")
 
-        evidence = await gather_evidence(
-            self.session,
-            principal_id=principal_id,
-            user_text=user_text,
-            purpose=purpose,
-            conversation_id=conversation_id,
-            limit=28,
-        )
-        pack.pack = evidence
-        pack.evidence = evidence.items
-        pack.decision_hints = list(evidence.decision_hints)
-        pack.degraded = evidence.degraded
-        pack.degradation_reason = evidence.degradation_reason
-        pack.memories_used = sum(1 for i in evidence.items if i.kind == "memory")
+        if pack.skip_evidence_gather:
+            pack.evidence = []
+            pack.memories_used = 0
+        else:
+            evidence = await gather_evidence(
+                self.session,
+                principal_id=principal_id,
+                user_text=user_text,
+                purpose=purpose,
+                conversation_id=conversation_id,
+                limit=28,
+            )
+            pack.pack = evidence
+            pack.evidence = evidence.items
+            pack.decision_hints = list(pack.decision_hints) + list(evidence.decision_hints or [])
+            pack.degraded = pack.degraded or evidence.degraded
+            pack.degradation_reason = pack.degradation_reason or evidence.degradation_reason
+            pack.memories_used = sum(1 for i in evidence.items if i.kind == "memory")
         if evidence.degraded:
             logger.warning(
                 "learner_context_degraded",

@@ -33,6 +33,7 @@ class AssembledContext:
     recent_messages: list[dict[str, str]] = field(default_factory=list)
     total_chars: int = 0
     memories_used: int = 0
+    unified_direct_reply: str = ""
 
 
 class ContextAssembler:
@@ -71,6 +72,7 @@ class ContextAssembler:
                 goals_block=blocks.get("goals_block") or "",
                 recent_messages=recent,
                 memories_used=pack.memories_used,
+                unified_direct_reply=getattr(pack, "unified_direct_reply", "") or "",
             )
             # attach hints for tutor if supported
             ctx.total_chars = pack.total_chars

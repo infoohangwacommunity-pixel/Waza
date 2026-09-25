@@ -91,6 +91,48 @@ CAPABILITY_SPECS: list[dict[str, Any]] = [
         "description": "Active hypotheses about the learner (not facts).",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
     },
+    {
+        "name": "inspect_conversation_summary",
+        "description": "Stored summary of the current conversation if available. Use for longer threads.",
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
+        "name": "search_learner_materials",
+        "description": (
+            "Search materials the learner has uploaded or been given (notes, docs). "
+            "Use when the request refers to their content or study materials."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+        },
+    },
+    {
+        "name": "inspect_knowledge_related",
+        "description": (
+            "Look up related concepts in the knowledge graph for a free-text concept or phrase. "
+            "Subject-agnostic; no hardcoded curriculum."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "concept": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["concept"],
+        },
+    },
+    {
+        "name": "inspect_cross_channel_continuity",
+        "description": (
+            "Bounded recent turns from other verified messaging channels for the same learner. "
+            "Use only when continuity across WhatsApp/Telegram may matter."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
 ]
 
 
@@ -132,6 +174,20 @@ class ContextCapabilities:
                 return await self._linked_channels()
             if name == "inspect_hypotheses":
                 return await self._hypotheses()
+            if name == "inspect_conversation_summary":
+                return await self._conversation_summary()
+            if name == "search_learner_materials":
+                return await self._materials(
+                    str(args.get("query") or self.user_text or ""),
+                    int(args.get("limit") or 6),
+                )
+            if name == "inspect_knowledge_related":
+                return await self._knowledge(
+                    str(args.get("concept") or self.user_text or ""),
+                    int(args.get("limit") or 8),
+                )
+            if name == "inspect_cross_channel_continuity":
+                return await self._continuity()
             return {"ok": False, "error": f"unknown_capability:{name}"}
         except Exception as e:
             logger.exception("context_capability_failed", capability=name)

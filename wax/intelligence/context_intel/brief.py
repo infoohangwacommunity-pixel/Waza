@@ -1,4 +1,4 @@
-"""Structured Context Brief — contract between investigation and the tutor."""
+"""Structured Context Brief / orchestration contract."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 Confidence = Literal["high", "medium", "low", "none"]
 InfoKind = Literal["fact", "evidence", "inference", "hypothesis"]
+ResponseMode = Literal["tutor", "unified", "defer"]
 
 
 @dataclass
@@ -27,18 +28,29 @@ class BriefItem:
 
 @dataclass
 class ContextBrief:
-    """Bounded, provenance-aware package for the main tutor."""
+    """
+    Orchestration output for this turn.
+
+    Not only retrieved snippets — also strategy: whether more evidence is needed,
+    whether the intelligence model may answer directly (unified mode), etc.
+    """
 
     request_understanding: str = ""
     task_intent: str = ""
     no_context_required: bool = False
     insufficient_evidence: bool = False
-    items: list[BriefItem] = field(default_factory=list)
+    # When False, ContextResolver should not blindly re-run full gather_evidence
+    needs_evidence_gather: bool = True
+    response_mode: ResponseMode = "tutor"
     recommended_objective: str = ""
+    response_strategy: str = ""
+    direct_reply: str = ""  # only used when response_mode=unified and model produced answer
+    items: list[BriefItem] = field(default_factory=list)
     suggested_actions: list[str] = field(default_factory=list)
     uncertainties: list[str] = field(default_factory=list)
     investigation_notes: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
+    rejected_candidates: list[str] = field(default_factory=list)
     degraded: bool = False
     degradation_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -51,23 +63,26 @@ class ContextBrief:
 
 
 def brief_to_tutor_text(brief: ContextBrief, *, max_chars: int = 6000) -> str:
-    """Render brief for system context. Never invent beyond the brief."""
-    if brief.no_context_required and not brief.items:
+    if brief.no_context_required and not brief.items and not brief.direct_reply:
         return (
             "\n--- Context Intelligence ---\n"
             "No learner-specific context is materially required for this turn.\n"
             "--- End Context Intelligence ---\n"
         )
 
-    lines = ["\n--- Context Intelligence (evidence-backed) ---"]
+    lines = ["\n--- Context Intelligence (orchestration) ---"]
     if brief.request_understanding:
         lines.append(f"Request: {brief.request_understanding}")
     if brief.task_intent:
-        lines.append(f"Task: {brief.task_intent}")
+        lines.append(f"Intent: {brief.task_intent}")
+    if brief.response_strategy:
+        lines.append(f"Strategy: {brief.response_strategy}")
     if brief.insufficient_evidence:
         lines.append("Status: insufficient evidence — do not invent missing facts.")
     if brief.recommended_objective:
         lines.append(f"Objective: {brief.recommended_objective}")
+    if brief.needs_evidence_gather is False:
+        lines.append("Evidence gather: skipped (intelligence judged not required).")
 
     facts = brief.selected_facts()
     if facts:
@@ -80,6 +95,11 @@ def brief_to_tutor_text(brief: ContextBrief, *, max_chars: int = 6000) -> str:
         lines.append("Inferences (not durable facts):")
         for it in inf[:12]:
             lines.append(f"  - {it.render()}")
+
+    if brief.rejected_candidates:
+        lines.append("Rejected as irrelevant:")
+        for r in brief.rejected_candidates[:6]:
+            lines.append(f"  - {r}")
 
     if brief.uncertainties:
         lines.append("Uncertainties:")

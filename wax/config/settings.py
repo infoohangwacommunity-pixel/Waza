@@ -69,6 +69,10 @@ class Settings(BaseSettings):
     context_intelligence_temperature: float = 0.2
     # If true, intentional fallback: when CI provider unset, reuse primary credentials
     context_intelligence_fallback_to_primary: bool = False
+    # investigate | unified (CI may answer via direct_reply when model returns one)
+    context_intelligence_mode: str = "investigate"
+    # When True, full gather_evidence only if brief.needs_evidence_gather is True
+    context_intelligence_controls_evidence: bool = True
 
     embedding_provider: str = "none"
     embedding_api_key: str = ""
