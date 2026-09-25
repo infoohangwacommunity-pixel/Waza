@@ -244,12 +244,13 @@ async def serve_surface(token: str):
     from wax.surfaces.runtime import render_unavailable
     from wax.config import get_settings
 
-    # Production fail-closed: refuse AI HTML without distinct Surface origin.
+    # Production: require a public origin (PUBLIC_BASE_URL) so Surface URLs can be issued.
+    # Same-origin with the main app is allowed; security is token + gateway scoped.
     _settings = get_settings()
     if (_settings.app_env or "") == "production":
-        so = (getattr(_settings, "surface_public_origin", None) or "").rstrip("/")
         main = (_settings.public_base_url or "").rstrip("/")
-        if not so or (main and so == main):
+        so = (getattr(_settings, "surface_public_origin", None) or "").rstrip("/")
+        if not (so or main):
             html = render_unavailable(reason="failed")
             return HTMLResponse(
                 content=html,
@@ -257,7 +258,7 @@ async def serve_surface(token: str):
                 headers={
                     "Cache-Control": "no-store",
                     "X-Robots-Tag": "noindex, nofollow, noarchive",
-                    "X-WAX-Error": "origin_isolation_required",
+                    "X-WAX-Error": "public_origin_required",
                 },
             )
 
@@ -293,8 +294,11 @@ async def serve_surface(token: str):
         _s = _gs()
         connect_sources = ["'self'"]
         so = (getattr(_s, "surface_public_origin", None) or "").rstrip("/")
+        main = (_s.public_base_url or "").rstrip("/")
         if so:
             connect_sources.append(so)
+        elif main:
+            connect_sources.append(main)
         csp = (
             "default-src 'none'; "
             "script-src 'unsafe-inline'; "

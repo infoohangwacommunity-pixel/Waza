@@ -6,10 +6,12 @@ Infrastructure injects a capability bridge and enforces CSP at the HTTP layer.
 Generated code never receives secrets or unrestricted backend access.
 
 Security model:
-  - Surface HTML is intended to run on a distinct origin (surface_public_origin)
-    from the main WAX application when configured.
+  - Surfaces share PUBLIC_BASE_URL by default (same Railway origin as the main app).
+    Optional SURFACE_PUBLIC_ORIGIN remains for advanced multi-host setups.
+  - Security does not depend on a separate DNS name. It depends on:
+      opaque tokens, hashed storage, server-derived principal, scoped /s/{token}/api
+      gateway, CSP, no cookies required, no secrets in the browser.
   - The bridge only talks to the Surface gateway paths with the opaque token.
-  - No secrets, no internal IDs, no cookies required.
   - Service workers are unregistered; worker-src is none in CSP.
 """
 

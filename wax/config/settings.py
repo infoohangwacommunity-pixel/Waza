@@ -19,7 +19,8 @@ class Settings(BaseSettings):
     # Distinct origin for AI-authored Surface HTML (real browser security principal).
     # When set (e.g. https://s.example.com), Surface public URLs and the runtime bridge
     # use this origin exclusively. Main app origin never serves untrusted Surface HTML
-    # as the primary path. Leave empty to fall back to public_base_url (dev only).
+    # Optional dedicated Surface origin. When empty, Surfaces use public_base_url
+    # (same Railway origin). Set only if you intentionally host Surfaces on another host.
     surface_public_origin: str = ""
 
     database_url: str = "postgresql+asyncpg://wax:wax@localhost:5432/wax"
@@ -253,18 +254,13 @@ def validate_production_settings(settings: Settings | None = None) -> None:
         # Soft-enforce: document that production implies require
         # Actual refusal is in sandbox when app_env=production
         pass
-    # Surface origin isolation is required in production (fail closed).
-    so = (getattr(s, "surface_public_origin", None) or "").strip().rstrip("/")
+    # Surfaces share PUBLIC_BASE_URL by default (same Railway origin).
+    # SURFACE_PUBLIC_ORIGIN is optional for advanced multi-host deployments only.
     main = (s.public_base_url or "").strip().rstrip("/")
-    if not so:
+    if not main:
         problems.append(
-            "SURFACE_PUBLIC_ORIGIN must be set in production to a dedicated host "
-            "(distinct from PUBLIC_BASE_URL) so AI-authored JS is not same-origin with the main app"
-        )
-    elif main and so == main:
-        problems.append(
-            "SURFACE_PUBLIC_ORIGIN must differ from PUBLIC_BASE_URL "
-            "(e.g. https://s.example.com vs https://app.example.com)"
+            "PUBLIC_BASE_URL must be set in production "
+            "(canonical origin for the app and Surfaces, e.g. https://your-app.up.railway.app)"
         )
     if problems:
         raise RuntimeError("Production configuration invalid: " + "; ".join(problems))

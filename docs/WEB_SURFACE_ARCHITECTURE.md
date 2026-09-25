@@ -99,15 +99,16 @@ New work uses `wax/surfaces/`.
 
 ## Security boundary
 
-- **Distinct origin (production):** set `SURFACE_PUBLIC_ORIGIN` to a dedicated host
-  (subdomain) that serves `/s/{token}`. Generated HTML runs as a separate browser
-  security principal from the main WAX app origin.
+- **Same origin by default:** Surfaces use `PUBLIC_BASE_URL` (e.g. Railway public URL).
+  No separate domain is required. Optional `SURFACE_PUBLIC_ORIGIN` only for advanced multi-host.
 - Capability token in URL; scopes granted server-side; bridge uses `credentials: omit`
-- Gateway: state, events, AI request (queues Work — no LLM in web process)
+- Principal is always derived server-side from the Surface token (browser identity ignored)
+- Gateway: state, events, AI request under `/s/{token}/api/*` (queues Work — no LLM in web process)
 - CSP: default-src none; script-src unsafe-inline only; worker-src none; connect-src
-  limited to self + surface origin
+  limited to self + configured public origin
 - Service workers forcibly unregistered and `register` stubbed
 - No DATABASE_URL, secrets, or provider keys in browser
+- Main webhooks/admin paths are not Surface capabilities; opaque token does not grant them
 - Browser-supplied context is untrusted (identity keys stripped)
 - Cross-principal: token hash lookup + ownership on mutations
 - Optimistic concurrency on `update_surface` via `expected_revision`
@@ -177,15 +178,13 @@ for capability URLs already issued before Surfaces became canonical.
 - Operators may delete the package once all issued `/p/` tokens have expired.
 
 
-## Production origin (fail closed)
+## Production origin
 
 In `APP_ENV=production`:
 
-- `SURFACE_PUBLIC_ORIGIN` **must** be set
-- It **must** differ from `PUBLIC_BASE_URL`
-- Otherwise: startup validation fails, and `GET /s/{token}` returns 503
-
-Development may fall back to `PUBLIC_BASE_URL` when `SURFACE_PUBLIC_ORIGIN` is unset.
+- `PUBLIC_BASE_URL` **must** be set (canonical origin for app + Surfaces)
+- `SURFACE_PUBLIC_ORIGIN` is **optional** (leave empty for same-origin Railway deploy)
+- Surface URLs: `{PUBLIC_BASE_URL}/s/{token}`
 
 ## Idempotency
 

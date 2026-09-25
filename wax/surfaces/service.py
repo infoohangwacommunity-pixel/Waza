@@ -45,15 +45,23 @@ class SurfaceService:
         self.policy = policy or DEFAULT_SURFACE_POLICY
 
     def surface_origin(self) -> str:
-        """Origin that hosts AI-authored Surface HTML (security principal boundary)."""
+        """Public origin for Surface HTML and gateway URLs.
+
+        Prefer SURFACE_PUBLIC_ORIGIN when explicitly set (optional multi-host setup).
+        Otherwise use PUBLIC_BASE_URL — same Railway origin as the main app.
+        Security does not depend on a separate DNS name; it depends on opaque tokens,
+        server-derived principal, CSP, and scoped /s/{token}/api gateway routes.
+        """
         origin = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
         if origin:
             return origin
-        # Dev/test fallback only — production must use surface_public_origin (fail-closed at serve).
         return (self.settings.public_base_url or "").rstrip("/")
 
     def isolated_origin_configured(self) -> bool:
-        """True when SURFACE_PUBLIC_ORIGIN is set and distinct from PUBLIC_BASE_URL."""
+        """True when an optional dedicated SURFACE_PUBLIC_ORIGIN differs from PUBLIC_BASE_URL.
+
+        Same-origin (PUBLIC_BASE_URL only) is a supported, secure deployment mode.
+        """
         so = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
         if not so:
             return False
@@ -63,15 +71,16 @@ class SurfaceService:
         return True
 
     def require_origin_isolation(self) -> Optional[str]:
-        """In production, refuse Surfaces unless a distinct SURFACE_PUBLIC_ORIGIN is set.
+        """Legacy hook: same-origin Surfaces are allowed.
 
-        Returns an error code string when serving must fail closed; None when OK.
+        Returns an error only when production has no public origin at all
+        (cannot issue Surface URLs). Distinct SURFACE_PUBLIC_ORIGIN is optional.
         """
         env = getattr(self.settings, "app_env", "development") or "development"
         if env != "production":
             return None
-        if not self.isolated_origin_configured():
-            return "origin_isolation_required"
+        if not self.surface_origin():
+            return "public_origin_required"
         return None
 
     def public_url(self, token: str) -> Optional[str]:
@@ -81,9 +90,10 @@ class SurfaceService:
         return f"{base}/s/{token}"
 
     def api_base_for_bridge(self) -> str:
-        """Absolute origin for the bridge when a dedicated Surface origin is set; else empty."""
+        """Absolute origin for the bridge when a dedicated Surface origin is set; else empty (relative)."""
         dedicated = (getattr(self.settings, "surface_public_origin", None) or "").rstrip("/")
-        if dedicated:
+        main = (self.settings.public_base_url or "").rstrip("/")
+        if dedicated and dedicated != main:
             return dedicated
         return ""
 
