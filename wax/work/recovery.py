@@ -78,16 +78,8 @@ async def recover_orphan_messages(session, limit: int = 20) -> int:
 
     created = 0
     for msg in messages:
-        # Idempotent: skip if a recovery work already exists for this message
-        existing = await session.scalar(
-            select(Work.id).where(
-                Work.kind == "message_response",
-                Work.input_payload["message_id"].as_string() == str(msg.id),
-            ).limit(1)
-        )
-        # Fallback: also check metadata
-        if existing:
-            msg.work_id = existing
+        # Idempotent: if message already has work_id (race), skip
+        if msg.work_id:
             continue
 
         # Grouping for batch is handled separately; here one work per orphan message

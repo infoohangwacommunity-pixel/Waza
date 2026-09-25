@@ -65,3 +65,15 @@ def test_rate_decision_does_not_embed_secrets():
     blob = str(snap)
     for secret in FAKE_SECRETS:
         assert secret not in blob
+
+
+def test_safe_errors_module_strips_secrets():
+    from wax.security.safe_errors import student_facing_message, sanitize_for_student
+
+    for secret in FAKE_SECRETS:
+        out = student_facing_message(RuntimeError(secret))
+        assert secret not in out
+        assert "Traceback" not in out
+        out2 = sanitize_for_student(f"Error: {secret}\nTraceback (most recent call last)")
+        assert secret not in out2
+        assert "Traceback" not in out2
