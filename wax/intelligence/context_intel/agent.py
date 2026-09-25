@@ -448,7 +448,7 @@ async def investigate_context(
             has_ci_model = False
         if flags["use_model"] and has_ci_model:
             try:
-                return await _model_investigate(
+                brief = await _model_investigate(
                     caps,
                     user_text=user_text,
                     channel=channel,
@@ -457,6 +457,17 @@ async def investigate_context(
                     temperature=flags["temperature"],
                     unified_mode=(str(flags.get("mode") or "").lower() == "unified"),
                 )
+                logger.info(
+                    "context_intelligence_complete",
+                    path="model",
+                    mode=flags.get("mode"),
+                    tools=brief.tools_used[:8],
+                    needs_evidence=brief.needs_evidence_gather,
+                    response_mode=brief.response_mode,
+                    no_context=brief.no_context_required,
+                    has_direct_reply=bool((brief.direct_reply or "").strip()),
+                )
+                return brief
             except Exception:
                 logger.exception("context_intelligence_model_failed")
                 brief = await _deterministic_probe(
@@ -464,10 +475,24 @@ async def investigate_context(
                 )
                 brief.degraded = True
                 brief.degradation_reason = "model_failed_fallback_probe"
+                logger.warning(
+                    "context_intelligence_degraded",
+                    reason="model_failed_fallback_probe",
+                    tools=brief.tools_used[:8],
+                )
                 return brief
-        return await _deterministic_probe(
+        brief = await _deterministic_probe(
             caps, user_text=user_text, max_calls=flags["max_tool_calls"]
         )
+        logger.info(
+            "context_intelligence_complete",
+            path="deterministic_probe",
+            mode=flags.get("mode"),
+            tools=brief.tools_used[:8],
+            needs_evidence=brief.needs_evidence_gather,
+            no_context=brief.no_context_required,
+        )
+        return brief
     except Exception:
         logger.exception("context_intelligence_failed")
         return ContextBrief(

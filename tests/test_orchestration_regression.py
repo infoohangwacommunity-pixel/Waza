@@ -129,3 +129,24 @@ def test_provider_independence_contract():
     assert 'role == "context"' in src
     assert "context_intelligence_fallback_to_primary" in src
     assert "self.context_model" in src
+
+
+def test_all_declared_capabilities_have_handlers():
+    src = (ROOT / "wax/intelligence/context_intel/capabilities.py").read_text()
+    # Every execute() route must have a matching method
+    required = [
+        "_learner_state",
+        "_search_memories",
+        "_recent_conversation",
+        "_goals",
+        "_preferences",
+        "_search_evidence",
+        "_linked_channels",
+        "_hypotheses",
+        "_conversation_summary",
+        "_materials",
+        "_knowledge",
+        "_continuity",
+    ]
+    for name in required:
+        assert f"async def {name}" in src, f"missing handler {name}"

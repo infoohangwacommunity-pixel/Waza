@@ -397,3 +397,163 @@ class ContextCapabilities:
             return {"ok": True, "kind": "hypothesis", "source": "hypothesis", "items": items}
         except Exception:
             return {"ok": True, "kind": "hypothesis", "source": "hypothesis", "items": []}
+
+
+    async def _conversation_summary(self) -> dict[str, Any]:
+        if not self.conversation_id:
+            return {"ok": True, "kind": "fact", "source": "conversation_summary", "summary": ""}
+        try:
+            from wax.db.models import Conversation
+
+            conv = await self.session.get(Conversation, self.conversation_id)
+            summary = ""
+            if conv is not None:
+                meta = getattr(conv, "metadata_", None) or {}
+                summary = (
+                    getattr(conv, "summary", None)
+                    or (meta.get("summary") if isinstance(meta, dict) else None)
+                    or ""
+                )
+            return {
+                "ok": True,
+                "kind": "fact",
+                "source": "conversation_summary",
+                "summary": str(summary or "")[:1500],
+            }
+        except Exception:
+            logger.exception("conversation_summary_capability_failed")
+            return {"ok": True, "kind": "fact", "source": "conversation_summary", "summary": ""}
+
+    async def _materials(self, query: str, limit: int) -> dict[str, Any]:
+        limit = max(1, min(10, int(limit or 6)))
+        items: list[dict[str, Any]] = []
+        try:
+            from wax.db.models import Artifact
+
+            rows = list(
+                (
+                    await self.session.execute(
+                        select(Artifact)
+                        .where(Artifact.principal_id == self.principal_id)
+                        .order_by(Artifact.created_at.desc())
+                        .limit(max(limit, 12))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            q = (query or "").lower()
+            for a in rows:
+                title = (a.title or str(a.id))[:120]
+                preview = ((a.description or a.content or "")[:200])
+                blob = f"{title} {preview}".lower()
+                if q and len(q) > 2 and q not in blob:
+                    continue
+                items.append(
+                    {
+                        "title": title,
+                        "kind": a.kind,
+                        "preview": preview,
+                        "source": "artifact",
+                    }
+                )
+            if not items and rows:
+                items = [
+                    {
+                        "title": (a.title or str(a.id))[:120],
+                        "kind": a.kind,
+                        "preview": ((a.description or a.content or "")[:200]),
+                        "source": "artifact",
+                    }
+                    for a in rows[:limit]
+                ]
+        except Exception:
+            logger.exception("materials_capability_failed")
+        try:
+            from wax.knowledge.ingest import KnowledgeIngestService
+
+            hits = await KnowledgeIngestService(self.session).semantic_search(
+                self.principal_id, query or self.user_text or "", limit=limit
+            )
+            for h in hits or []:
+                if isinstance(h, dict):
+                    items.append(
+                        {
+                            "title": str(h.get("title") or h.get("source") or "material")[:120],
+                            "preview": str(h.get("content") or h.get("text") or "")[:200],
+                            "source": "knowledge_chunk",
+                            "score": h.get("score"),
+                        }
+                    )
+        except Exception:
+            pass
+        return {
+            "ok": True,
+            "kind": "evidence",
+            "source": "materials",
+            "items": items[:limit],
+        }
+
+    async def _knowledge(self, concept: str, limit: int) -> dict[str, Any]:
+        limit = max(1, min(12, int(limit or 8)))
+        items: list[dict[str, Any]] = []
+        try:
+            from wax.knowledge.graph import KnowledgeGraphService
+
+            kg = KnowledgeGraphService(self.session)
+            snap = await kg.learner_snapshot(self.principal_id, limit=limit)
+            q = (concept or "").lower()
+            for row in snap or []:
+                if not isinstance(row, dict):
+                    continue
+                label = str(row.get("concept") or "")
+                if q and len(q) > 2 and q not in label.lower():
+                    continue
+                items.append(
+                    {
+                        "concept": label,
+                        "status": row.get("status"),
+                        "mastery": row.get("mastery"),
+                        "confidence": row.get("confidence"),
+                        "source": "learner_concept_state",
+                    }
+                )
+            if not items and snap:
+                items = [
+                    {
+                        "concept": str(r.get("concept") or ""),
+                        "status": r.get("status"),
+                        "mastery": r.get("mastery"),
+                        "confidence": r.get("confidence"),
+                        "source": "learner_concept_state",
+                    }
+                    for r in (snap or [])[:limit]
+                    if isinstance(r, dict)
+                ]
+        except Exception:
+            logger.exception("knowledge_capability_failed")
+        return {
+            "ok": True,
+            "kind": "evidence",
+            "source": "knowledge",
+            "items": items[:limit],
+        }
+
+    async def _continuity(self) -> dict[str, Any]:
+        try:
+            from wax.domain.identity import recent_cross_channel_snippets
+
+            snippets = await recent_cross_channel_snippets(
+                self.session,
+                principal_id=self.principal_id,
+                current_channel=self.channel,
+            )
+            return {
+                "ok": True,
+                "kind": "fact",
+                "source": "cross_channel",
+                "items": (snippets or [])[:12],
+            }
+        except Exception:
+            logger.exception("continuity_capability_failed")
+            return {"ok": True, "kind": "fact", "source": "cross_channel", "items": []}
