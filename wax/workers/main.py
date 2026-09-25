@@ -852,8 +852,6 @@ async def recovery_loop() -> None:
                 except Exception:
                     logger.exception("surface_lifecycle_error")
 
-                except Exception:
-                    logger.exception("publication_lifecycle_error")
                 if cycle % 10 == 0:
                     try:
                         from wax.db.models import Principal
@@ -878,6 +876,7 @@ def _log_provider_config() -> None:
     key = (settings.primary_api_key or "").strip()
     placeholder = key in ("", "REPLACE_WITH_YOUR_LLM_API_KEY", "change-me")
     base = (settings.primary_base_url or "").strip() or "(default)"
+    ci_key = (getattr(settings, "context_intelligence_api_key", None) or "").strip()
     logger.info(
         "provider_config",
         provider_selected=settings.primary_provider,
@@ -887,6 +886,13 @@ def _log_provider_config() -> None:
         provider_model=settings.primary_model,
         fallback_provider=settings.fallback_provider,
         fallback_api_key_configured=bool((settings.fallback_api_key or "").strip()),
+        context_intelligence_provider=getattr(settings, "context_intelligence_provider", None),
+        context_intelligence_model=getattr(settings, "context_intelligence_model", None),
+        context_intelligence_mode=getattr(settings, "context_intelligence_mode", None),
+        context_intelligence_api_key_configured=bool(ci_key),
+        context_intelligence_fallback_to_primary=bool(
+            getattr(settings, "context_intelligence_fallback_to_primary", False)
+        ),
     )
 
 

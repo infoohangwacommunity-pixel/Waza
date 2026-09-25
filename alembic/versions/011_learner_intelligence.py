@@ -67,35 +67,47 @@ def upgrade() -> None:
     op.create_index("ix_temporal_intent_due", "temporal_intents", ["status", "execute_at"])
     op.create_index("ix_temporal_intent_principal", "temporal_intents", ["principal_id", "status"])
 
-    # retention columns on learner_concept_states
-    for col, typ in [
-        ("stability", sa.Float(), "1.0"),
-        ("difficulty", sa.Float(), "0.3"),
-        ("retrievability", sa.Float(), None),
-        ("lapse_count", sa.Integer(), "0"),
-        ("independent_successes", sa.Integer(), "0"),
-        ("assisted_successes", sa.Integer(), "0"),
-        ("review_count", sa.Integer(), "0"),
-    ]:
-        try:
-            if typ is sa.Float() and col == "retrievability":
-                op.add_column("learner_concept_states", sa.Column(col, sa.Float(), nullable=True))
-            elif isinstance(typ, type(sa.Float())):
-                op.add_column("learner_concept_states", sa.Column(col, sa.Float(), server_default=typ if False else sa.text(str(typ) if False else "1.0") if col=="stability" else sa.text("0.3" if col=="difficulty" else "0")))
-            else:
-                op.add_column("learner_concept_states", sa.Column(col, typ, server_default="0"))
-        except Exception:
-            pass
-    # cleaner adds
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS stability DOUBLE PRECISION DEFAULT 1.0")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS difficulty DOUBLE PRECISION DEFAULT 0.3")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS retrievability DOUBLE PRECISION")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS lapse_count INTEGER DEFAULT 0")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMPTZ")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMPTZ")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS independent_successes INTEGER DEFAULT 0")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS assisted_successes INTEGER DEFAULT 0")
-    op.execute("ALTER TABLE learner_concept_states ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0")
+    # Retention / spaced-repetition columns on learner_concept_states.
+    # Idempotent ADD COLUMN IF NOT EXISTS so partial prior applies and
+    # re-runs are safe. No broad try/except — failures surface clearly.
+    # 012_learner_intelligence_cleanup repeats these as a safety net.
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS stability DOUBLE PRECISION DEFAULT 1.0"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS difficulty DOUBLE PRECISION DEFAULT 0.3"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS retrievability DOUBLE PRECISION"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS lapse_count INTEGER DEFAULT 0"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS last_review_at TIMESTAMPTZ"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS next_review_at TIMESTAMPTZ"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS independent_successes INTEGER DEFAULT 0"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS assisted_successes INTEGER DEFAULT 0"
+    )
+    op.execute(
+        "ALTER TABLE learner_concept_states "
+        "ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0"
+    )
+
 
 
 def downgrade() -> None:
