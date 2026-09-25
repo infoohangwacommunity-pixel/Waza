@@ -53,6 +53,13 @@ class Settings(BaseSettings):
     #   EMBEDDING_API_KEY=...
     #   EMBEDDING_BASE_URL=https://api.voyageai.com/v1
     #   EMBEDDING_MODEL=voyage-3.5-lite
+    # Context Intelligence (model-guided investigation over existing systems)
+    context_intelligence_enabled: bool = True
+    context_intelligence_use_model: bool = True
+    context_intelligence_max_tool_calls: int = 6
+    context_intelligence_max_tokens: int = 900
+    context_intelligence_temperature: float = 0.2
+
     embedding_provider: str = "none"
     embedding_api_key: str = ""
     embedding_base_url: str = ""

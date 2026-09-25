@@ -99,6 +99,35 @@ class ContextResolver:
             pack.degradation_reason = "no_principal"
             return pack
 
+        # Context Intelligence: model-guided investigation (falls back to bounded probe)
+        try:
+            from wax.intelligence.context_intel import investigate_context, brief_to_tutor_text
+
+            brief = await investigate_context(
+                self.session,
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+                channel=channel,
+                user_text=user_text,
+            )
+            brief_txt = brief_to_tutor_text(brief)
+            if brief_txt:
+                pack.system_prefix = pack.system_prefix + brief_txt
+            if brief.tools_used:
+                pack.decision_hints.append(
+                    "context_intel_tools:" + ",".join(brief.tools_used[:8])
+                )
+            if brief.no_context_required:
+                pack.decision_hints.append("context_intel:no_context_required")
+            if brief.insufficient_evidence:
+                pack.decision_hints.append("context_intel:insufficient_evidence")
+            if brief.degraded:
+                pack.decision_hints.append(
+                    f"context_intel_degraded:{brief.degradation_reason or 'partial'}"
+                )
+        except Exception:
+            logger.exception("context_intelligence_integration_failed")
+
         evidence = await gather_evidence(
             self.session,
             principal_id=principal_id,
