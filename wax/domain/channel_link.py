@@ -67,6 +67,21 @@ async def request_otp_link(
     if existing.scalar_one_or_none():
         return {"ok": True, "already_linked": True, "channel": target_channel}
 
+    # Owned by someone else — do not start OTP that would conflict on confirm
+    other = await session.execute(
+        select(InterfaceIdentity).where(
+            InterfaceIdentity.channel == target_channel,
+            InterfaceIdentity.external_id == target_external_id,
+        )
+    )
+    owned = other.scalar_one_or_none()
+    if owned and owned.principal_id != principal_id:
+        return {
+            "ok": False,
+            "error": "identity_conflict",
+            "note": "That account is already linked to a different learner.",
+        }
+
     code = f"{secrets.randbelow(1_000_000):06d}"
     now = datetime.now(timezone.utc)
     challenge = ChannelLinkChallenge(
