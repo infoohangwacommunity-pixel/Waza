@@ -205,15 +205,45 @@ async def process_message_response(session, work: Work) -> None:
         await _attempt_deliveries(session, work.id)
     except Exception as e:
         logger.exception("tutor_turn_failed", work_id=str(work.id))
-        work.error = str(e)
-        work.error_class = "execution_failure"
+        from wax.security.safe_errors import classify_error, student_facing_message
+
+        work.error = str(e)[:1000]  # internal only
+        work.error_class = classify_error(e)
         if work.attempt < work.max_attempts:
             work.status = "retrying"
-            delay = min(300, 2 ** work.attempt * 5)
+            delay = min(300, 2 ** int(work.attempt or 0) * 5)
             work.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
         else:
             work.status = "failed"
             work.completed_at = datetime.now(timezone.utc)
+            # Permanent failure: queue a safe student-facing apology once (idempotent delivery key)
+            try:
+                from wax.db.models import Delivery
+                from uuid import uuid4
+
+                safe = student_facing_message(e, error_class=work.error_class)
+                target = (work.input_payload or {}).get("target_external_id")
+                channel = (work.input_payload or {}).get("channel") or "whatsapp"
+                if target and work.principal_id:
+                    idem = f"safe-err:{work.id}"
+                    existing = await session.scalar(
+                        select(Delivery.id).where(Delivery.idempotency_key == idem)
+                    )
+                    if not existing:
+                        session.add(
+                            Delivery(
+                                id=uuid4(),
+                                work_id=work.id,
+                                principal_id=work.principal_id,
+                                channel=channel,
+                                target_external_id=str(target),
+                                content=safe,
+                                status="pending",
+                                idempotency_key=idem,
+                            )
+                        )
+            except Exception:
+                logger.exception("safe_error_delivery_failed")
         await session.flush()
 
 
