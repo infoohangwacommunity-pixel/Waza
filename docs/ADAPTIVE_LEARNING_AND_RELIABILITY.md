@@ -30,9 +30,11 @@ No surveys, no forced ratings.
 
 ## Rate protection
 
-`wax/protection/rate.py`: burst-tolerant token bucket after durable accept.
-Never discards accepted messages.
-Process-local state is an optimization; multi-worker hard shared enforcement needs a durable store (documented).
+`wax/protection/rate.py` + `principal_workloads` (Alembic 017):
+- `decide_durable(session, principal_id)` uses SELECT FOR UPDATE across workers
+- process-local bucket is fallback only
+- Never discards accepted messages
+- Pure `decide_from_counts` is unit-tested for burst vs protect vs throttle
 
 ## Recovery
 
