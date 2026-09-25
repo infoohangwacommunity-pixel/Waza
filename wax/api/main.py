@@ -441,23 +441,57 @@ async def surface_post_event(token: str, request: Request):
                         record_explicit_interaction_evidence,
                     )
 
+                    # Never trust browser-supplied principal identity
+                    payload.pop("principal_id", None)
                     direction = str(payload.get("direction") or payload.get("value") or "")
-                    ref = payload.get("response_ref") or payload.get("message_id") or payload.get("work_id")
-                    # Require a response reference so feedback is tied to a specific answer
-                    if ref:
-                        sig = web_feedback_to_signal(
-                            direction,
-                            response_ref=str(ref),
-                            work_id=str(payload.get("work_id")) if payload.get("work_id") else None,
-                            message_id=str(payload.get("message_id")) if payload.get("message_id") else None,
-                        )
-                        if sig.kind.value != "neutral":
-                            await record_explicit_interaction_evidence(
-                                session,
-                                principal_id=surface.principal_id,  # from token ownership
-                                signal=sig,
-                                surface_id=surface.id,
+                    ref = payload.get("response_ref") or payload.get("request_id") or payload.get("message_id") or payload.get("work_id")
+                    if not ref:
+                        pass
+                    else:
+                        from wax.db.models import SurfaceAiRequest, SurfaceEvent
+                        from sqlalchemy import or_, select
+                        from uuid import UUID as _UUID
+
+                        owned = False
+                        try:
+                            rid = _UUID(str(ref))
+                        except Exception:
+                            rid = None
+                        if rid:
+                            req = await session.get(SurfaceAiRequest, rid)
+                            if req and req.surface_id == surface.id and req.principal_id == surface.principal_id:
+                                owned = True
+                            if not owned:
+                                ev = await session.get(SurfaceEvent, rid)
+                                if ev and ev.surface_id == surface.id and ev.principal_id == surface.principal_id:
+                                    owned = True
+                        if not owned:
+                            # Also allow opaque request_token_hash match on this surface
+                            row = await session.scalar(
+                                select(SurfaceAiRequest.id).where(
+                                    SurfaceAiRequest.surface_id == surface.id,
+                                    SurfaceAiRequest.principal_id == surface.principal_id,
+                                    or_(
+                                        SurfaceAiRequest.request_token_hash == str(ref),
+                                        SurfaceAiRequest.idempotency_key == str(ref),
+                                    ),
+                                ).limit(1)
                             )
+                            owned = bool(row)
+                        if owned:
+                            sig = web_feedback_to_signal(
+                                direction,
+                                response_ref=str(ref),
+                                work_id=str(payload.get("work_id")) if payload.get("work_id") else None,
+                                message_id=str(payload.get("message_id")) if payload.get("message_id") else None,
+                            )
+                            if sig.kind.value != "neutral":
+                                await record_explicit_interaction_evidence(
+                                    session,
+                                    principal_id=surface.principal_id,
+                                    signal=sig,
+                                    surface_id=surface.id,
+                                )
                 except Exception:
                     from wax.observability.logging import get_logger
 

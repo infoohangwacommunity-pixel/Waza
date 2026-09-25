@@ -1209,3 +1209,31 @@ class SurfaceAiRequest(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     error: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
     result: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
+
+
+class PrincipalWorkload(Base, UUIDPrimaryKeyMixin, TimestampMixin):
+    """
+    Durable per-principal workload / guardrail state.
+
+    Used for burst-tolerant rate protection and check-in accounting
+    across multiple workers. Message durability does not depend on this row.
+    """
+
+    __tablename__ = "principal_workloads"
+    __table_args__ = (
+        UniqueConstraint("principal_id", name="uq_principal_workload"),
+        Index("ix_principal_workload_principal", "principal_id"),
+    )
+
+    principal_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
+    )
+    tokens: Mapped[float] = mapped_column(Float, default=12.0, nullable=False)
+    last_refill_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    window_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    window_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_checkin_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    checkin_week_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    checkin_week_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")

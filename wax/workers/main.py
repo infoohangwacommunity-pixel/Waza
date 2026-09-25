@@ -87,9 +87,9 @@ async def process_message_response(session, work: Work) -> None:
     # Rate / workload note (post-accept): never drops the message; may defer priority
     if work.principal_id:
         try:
-            from wax.protection.rate import get_rate_protector, RateDecision
+            from wax.protection.rate import decide_durable, RateDecision
 
-            decision = get_rate_protector().decide(work.principal_id, channel=payload.get("channel"))
+            decision = await decide_durable(session, work.principal_id)
             if decision in (RateDecision.THROTTLE, RateDecision.PROTECT, RateDecision.DEFER):
                 meta = dict(work.metadata_ or {})
                 meta["rate_decision"] = decision.value
