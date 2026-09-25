@@ -222,6 +222,11 @@ async def deliver(
     Callers (tutor, scheduled path, engine) must run present_for_channel before
     writing Delivery.content. Senders do not re-present.
     """
+    try:
+        from wax.security.safe_errors import sanitize_for_student
+        text = sanitize_for_student(text)
+    except Exception:
+        pass
     if show_typing:
         await send_typing(channel, target, inbound_message_id=inbound_message_id)
     if channel == "whatsapp":
