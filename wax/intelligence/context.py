@@ -110,6 +110,7 @@ class ContextAssembler:
         learning_block = await self._learning_snapshot(principal_id)
         goals_block = await self._active_goals(principal_id)
         prefs_block = await self._preferences_block(principal_id)
+        identity_block = await self._identity_channels_block(principal_id, channel)
         checkin_block = await self._checkin_eligibility_block(principal_id, conversation_id)
         situation_block = ""
         if principal_id:
@@ -126,7 +127,7 @@ class ContextAssembler:
 
         assembled = AssembledContext(
             system_prefix=system_prefix,
-            memory_block=memory_block + summary_block + prefs_block + checkin_block,
+            memory_block=memory_block + summary_block + prefs_block + identity_block + checkin_block,
             learning_block=learning_block + knowledge_block + materials_block + hyp_block,
             goals_block=goals_block + situation_block,
             recent_messages=recent,
@@ -177,6 +178,22 @@ class ContextAssembler:
         msgs = list(reversed(result.scalars().all()))
         return [{"role": m.role, "content": m.content} for m in msgs]
 
+
+
+    async def _identity_channels_block(self, principal_id, channel: str) -> str:
+        """Authoritative linked-channel state for the tutor. Never invent beyond this."""
+        if not principal_id:
+            return ""
+        try:
+            from wax.domain.identity import linked_channels_state, format_linked_channels_block
+
+            state = await linked_channels_state(
+                self.session, principal_id=principal_id, current_channel=channel
+            )
+            return format_linked_channels_block(state)
+        except Exception:
+            logger.exception("identity_channels_block_failed")
+            return ""
 
     async def _checkin_eligibility_block(self, principal_id, conversation_id) -> str:
         """Infrastructure gate only — AI still decides if the moment is natural."""

@@ -159,14 +159,39 @@ async def confirm_otp_link(
         if not secrets.compare_digest(ch.code_hash, _hash_code(code)):
             await session.flush()
             continue
-        # Success
-        identity = await link_identity_to_principal(
-            session,
-            principal_id=principal_id,
-            channel=ch.target_channel,
-            external_id=ch.target_external_id,
-            make_primary=False,
+        # Success — refuse if target identity already owned by another principal
+        from wax.domain.identity import IdentityConflictError, find_identity
+
+        owned = await find_identity(
+            session, channel=ch.target_channel, external_id=ch.target_external_id
         )
+        if owned and owned.principal_id != principal_id:
+            ch.status = "failed"
+            await session.flush()
+            logger.warning(
+                "channel_link_conflict",
+                challenge_id=str(ch.id),
+                channel=ch.target_channel,
+                principal_id=str(principal_id),
+            )
+            return {
+                "ok": False,
+                "error": "identity_conflict",
+                "note": "That account is already linked to a different learner. Linking was not changed.",
+            }
+        try:
+            identity = await link_identity_to_principal(
+                session,
+                principal_id=principal_id,
+                channel=ch.target_channel,
+                external_id=ch.target_external_id,
+                make_primary=False,
+                allow_reassign=False,
+            )
+        except IdentityConflictError:
+            ch.status = "failed"
+            await session.flush()
+            return {"ok": False, "error": "identity_conflict"}
         ch.status = "verified"
         ch.verified_at = now
         await session.flush()
@@ -271,13 +296,32 @@ async def confirm_knowledge_link(
             ch.status = "failed"
         await session.flush()
         return {"ok": False, "error": "answers_incorrect"}
-    identity = await link_identity_to_principal(
-        session,
-        principal_id=principal_id,
-        channel=ch.target_channel,
-        external_id=ch.target_external_id,
-        make_primary=False,
+    from wax.domain.identity import IdentityConflictError, find_identity
+
+    owned = await find_identity(
+        session, channel=ch.target_channel, external_id=ch.target_external_id
     )
+    if owned and owned.principal_id != principal_id:
+        ch.status = "failed"
+        await session.flush()
+        return {
+            "ok": False,
+            "error": "identity_conflict",
+            "note": "That account is already linked to a different learner.",
+        }
+    try:
+        identity = await link_identity_to_principal(
+            session,
+            principal_id=principal_id,
+            channel=ch.target_channel,
+            external_id=ch.target_external_id,
+            make_primary=False,
+            allow_reassign=False,
+        )
+    except IdentityConflictError:
+        ch.status = "failed"
+        await session.flush()
+        return {"ok": False, "error": "identity_conflict"}
     ch.status = "verified"
     ch.verified_at = now
     await session.flush()

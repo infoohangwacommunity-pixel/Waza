@@ -1412,20 +1412,28 @@ async def handle_export_learner_data(
 async def handle_link_channel_identity(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
-    from wax.domain.identity import link_identity_to_principal
+    from wax.domain.identity import IdentityConflictError, link_identity_to_principal
     principal_id = ctx.get("principal_id")
     channel = args.get("channel")
     external_id = args.get("external_id")
     if not principal_id or not channel or not external_id:
         return {"ok": False, "error": "channel_and_external_id_required"}
-    identity = await link_identity_to_principal(
-        session,
-        principal_id=principal_id,
-        channel=str(channel),
-        external_id=str(external_id),
-        display_name=args.get("display_name"),
-        make_primary=bool(args.get("make_primary")),
-    )
+    try:
+        identity = await link_identity_to_principal(
+            session,
+            principal_id=principal_id,
+            channel=str(channel),
+            external_id=str(external_id),
+            display_name=args.get("display_name"),
+            make_primary=bool(args.get("make_primary")),
+            allow_reassign=False,
+        )
+    except IdentityConflictError:
+        return {
+            "ok": False,
+            "error": "identity_conflict",
+            "note": "That channel identity already belongs to another learner.",
+        }
     return {
         "ok": True,
         "identity_id": str(identity.id),

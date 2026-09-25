@@ -66,7 +66,18 @@ class ContextResolver:
         purpose: str = "reply",
     ) -> LearnerContextPack:
         platform = platform_context_block(channel)
-        pack = LearnerContextPack(system_prefix=tutor_system + platform)
+        identity_txt = ""
+        if principal_id:
+            try:
+                from wax.domain.identity import linked_channels_state, format_linked_channels_block
+
+                state = await linked_channels_state(
+                    self.session, principal_id=principal_id, current_channel=channel
+                )
+                identity_txt = format_linked_channels_block(state)
+            except Exception:
+                logger.exception("linked_channels_state_failed")
+        pack = LearnerContextPack(system_prefix=tutor_system + platform + identity_txt)
         if not principal_id:
             pack.recent_messages = await self._recent_messages(conversation_id)
             pack.degraded = True
