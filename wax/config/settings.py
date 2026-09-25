@@ -53,12 +53,22 @@ class Settings(BaseSettings):
     #   EMBEDDING_API_KEY=...
     #   EMBEDDING_BASE_URL=https://api.voyageai.com/v1
     #   EMBEDDING_MODEL=voyage-3.5-lite
-    # Context Intelligence (model-guided investigation over existing systems)
+    # Context Intelligence — independent provider/model namespace (not the tutor by default)
     context_intelligence_enabled: bool = True
     context_intelligence_use_model: bool = True
+    # Provider: openai | grok | openrouter | anthropic | none
+    # Empty/"none" = no CI model (deterministic probe only). Does NOT auto-use primary.
+    context_intelligence_provider: str = "none"
+    context_intelligence_api_key: str = ""
+    context_intelligence_base_url: str = ""
+    context_intelligence_model: str = ""
+    context_intelligence_timeout_seconds: float = 45.0
+    context_intelligence_max_retries: int = 1
     context_intelligence_max_tool_calls: int = 6
     context_intelligence_max_tokens: int = 900
     context_intelligence_temperature: float = 0.2
+    # If true, intentional fallback: when CI provider unset, reuse primary credentials
+    context_intelligence_fallback_to_primary: bool = False
 
     embedding_provider: str = "none"
     embedding_api_key: str = ""

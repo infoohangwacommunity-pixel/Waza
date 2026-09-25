@@ -57,6 +57,8 @@ def _settings_flags() -> dict[str, Any]:
         "max_tool_calls": int(getattr(s, "context_intelligence_max_tool_calls", 6) or 6),
         "max_tokens": int(getattr(s, "context_intelligence_max_tokens", 900) or 900),
         "temperature": float(getattr(s, "context_intelligence_temperature", 0.2) or 0.2),
+        "provider": (getattr(s, "context_intelligence_provider", None) or "none"),
+        "fallback_to_primary": bool(getattr(s, "context_intelligence_fallback_to_primary", False)),
     }
 
 
@@ -308,7 +310,9 @@ async def _model_investigate(
                 temperature=temperature,
                 max_tokens=max_tokens,
                 metadata={"role": "context_intelligence"},
-            )
+            ),
+            role="context",
+            allow_fallback=False,
         )
         if resp.tool_calls:
             # append assistant tool_calls message
@@ -404,7 +408,14 @@ async def investigate_context(
     )
 
     try:
-        if flags["use_model"]:
+        # Only call the CI model when a context provider is configured (or explicit primary fallback)
+        has_ci_model = False
+        try:
+            from wax.intelligence.providers import get_intelligence
+            has_ci_model = get_intelligence().context_model is not None
+        except Exception:
+            has_ci_model = False
+        if flags["use_model"] and has_ci_model:
             try:
                 return await _model_investigate(
                     caps,

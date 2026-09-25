@@ -46,17 +46,30 @@ uncertainties, optional “no context required” / “insufficient evidence”.
 Rendered into the tutor system prefix. Inferences must not be written as durable facts
 from this block alone.
 
-## Configuration
+## Configuration (independent of the Tutor)
+
+Context Intelligence has its **own** provider namespace. It does **not** inherit the
+main tutor model unless you explicitly set `CONTEXT_INTELLIGENCE_FALLBACK_TO_PRIMARY=true`.
 
 ```
 CONTEXT_INTELLIGENCE_ENABLED=true
 CONTEXT_INTELLIGENCE_USE_MODEL=true
+CONTEXT_INTELLIGENCE_PROVIDER=openai   # or grok | openrouter | anthropic | none
+CONTEXT_INTELLIGENCE_API_KEY=
+CONTEXT_INTELLIGENCE_BASE_URL=
+CONTEXT_INTELLIGENCE_MODEL=
+CONTEXT_INTELLIGENCE_TIMEOUT_SECONDS=45
+CONTEXT_INTELLIGENCE_MAX_RETRIES=1
 CONTEXT_INTELLIGENCE_MAX_TOOL_CALLS=6
 CONTEXT_INTELLIGENCE_MAX_TOKENS=900
 CONTEXT_INTELLIGENCE_TEMPERATURE=0.2
+CONTEXT_INTELLIGENCE_FALLBACK_TO_PRIMARY=false
 ```
 
-Uses the existing primary/fallback intelligence provider — no hardcoded model names.
+- Tutor uses `PRIMARY_*` / `FALLBACK_*`
+- Context Intelligence uses `CONTEXT_INTELLIGENCE_*`
+- Same provider/model only if you configure both the same way on purpose
+- If CI provider/key/model unset and fallback_to_primary is false → deterministic probe only
 
 ## Non-goals
 
