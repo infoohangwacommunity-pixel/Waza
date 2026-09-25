@@ -148,9 +148,12 @@ class ContextResolver:
         except Exception:
             logger.exception("context_intelligence_integration_failed")
 
+        evidence = None
         if pack.skip_evidence_gather:
+            # First-class path: CI decided a broad evidence pass is not needed
             pack.evidence = []
             pack.memories_used = 0
+            pack.pack = None
         else:
             evidence = await gather_evidence(
                 self.session,
@@ -161,24 +164,24 @@ class ContextResolver:
                 limit=28,
             )
             pack.pack = evidence
-            pack.evidence = evidence.items
+            pack.evidence = list(evidence.items or [])
             pack.decision_hints = list(pack.decision_hints) + list(evidence.decision_hints or [])
-            pack.degraded = pack.degraded or evidence.degraded
-            pack.degradation_reason = pack.degradation_reason or evidence.degradation_reason
-            pack.memories_used = sum(1 for i in evidence.items if i.kind == "memory")
-        if evidence.degraded:
-            logger.warning(
-                "learner_context_degraded",
-                principal_id=str(principal_id),
-                reason=evidence.degradation_reason,
-            )
-            pack.decision_hints.append(f"degraded:{evidence.degradation_reason or 'partial'}")
+            pack.degraded = pack.degraded or bool(evidence.degraded)
+            pack.degradation_reason = pack.degradation_reason or (evidence.degradation_reason or "")
+            pack.memories_used = sum(1 for i in pack.evidence if getattr(i, "kind", "") == "memory")
+            if evidence.degraded:
+                logger.warning(
+                    "learner_context_degraded",
+                    principal_id=str(principal_id),
+                    reason=evidence.degradation_reason,
+                )
+                pack.decision_hints.append(f"degraded:{evidence.degradation_reason or 'partial'}")
 
-        # budget trim
+        # budget trim over whatever evidence list we have (may be empty)
         size = len(pack.system_prefix)
         kept = []
-        for e in evidence.items:
-            line = e.render()
+        for e in pack.evidence:
+            line = e.render() if hasattr(e, "render") else str(e)
             if size + len(line) > budget:
                 break
             kept.append(e)
@@ -187,7 +190,7 @@ class ContextResolver:
         pack.total_chars = size
         pack.recent_messages = await self._recent_messages(conversation_id)
 
-        if evidence.plan and evidence.plan.check_corrections:
+        if evidence is not None and getattr(evidence, "plan", None) and evidence.plan.check_corrections:
             try:
                 from wax.learner.correction import apply_possible_correction
 
@@ -196,17 +199,20 @@ class ContextResolver:
                 )
                 if corr.get("corrected"):
                     pack.decision_hints.append("learner_correction_applied")
+                    sample = pack.evidence[0] if pack.evidence else None
                     for d in corr.get("details") or []:
+                        if sample is None:
+                            break
                         pack.evidence.insert(
                             0,
-                            type(evidence.items[0])(
+                            type(sample)(
                                 kind="memory",
                                 content=f"CORRECTED ({d.get('type')}): {d.get('old_content')} → {d.get('new_content')}",
                                 relevance="high",
                                 confidence=0.9,
                                 source="correction",
                                 status="current",
-                            ) if evidence.items else None,
+                            ),
                         )
                     pack.evidence = [e for e in pack.evidence if e]
             except Exception:

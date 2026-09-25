@@ -288,6 +288,10 @@ async def _deterministic_probe(
     brief.recommended_objective = "Answer helpfully using only grounded items above"
     if not brief.items:
         brief.no_context_required = True
+        brief.needs_evidence_gather = False
+    else:
+        # Probe already invoked search_evidence / memories — no second broad pass needed
+        brief.needs_evidence_gather = False
     brief.tools_used = tools
     return brief
 
@@ -300,6 +304,7 @@ async def _model_investigate(
     max_tool_calls: int,
     max_tokens: int,
     temperature: float,
+    unified_mode: bool = False,
 ) -> ContextBrief:
     from wax.intelligence.providers import (
         ChatMessage,
