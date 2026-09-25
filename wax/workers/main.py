@@ -277,7 +277,11 @@ async def process_memory_work(session, work: Work) -> None:
             except Exception:
                 logger.exception("post_extract_correction_failed")
             try:
-                obs = await ObservationService(session).record(
+                # Event/Observation only — NEVER keyword→preference.
+                # Semantic interpretation of student meaning is done by the
+                # intelligence (memory extraction + tutor record_evidence tool
+                # + EvidencePlanner). Infrastructure does not invent learner facts.
+                await ObservationService(session).record(
                     principal_id=principal_id,
                     kind="tutor_turn",
                     content=(user_text[:200] + " → " + reply_text[:200]),
@@ -285,47 +289,8 @@ async def process_memory_work(session, work: Work) -> None:
                     conversation_id=conversation_id,
                     work_id=work.id,
                 )
-                # Selective evidence from explicit learner statements (not every sentence)
-                ev = EvidenceService(session)
-                lower = (user_text or "").lower()
-                if any(x in lower for x in ("i don't understand", "i dont understand", "i'm confused", "i am confused")):
-                    await ev.record(
-                        principal_id=principal_id,
-                        evidence_type="explicit",
-                        description=f"Learner reported difficulty: {user_text[:240]}",
-                        claim_key="signal:reported_difficulty",
-                        payload={
-                            "supports": True,
-                            "text": user_text[:500],
-                            "scope": "this_turn",
-                            "not_yet_durable_preference": True,
-                        },
-                        assistance_level="unknown",
-                        weight=0.45,  # single turn — do not over-weight
-                        directness=0.9,
-                        source="explicit",
-                        observation_id=getattr(obs, "id", None),
-                        work_id=work.id,
-                    )
-                if any(x in lower for x in ("i prefer", "works better when", "show me", "real-life", "example")):
-                    await ev.record(
-                        principal_id=principal_id,
-                        evidence_type="explicit",
-                        description=f"Possible teaching preference: {user_text[:240]}",
-                        claim_key="preference:teaching_style",
-                        payload={
-                            "supports": True,
-                            "text": user_text[:500],
-                            "scope": "this_turn",
-                            "candidate_preference": True,
-                        },
-                        weight=0.4,  # needs repetition before durable belief
-                        source="explicit",
-                        observation_id=getattr(obs, "id", None),
-                        work_id=work.id,
-                    )
             except Exception:
-                logger.exception("evidence_extraction_failed")
+                logger.exception("observation_record_failed")
             try:
                 await SessionContinuityService(session).maybe_digest(
                     principal_id=principal_id,

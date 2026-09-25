@@ -109,6 +109,33 @@ class Settings(BaseSettings):
     enable_structured_logging: bool = True
     webhook_signature_required: bool = True
 
+    # --- Rate protection (burst-tolerant, not naive per-message) ---
+    rate_limit_enabled: bool = True
+    rate_burst_capacity: int = 12          # short burst of messages allowed
+    rate_sustained_per_minute: int = 30    # sustained messages/min before throttle
+    rate_window_seconds: int = 60
+    rate_cooldown_seconds: int = 15
+    rate_queue_limit_per_principal: int = 40
+
+    # --- Recovery / outage ---
+    recovery_batch_window_seconds: int = 90
+    recovery_max_batch_size: int = 8
+    recovery_poll_interval_seconds: float = 5.0
+    outage_awareness_min_seconds: int = 30  # only surface outage context after this
+
+    # --- Conversational check-in guardrails (AI decides moment; infra gates) ---
+    checkin_enabled: bool = True
+    checkin_min_messages: int = 25
+    checkin_cooldown_hours: float = 72.0
+    checkin_max_per_week: int = 2
+    checkin_suppress_on_active_problem: bool = True
+    checkin_suppress_after_feedback_seconds: int = 300
+
+    # --- Feedback / evidence ---
+    feedback_min_confidence_for_preference: float = 0.55
+    feedback_evidence_decay_days: float = 90.0
+    web_feedback_enabled: bool = True
+
     @field_validator("database_url", mode="before")
     @classmethod
     def normalize_database_url(cls, v: str) -> str:

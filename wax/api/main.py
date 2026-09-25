@@ -427,6 +427,42 @@ async def surface_post_event(token: str, request: Request):
         if len(str(payload)) > 8000:
             payload = {"truncated": True}
         await svc.record_event(surface=surface, event_type=et, payload=payload)
+
+        # Quiet web 👍/👎 — explicit interaction evidence only.
+        # Principal is always derived from surface ownership (never browser-supplied).
+        # Feedback must reference a response; never auto-promotes to durable preference.
+        if et in ("response_feedback", "feedback"):
+            from wax.config.settings import get_settings as _gs
+
+            if getattr(_gs(), "web_feedback_enabled", True):
+                try:
+                    from wax.learner.signals import (
+                        web_feedback_to_signal,
+                        record_explicit_interaction_evidence,
+                    )
+
+                    direction = str(payload.get("direction") or payload.get("value") or "")
+                    ref = payload.get("response_ref") or payload.get("message_id") or payload.get("work_id")
+                    # Require a response reference so feedback is tied to a specific answer
+                    if ref:
+                        sig = web_feedback_to_signal(
+                            direction,
+                            response_ref=str(ref),
+                            work_id=str(payload.get("work_id")) if payload.get("work_id") else None,
+                            message_id=str(payload.get("message_id")) if payload.get("message_id") else None,
+                        )
+                        if sig.kind.value != "neutral":
+                            await record_explicit_interaction_evidence(
+                                session,
+                                principal_id=surface.principal_id,  # from token ownership
+                                signal=sig,
+                                surface_id=surface.id,
+                            )
+                except Exception:
+                    from wax.observability.logging import get_logger
+
+                    get_logger(__name__).exception("web_feedback_signal_failed")
+
         await session.commit()
         return JSONResponse({"ok": True}, headers=cors)
 
