@@ -1,6 +1,6 @@
 """Channel link OTP challenges.
 
-Revision ID: 009
+Revision ID: 009_channel_link_challenges
 Revises: 008
 """
 from typing import Sequence, Union
@@ -10,7 +10,7 @@ from alembic import op
 from sqlalchemy import inspect
 from sqlalchemy.dialects import postgresql
 
-revision: str = "009"
+revision: str = "009_channel_link_challenges"
 down_revision: Union[str, None] = "008"
 branch_labels = None
 depends_on = None
