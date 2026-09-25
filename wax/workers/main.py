@@ -38,6 +38,37 @@ def _handle_signal(*_):
 
 async def process_message_response(session, work: Work) -> None:
     """Full AI tutor path — every learner message passes through intelligence."""
+    # Safe outage / recovery context for the tutor (no internals)
+    from wax.work.recovery import attach_outage_to_payload
+
+    payload = work.input_payload or {}
+    payload = attach_outage_to_payload(payload, work=work)
+    if payload is not work.input_payload:
+        work.input_payload = payload
+        await session.flush()
+
+    # Rate / workload note (post-accept): never drops the message; may defer priority
+    if work.principal_id:
+        try:
+            from wax.protection.rate import get_rate_protector, RateDecision
+
+            decision = get_rate_protector().decide(work.principal_id, channel=payload.get("channel"))
+            if decision in (RateDecision.THROTTLE, RateDecision.PROTECT, RateDecision.DEFER):
+                meta = dict(work.metadata_ or {})
+                meta["rate_decision"] = decision.value
+                work.metadata_ = meta
+                # Soft backpressure: lower priority, keep queued for later claim
+                if decision == RateDecision.PROTECT and work.status == "running":
+                    work.priority = min(int(work.priority or 100) + 50, 200)
+                logger.info(
+                    "rate_decision",
+                    work_id=str(work.id),
+                    principal_id=str(work.principal_id),
+                    decision=decision.value,
+                )
+        except Exception:
+            logger.exception("rate_decision_failed")
+
     # Optional async media fetch before tutor (still outside webhook)
     payload = work.input_payload or {}
     if payload.get("media_id") and not payload.get("local_media_path"):
@@ -665,6 +696,14 @@ async def recovery_loop() -> None:
                     await recover_orphans(session)
                 except Exception:
                     logger.exception("recovery_orphans_error")
+                try:
+                    from wax.work.recovery import recover_orphan_messages
+
+                    n_orph = await recover_orphan_messages(session, limit=20)
+                    if n_orph:
+                        logger.warning("orphan_messages_recovered", count=n_orph)
+                except Exception:
+                    logger.exception("orphan_message_recovery_error")
                 try:
                     from wax.scheduler.service import SchedulerService
                     sched = SchedulerService(session)

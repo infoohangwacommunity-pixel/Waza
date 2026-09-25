@@ -110,6 +110,7 @@ class ContextAssembler:
         learning_block = await self._learning_snapshot(principal_id)
         goals_block = await self._active_goals(principal_id)
         prefs_block = await self._preferences_block(principal_id)
+        checkin_block = await self._checkin_eligibility_block(principal_id, conversation_id)
         situation_block = ""
         if principal_id:
             try:
@@ -125,7 +126,7 @@ class ContextAssembler:
 
         assembled = AssembledContext(
             system_prefix=system_prefix,
-            memory_block=memory_block + summary_block + prefs_block,
+            memory_block=memory_block + summary_block + prefs_block + checkin_block,
             learning_block=learning_block + knowledge_block + materials_block + hyp_block,
             goals_block=goals_block + situation_block,
             recent_messages=recent,
@@ -175,6 +176,32 @@ class ContextAssembler:
         result = await self.session.execute(stmt)
         msgs = list(reversed(result.scalars().all()))
         return [{"role": m.role, "content": m.content} for m in msgs]
+
+
+    async def _checkin_eligibility_block(self, principal_id, conversation_id) -> str:
+        """Infrastructure gate only — AI still decides if the moment is natural."""
+        if not principal_id:
+            return ""
+        try:
+            from wax.learner.checkin import checkin_allowed
+
+            allowed, reason = await checkin_allowed(
+                self.session,
+                principal_id=principal_id,
+                conversation_id=conversation_id,
+            )
+            if allowed:
+                return (
+                    "\n--- Check-in eligibility ---\n"
+                    "Infrastructure permits an occasional natural check-in if the conversation "
+                    "has drifted to casual reflection (not during active problem-solving). "
+                    "Do not survey. Do not force ratings. Only ask if it feels natural.\n"
+                    "--- End check-in ---\n"
+                )
+            return ""
+        except Exception:
+            logger.exception("checkin_eligibility_failed")
+            return ""
 
     async def _preferences_block(self, principal_id) -> str:
         """Surface durable explicit preferences so the tutor does not drift."""

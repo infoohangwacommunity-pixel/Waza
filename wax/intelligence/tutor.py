@@ -911,6 +911,18 @@ class TutorService:
             media_note += (
                 f"\n[System: transcript present (quality unknown):\n{str(payload.get('transcript'))[:2000]}]"
             )
+        # Safe outage awareness — structured, no internals; tutor decides whether to acknowledge
+        outage = payload.get("outage_context") if isinstance(payload.get("outage_context"), dict) else None
+        if outage and outage.get("recovered_after_interruption"):
+            wait = outage.get("approximate_wait_seconds")
+            count = outage.get("preserved_message_count")
+            media_note += (
+                "\n[System: messages were preserved during a temporary interruption"
+                + (f" (~{wait}s)" if wait is not None else "")
+                + (f"; {count} message(s) waited" if count else "")
+                + ". Respond naturally; acknowledge the delay only if it helps the learner.]"
+            )
+
         user_content = user_text + media_note
         if not recent or recent[-1].get("content") != user_text:
             llm_messages.append(ChatMessage(role="user", content=user_content))
