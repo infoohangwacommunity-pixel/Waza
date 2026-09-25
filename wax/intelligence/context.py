@@ -111,6 +111,7 @@ class ContextAssembler:
         goals_block = await self._active_goals(principal_id)
         prefs_block = await self._preferences_block(principal_id)
         identity_block = await self._identity_channels_block(principal_id, channel)
+        continuity_block = await self._cross_channel_continuity_block(principal_id, channel)
         checkin_block = await self._checkin_eligibility_block(principal_id, conversation_id)
         situation_block = ""
         if principal_id:
@@ -127,7 +128,7 @@ class ContextAssembler:
 
         assembled = AssembledContext(
             system_prefix=system_prefix,
-            memory_block=memory_block + summary_block + prefs_block + identity_block + checkin_block,
+            memory_block=memory_block + summary_block + prefs_block + identity_block + continuity_block + checkin_block,
             learning_block=learning_block + knowledge_block + materials_block + hyp_block,
             goals_block=goals_block + situation_block,
             recent_messages=recent,
@@ -179,6 +180,31 @@ class ContextAssembler:
         return [{"role": m.role, "content": m.content} for m in msgs]
 
 
+
+
+    async def _cross_channel_continuity_block(self, principal_id, channel: str) -> str:
+        """Bounded recent turns from other verified channels for the same Principal."""
+        if not principal_id:
+            return ""
+        try:
+            from wax.domain.identity import (
+                linked_channels_state,
+                recent_cross_channel_snippets,
+                format_cross_channel_continuity_block,
+            )
+
+            state = await linked_channels_state(
+                self.session, principal_id=principal_id, current_channel=channel
+            )
+            if len(state.get("linked_channels") or []) < 2:
+                return ""
+            snippets = await recent_cross_channel_snippets(
+                self.session, principal_id=principal_id, current_channel=channel
+            )
+            return format_cross_channel_continuity_block(snippets)
+        except Exception:
+            logger.exception("cross_channel_continuity_failed")
+            return ""
 
     async def _identity_channels_block(self, principal_id, channel: str) -> str:
         """Authoritative linked-channel state for the tutor. Never invent beyond this."""

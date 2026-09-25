@@ -202,3 +202,124 @@ async def link_identity_to_principal(
 
 class IdentityConflictError(Exception):
     """Target channel identity is owned by a different principal."""
+
+
+async def recent_cross_channel_snippets(
+    session: AsyncSession,
+    *,
+    principal_id,
+    current_channel: str | None,
+    limit_conversations: int = 2,
+    messages_per_conversation: int = 4,
+) -> list[dict[str, str]]:
+    """
+    Relevant recent messages from OTHER permanent channels for the same Principal.
+
+    Not a full transcript dump. Bounded snippets so the tutor can continue
+    when the learner switches interfaces and asks to resume.
+    """
+    from wax.db.models import Conversation, Message
+
+    current = (current_channel or "").lower().strip()
+    stmt = (
+        select(Conversation)
+        .where(
+            Conversation.principal_id == principal_id,
+            Conversation.status == "active",
+        )
+        .order_by(Conversation.updated_at.desc())
+        .limit(8)
+    )
+    convs = list((await session.execute(stmt)).scalars().all())
+    out: list[dict[str, str]] = []
+    used = 0
+    for conv in convs:
+        ch = (conv.channel or "").lower()
+        if ch == current or ch in ("surface", "web"):
+            continue
+        if used >= limit_conversations:
+            break
+        mstmt = (
+            select(Message)
+            .where(Message.conversation_id == conv.id)
+            .order_by(Message.created_at.desc())
+            .limit(messages_per_conversation)
+        )
+        msgs = list(reversed((await session.execute(mstmt)).scalars().all()))
+        if not msgs:
+            continue
+        used += 1
+        for m in msgs:
+            role = m.role or "user"
+            content = (m.content or "")[:400]
+            if not content.strip():
+                continue
+            out.append(
+                {
+                    "role": role,
+                    "content": f"[earlier on {ch}] {content}",
+                    "channel": ch,
+                }
+            )
+    return out
+
+
+def format_cross_channel_continuity_block(snippets: list[dict[str, str]]) -> str:
+    if not snippets:
+        return ""
+    lines = [
+        "\n--- Other-channel continuity (same learner, bounded) ---",
+        "These are brief recent turns from another verified interface for the SAME principal.",
+        "Use only if relevant (e.g. learner asks to continue). Do not dump or re-teach everything.",
+    ]
+    for s in snippets[:12]:
+        role = s.get("role") or "user"
+        content = (s.get("content") or "")[:350]
+        lines.append(f"{role}: {content}")
+    lines.append("--- End other-channel continuity ---\n")
+    return "\n".join(lines)
+
+
+
+async def resolve_or_create_messaging_identity(
+    session: AsyncSession,
+    *,
+    channel: str,
+    external_id: str,
+    display_name: str | None = None,
+    metadata: dict | None = None,
+) -> tuple:
+    """
+    Canonical inbound resolution for permanent messaging channels.
+
+    If InterfaceIdentity exists → return its Principal (never create a second learner).
+    If not → create Principal + InterfaceIdentity (genuinely new door).
+    """
+    from uuid import uuid4
+    from wax.db.models import Principal
+
+    channel = channel.lower().strip()
+    external_id = str(external_id).strip()
+    if not external_id:
+        raise ValueError("missing external_id")
+
+    existing = await find_identity(session, channel=channel, external_id=external_id)
+    if existing:
+        principal = await session.get(Principal, existing.principal_id)
+        return principal, existing
+
+    principal = Principal(id=uuid4(), display_name=display_name)
+    session.add(principal)
+    await session.flush()
+    identity = InterfaceIdentity(
+        id=uuid4(),
+        principal_id=principal.id,
+        channel=channel,
+        external_id=external_id,
+        display_name=display_name,
+        is_primary=True,
+        metadata_=metadata or {},
+    )
+    session.add(identity)
+    await session.flush()
+    return principal, identity

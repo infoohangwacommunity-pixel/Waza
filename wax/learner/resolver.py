@@ -67,17 +67,32 @@ class ContextResolver:
     ) -> LearnerContextPack:
         platform = platform_context_block(channel)
         identity_txt = ""
+        continuity_txt = ""
         if principal_id:
             try:
-                from wax.domain.identity import linked_channels_state, format_linked_channels_block
+                from wax.domain.identity import (
+                    linked_channels_state,
+                    format_linked_channels_block,
+                    recent_cross_channel_snippets,
+                    format_cross_channel_continuity_block,
+                )
 
                 state = await linked_channels_state(
                     self.session, principal_id=principal_id, current_channel=channel
                 )
                 identity_txt = format_linked_channels_block(state)
+                # Only fetch other-channel snippets when more than one permanent channel is linked
+                linked = state.get("linked_channels") or []
+                if len(linked) > 1:
+                    snippets = await recent_cross_channel_snippets(
+                        self.session,
+                        principal_id=principal_id,
+                        current_channel=channel,
+                    )
+                    continuity_txt = format_cross_channel_continuity_block(snippets)
             except Exception:
                 logger.exception("linked_channels_state_failed")
-        pack = LearnerContextPack(system_prefix=tutor_system + platform + identity_txt)
+        pack = LearnerContextPack(system_prefix=tutor_system + platform + identity_txt + continuity_txt)
         if not principal_id:
             pack.recent_messages = await self._recent_messages(conversation_id)
             pack.degraded = True

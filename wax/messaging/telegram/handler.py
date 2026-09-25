@@ -377,32 +377,17 @@ async def _handle_telegram_callback(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _resolve_identity(session, chat_id: str, from_user: dict):
-    stmt = select(InterfaceIdentity).where(
-        InterfaceIdentity.channel == "telegram",
-        InterfaceIdentity.external_id == chat_id,
-    )
-    result = await session.execute(stmt)
-    identity = result.scalar_one_or_none()
-    if identity:
-        principal = await session.get(Principal, identity.principal_id)
-        return principal, identity
+    """Canonical path: existing InterfaceIdentity → same Principal (no second learner)."""
+    from wax.domain.identity import resolve_or_create_messaging_identity
 
     name = from_user.get("first_name") or from_user.get("username")
-    principal = Principal(id=uuid.uuid4(), display_name=name)
-    session.add(principal)
-    await session.flush()
-    identity = InterfaceIdentity(
-        id=uuid.uuid4(),
-        principal_id=principal.id,
+    return await resolve_or_create_messaging_identity(
+        session,
         channel="telegram",
-        external_id=chat_id,
+        external_id=str(chat_id),
         display_name=name,
-        is_primary=True,
-        metadata_={"username": from_user.get("username")},
+        metadata={"username": from_user.get("username")} if from_user else None,
     )
-    session.add(identity)
-    await session.flush()
-    return principal, identity
 
 
 async def _get_or_create_conversation(session, principal_id, channel: str):

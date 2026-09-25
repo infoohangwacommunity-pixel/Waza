@@ -42,3 +42,16 @@ The tutor must not invent linked status. The identities block is the source of t
 
 Identity continuity is mandatory. Full chat dump across channels is not.
 Relevant continuity uses Principal-scoped memory, evidence, goals, and conversation summaries — not automatic injection of every other-channel message.
+
+
+## Cross-channel continuity (bounded)
+
+When two permanent channels are linked, ContextResolver/Assembler may include a
+**bounded** snippet of recent turns from the other channel (`[earlier on whatsapp] …`).
+
+This is not a full transcript dump. It exists so that after switching interfaces,
+the tutor can resume when the learner asks to continue.
+
+Inbound resolution uses `resolve_or_create_messaging_identity`:
+- existing InterfaceIdentity → same Principal (never a second learner)
+- missing identity → new Principal + identity (genuinely new door)

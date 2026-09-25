@@ -252,35 +252,20 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
 
 
 async def _resolve_identity(session, wa_id: str | None, contact: dict | None):
+    """Canonical path: existing InterfaceIdentity → same Principal (no second learner)."""
     if not wa_id:
         raise ValueError("missing wa_id")
-    stmt = select(InterfaceIdentity).where(
-        InterfaceIdentity.channel == "whatsapp",
-        InterfaceIdentity.external_id == wa_id,
-    )
-    result = await session.execute(stmt)
-    identity = result.scalar_one_or_none()
-    if identity:
-        principal = await session.get(Principal, identity.principal_id)
-        return principal, identity
+    from wax.domain.identity import resolve_or_create_messaging_identity
 
     name = None
     if contact:
         name = (contact.get("profile") or {}).get("name")
-    principal = Principal(id=uuid.uuid4(), display_name=name)
-    session.add(principal)
-    await session.flush()
-    identity = InterfaceIdentity(
-        id=uuid.uuid4(),
-        principal_id=principal.id,
+    return await resolve_or_create_messaging_identity(
+        session,
         channel="whatsapp",
         external_id=wa_id,
         display_name=name,
-        is_primary=True,
     )
-    session.add(identity)
-    await session.flush()
-    return principal, identity
 
 
 async def _get_or_create_conversation(session, principal_id, channel: str):
