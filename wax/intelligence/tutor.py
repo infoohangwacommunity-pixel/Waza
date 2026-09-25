@@ -922,6 +922,18 @@ class TutorService:
                 + (f"; {count} message(s) waited" if count else "")
                 + ". Respond naturally; acknowledge the delay only if it helps the learner.]"
             )
+        batch = payload.get("recovery_batch")
+        if isinstance(batch, list) and len(batch) > 1:
+            lines = []
+            for item in batch[:8]:
+                if isinstance(item, dict) and item.get("text"):
+                    lines.append(str(item["text"])[:500])
+            if lines:
+                media_note += (
+                    "\n[System: recovered message sequence in original order:\n"
+                    + "\n".join(f"- {t}" for t in lines)
+                    + "\nRespond to the full sequence; do not ignore earlier parts.]"
+                )
 
         user_content = user_text + media_note
         if not recent or recent[-1].get("content") != user_text:

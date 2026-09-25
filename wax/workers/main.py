@@ -39,10 +39,47 @@ def _handle_signal(*_):
 async def process_message_response(session, work: Work) -> None:
     """Full AI tutor path — every learner message passes through intelligence."""
     # Safe outage / recovery context for the tutor (no internals)
-    from wax.work.recovery import attach_outage_to_payload
+    from wax.work.recovery import attach_outage_to_payload, find_recovery_batch_candidates, build_outage_context
 
     payload = work.input_payload or {}
     payload = attach_outage_to_payload(payload, work=work)
+
+    # Recovery batching: if this is a recovered/delayed work, include nearby sibling
+    # inbound messages as ordered context. Original Message rows are never deleted.
+    if (payload.get("recovery") or (work.metadata_ or {}).get("recovery")) and work.principal_id and work.conversation_id:
+        try:
+            from datetime import datetime, timezone
+            anchor = work.created_at or datetime.now(timezone.utc)
+            siblings = await find_recovery_batch_candidates(
+                session,
+                principal_id=work.principal_id,
+                conversation_id=work.conversation_id,
+                anchor_time=anchor,
+            )
+            if len(siblings) > 1:
+                ordered = [
+                    {"message_id": str(m.id), "text": m.content, "created_at": m.created_at.isoformat() if m.created_at else None}
+                    for m in siblings
+                ]
+                payload = {
+                    **payload,
+                    "recovery_batch": ordered,
+                    "outage_context": build_outage_context(
+                        wait_seconds=(datetime.now(timezone.utc) - (siblings[0].created_at or anchor)).total_seconds(),
+                        preserved_message_count=len(siblings),
+                    ) or payload.get("outage_context"),
+                }
+                # Prefer the combined text in original order for the tutor if current text is partial
+                if not (payload.get("text") or "").strip() and ordered:
+                    payload["text"] = ordered[-1]["text"]
+                logger.info(
+                    "recovery_batch_attached",
+                    work_id=str(work.id),
+                    batch_size=len(siblings),
+                )
+        except Exception:
+            logger.exception("recovery_batch_failed")
+
     if payload is not work.input_payload:
         work.input_payload = payload
         await session.flush()
