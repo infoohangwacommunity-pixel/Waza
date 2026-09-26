@@ -99,7 +99,7 @@ async def build_learner_model(
         .where(
             Memory.principal_id == pid,
             Memory.memory_type.in_(["preference", "relationship", "semantic"]),
-            Memory.status == "active",
+            Memory.is_active.is_(True),
         )
         .order_by(Memory.importance.desc(), Memory.updated_at.desc())
         .limit(12)

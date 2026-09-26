@@ -320,22 +320,79 @@ async def process_surface_ai(session, work: Work) -> None:
         except Exception:
             logger.exception("surface_ai_delivery_skipped")
     except Exception as e:
-        logger.exception("surface_ai_failed", work_id=str(work.id))
-        work.error = str(e)[:500]
-        work.error_class = "execution_failure"
+        wid = str(work.id)
+        logger.exception("surface_ai_failed", work_id=wid)
         if request_id:
+            try:
+                await session.rollback()
+            except Exception:
+                pass
             try:
                 await svc.apply_ai_result(request_row_id=request_id, reply=None, error=str(e)[:300])
             except Exception:
-                pass
+                logger.exception("surface_ai_result_error", work_id=wid)
         if work.attempt < work.max_attempts:
-            work.status = "retrying"
-            delay = min(300, 2 ** work.attempt * 5)
-            work.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            delay = min(300, 2 ** int(work.attempt or 0) * 5)
+            await _mark_work_terminal(
+                session,
+                work,
+                status="retrying",
+                error=str(e),
+                error_class="execution_failure",
+                next_retry_at=datetime.now(timezone.utc) + timedelta(seconds=delay),
+            )
         else:
-            work.status = "failed"
-            work.completed_at = datetime.now(timezone.utc)
+            await _mark_work_terminal(
+                session,
+                work,
+                status="failed",
+                error=str(e),
+                error_class="execution_failure",
+            )
+
+
+
+async def _mark_work_terminal(
+    session,
+    work: Work,
+    *,
+    status: str,
+    error: str | None = None,
+    error_class: str | None = None,
+    next_retry_at=None,
+) -> None:
+    """Mark work completed/failed/retrying after a possible DB failure.
+
+    Rolls back a poisoned transaction, then updates by primary key so we never
+    depend on expired ORM state or flush a failed session.
+    """
+    work_id = getattr(work, "id", None)
+    if work_id is None:
+        return
+    try:
+        await session.rollback()
+    except Exception:
+        logger.exception("work_terminal_rollback_failed", work_id=str(work_id))
+    values: dict = {"status": status}
+    if error is not None:
+        values["error"] = error[:1000]
+    if error_class is not None:
+        values["error_class"] = error_class
+    if status in ("failed", "completed"):
+        values["completed_at"] = datetime.now(timezone.utc)
+    if next_retry_at is not None:
+        values["next_retry_at"] = next_retry_at
+    try:
+        from sqlalchemy import update as sa_update
+
+        await session.execute(sa_update(Work).where(Work.id == work_id).values(**values))
         await session.flush()
+    except Exception:
+        logger.exception("work_terminal_mark_failed", work_id=str(work_id), status=status)
+        try:
+            await session.rollback()
+        except Exception:
+            pass
 
 
 async def process_memory_work(session, work: Work) -> None:
@@ -345,6 +402,8 @@ async def process_memory_work(session, work: Work) -> None:
     from wax.intelligence.session_continuity import SessionContinuityService
     from wax.memory.evidence import EvidenceService
 
+    # Primitives captured up-front — safe after a poisoned transaction
+    _work_id = str(work.id)
     payload = work.input_payload or {}
     principal_id = work.principal_id
     conversation_id = payload.get("conversation_id") or work.conversation_id
@@ -401,12 +460,10 @@ async def process_memory_work(session, work: Work) -> None:
         work.completed_at = datetime.now(timezone.utc)
         await session.flush()
     except Exception as e:
-        logger.exception("memory_work_failed", work_id=str(work.id))
-        work.error = str(e)
-        work.error_class = "memory_failure"
-        work.status = "failed"
-        work.completed_at = datetime.now(timezone.utc)
-        await session.flush()
+        logger.exception("memory_work_failed", work_id=_work_id)
+        await _mark_work_terminal(
+            session, work, status="failed", error=str(e), error_class="memory_failure"
+        )
 
 
 async def process_media_prepare(session, work: Work) -> None:
@@ -429,11 +486,10 @@ async def process_media_prepare(session, work: Work) -> None:
         work.result_payload = result
         await session.flush()
     except Exception as e:
-        work.error = str(e)
-        work.error_class = "media_failure"
-        work.status = "failed"
-        work.completed_at = datetime.now(timezone.utc)
-        await session.flush()
+        logger.exception("media_prepare_failed", work_id=str(work.id))
+        await _mark_work_terminal(
+            session, work, status="failed", error=str(e), error_class="media_failure"
+        )
 
 
 async def process_scheduled_action(session, work: Work) -> None:
@@ -488,11 +544,9 @@ async def process_scheduled_action(session, work: Work) -> None:
         logger.info("scheduled_action_completed", work_id=str(work.id))
     except Exception as e:
         logger.exception("scheduled_action_failed", work_id=str(work.id))
-        work.error = str(e)
-        work.error_class = "execution_failure"
-        work.status = "failed"
-        work.completed_at = datetime.now(timezone.utc)
-        await session.flush()
+        await _mark_work_terminal(
+            session, work, status="failed", error=str(e), error_class="execution_failure"
+        )
 
 async def _attempt_deliveries(session, work_id) -> None:
     from wax.delivery.senders import deliver as channel_deliver

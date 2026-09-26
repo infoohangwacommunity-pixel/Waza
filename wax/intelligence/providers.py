@@ -16,7 +16,7 @@ from typing import Any, AsyncIterator
 import httpx
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential_jitter,
 )
@@ -460,10 +460,12 @@ class IntelligenceService:
             # via explicit context_intelligence_fallback_to_primary
         elif use_memory_model and self.memory_model:
             providers.append(self.memory_model)
-            if self.primary and self.primary is not self.memory_model:
-                providers.append(self.primary)
-            if allow_fallback and self.fallback and self.fallback not in providers:
-                providers.append(self.fallback)
+            # allow_fallback=False means memory model only — no silent primary/fallback chain
+            if allow_fallback:
+                if self.primary and self.primary is not self.memory_model:
+                    providers.append(self.primary)
+                if self.fallback and self.fallback not in providers:
+                    providers.append(self.fallback)
         else:
             if self.primary:
                 providers.append(self.primary)
@@ -509,19 +511,21 @@ class IntelligenceService:
     async def _with_retry(
         self, provider: IntelligenceProvider, request: CompletionRequest, retries: int | None = None
     ) -> CompletionResponse:
+        def _should_retry(exc: BaseException) -> bool:
+            # Only retry ProviderError instances that are explicitly retryable
+            # (429, 5xx, timeout). Auth / invalid request / malformed must not loop.
+            return isinstance(exc, ProviderError) and bool(getattr(exc, "retryable", False))
+
         @retry(
-            retry=retry_if_exception_type(ProviderError),
-            stop=stop_after_attempt(max(1, retries if retries is not None else getattr(settings, 'primary_max_retries', 2))),
-            wait=wait_exponential_jitter(initial=1, max=15),
+            retry=retry_if_exception(_should_retry),
+            stop=stop_after_attempt(
+                max(1, retries if retries is not None else getattr(settings, "primary_max_retries", 2))
+            ),
+            wait=wait_exponential_jitter(initial=1, max=30),
             reraise=True,
         )
         async def _inner() -> CompletionResponse:
-            try:
-                return await provider.complete(request)
-            except ProviderError as e:
-                if not e.retryable:
-                    raise
-                raise
+            return await provider.complete(request)
 
         return await _inner()
 

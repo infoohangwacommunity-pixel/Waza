@@ -346,9 +346,10 @@ class MemoryService:
         source: str = "explicit",
         confidence: float = 0.9,
     ) -> Memory:
+        """Replace an active memory. FK-safe: new row exists before superseded_by_id is set."""
         old = await self.session.get(Memory, old_memory_id)
-        if old and old.principal_id == principal_id:
-            old.is_active = False
+        if old is not None and old.principal_id != principal_id:
+            old = None
 
         new_mem = Memory(
             id=uuid4(),
@@ -361,10 +362,13 @@ class MemoryService:
             evidence=[{"action": "supersede", "old_id": str(old_memory_id)}],
             is_active=True,
         )
-        if old:
-            old.superseded_by_id = new_mem.id
+        # INSERT new row first so FK target exists (matches consolidation ordering)
         self.session.add(new_mem)
         await self.session.flush()
+        if old is not None:
+            old.is_active = False
+            old.superseded_by_id = new_mem.id
+            await self.session.flush()
         return new_mem
 
     # ─────────────────────────────────────────────
