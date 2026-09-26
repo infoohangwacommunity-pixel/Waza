@@ -34,6 +34,8 @@ class AssembledContext:
     total_chars: int = 0
     memories_used: int = 0
     unified_direct_reply: str = ""
+    capability_families: list[str] = field(default_factory=list)
+    orchestration_path: str = ""
 
 
 class ContextAssembler:
@@ -73,6 +75,8 @@ class ContextAssembler:
                 recent_messages=recent,
                 memories_used=pack.memories_used,
                 unified_direct_reply=getattr(pack, "unified_direct_reply", "") or "",
+                capability_families=list(getattr(pack, "capability_families", None) or []),
+                orchestration_path=str(getattr(pack, "orchestration_path", "") or ""),
             )
             # attach hints for tutor if supported
             ctx.total_chars = pack.total_chars

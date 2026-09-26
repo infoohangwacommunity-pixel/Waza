@@ -960,6 +960,46 @@ class TutorService:
             "surface_id": payload.get("surface_id"),
         }
 
+        # Request-driven tools: only families CI selected for this turn
+        from wax.intelligence.capability_resolve import (
+            families_from_brief,
+            select_tool_specs,
+            instrumentation as cap_instrumentation,
+        )
+
+        brief_obj = None
+        try:
+            # Prefer families resolved onto AssembledContext (may be empty = no tools)
+            raw_fams = getattr(ctx, "capability_families", None)
+            if raw_fams is not None:
+                fams = set(raw_fams)
+            else:
+                fams = families_from_brief(None)
+            path = str(getattr(ctx, "orchestration_path", "") or "") or (
+                "minimal" if not fams else "investigate"
+            )
+        except Exception:
+            fams = set()
+            path = "investigate"
+        # Media inbound → ensure media family available
+        if payload.get("media_id") or payload.get("local_media_path"):
+            fams = set(fams) | {"media", "core"}
+        turn_tools = select_tool_specs(AVAILABLE_TOOLS, fams)
+        try:
+            from wax.observability.logging import get_logger as _gl
+
+            _gl(__name__).info(
+                "tutor_capability_selection",
+                **cap_instrumentation(
+                    families=fams,
+                    tools_exposed=len(turn_tools),
+                    tools_total=len(AVAILABLE_TOOLS),
+                    path=path,
+                ),
+            )
+        except Exception:
+            pass
+
         # Tool loop: up to a few rounds so the model can act then respond
         reply_text = ""
         tool_notes: list[str] = []
@@ -968,6 +1008,11 @@ class TutorService:
         agent = AgentRuntime(self.session, work)
         await agent.start()
         max_rounds = agent.max_rounds
+        # Cheap path: few/no tools → at most one model round without tool spam
+        if not turn_tools:
+            max_rounds = 1
+        elif path == "minimal" or len(turn_tools) <= 4:
+            max_rounds = min(max_rounds, 2)
         if _unified_done:
             reply_text = (ctx.unified_direct_reply or "").strip()
             tool_notes.append("context_intel:unified")
@@ -978,7 +1023,7 @@ class TutorService:
             response = await self.intelligence.complete(
                 CompletionRequest(
                     messages=llm_messages,
-                    tools=AVAILABLE_TOOLS if agent.can_call_tool() else None,
+                    tools=(turn_tools if (agent.can_call_tool() and turn_tools) else None),
                     temperature=0.7,
                     max_tokens=2048,
                 ),

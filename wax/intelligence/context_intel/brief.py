@@ -51,6 +51,8 @@ class ContextBrief:
     investigation_notes: list[str] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     rejected_candidates: list[str] = field(default_factory=list)
+    # Capability families for tutor tool exposure (empty = no tools)
+    capability_families: list[str] = field(default_factory=list)
     degraded: bool = False
     degradation_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)

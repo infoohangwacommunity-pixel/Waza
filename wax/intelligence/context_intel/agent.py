@@ -56,8 +56,10 @@ When finished, respond with ONLY a JSON object (no markdown fences):
   ],
   "rejected_candidates": [],
   "uncertainties": [],
-  "suggested_actions": []
+  "suggested_actions": [],
+  "capability_families": ["core"]
 }
+capability_families is a subset of: core, memory, learning, goals, schedule, artifacts, surfaces, media, workspace, research, identity. Use [] or omit tools when a direct answer needs no tools. Never request every family by default.
 """
 
 
@@ -150,6 +152,11 @@ def _parse_brief_json(raw: str) -> ContextBrief | None:
         suggested_actions=[str(a)[:120] for a in (data.get("suggested_actions") or [])[:6]],
         uncertainties=[str(u)[:160] for u in (data.get("uncertainties") or [])[:8]],
         rejected_candidates=[str(r)[:160] for r in (data.get("rejected_candidates") or [])[:6]],
+        capability_families=[
+            str(f).strip().lower()
+            for f in (data.get("capability_families") or [])[:12]
+            if str(f).strip()
+        ],
     )
 
 
@@ -166,6 +173,7 @@ async def _deterministic_probe(
         brief.no_context_required = True
         brief.request_understanding = "Brief social or minimal message"
         brief.task_intent = "acknowledge"
+        brief.capability_families = []
         brief.recommended_objective = "Respond naturally; avoid dumping learner history"
         brief.tools_used = tools
         return brief
@@ -289,9 +297,13 @@ async def _deterministic_probe(
     if not brief.items:
         brief.no_context_required = True
         brief.needs_evidence_gather = False
+        if not brief.capability_families:
+            brief.capability_families = ["core"]
     else:
         # Probe already invoked search_evidence / memories — no second broad pass needed
         brief.needs_evidence_gather = False
+        if not brief.capability_families:
+            brief.capability_families = ["core", "memory", "learning"]
     brief.tools_used = tools
     return brief
 

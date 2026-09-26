@@ -37,6 +37,8 @@ class LearnerContextPack:
     orchestration_brief: object | None = None
     skip_evidence_gather: bool = False
     unified_direct_reply: str = ""
+    capability_families: list[str] = field(default_factory=list)
+    orchestration_path: str = ""
 
     def as_assembled_blocks(self) -> dict[str, Any]:
         items = self.evidence
@@ -52,6 +54,8 @@ class LearnerContextPack:
             "degraded": self.degraded,
             "degradation_reason": self.degradation_reason,
             "unified_direct_reply": self.unified_direct_reply,
+            "capability_families": self.capability_families,
+            "orchestration_path": self.orchestration_path,
             "skip_evidence_gather": self.skip_evidence_gather,
         }
 
@@ -119,6 +123,14 @@ class ContextResolver:
                 user_text=user_text,
             )
             pack.orchestration_brief = brief
+            from wax.intelligence.capability_resolve import families_from_brief
+            fams = families_from_brief(brief)
+            pack.capability_families = sorted(fams)
+            pack.orchestration_path = (
+                "minimal" if brief.no_context_required and not fams
+                else ("unified" if getattr(brief, "response_mode", "") == "unified" else "investigate")
+            )
+
             brief_txt = brief_to_tutor_text(brief)
             if brief_txt:
                 pack.system_prefix = pack.system_prefix + brief_txt
