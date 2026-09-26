@@ -27,6 +27,39 @@ from wax.observability.logging import get_logger
 logger = get_logger(__name__)
 settings = get_settings()
 
+# Process-local cooldown after 429 so concurrent work items do not stampede
+import time as _time
+_provider_cooldown_until: dict[str, float] = {}
+
+
+def _cooldown_key(name: str, model: str) -> str:
+    return f"{name}:{model}"
+
+
+async def _respect_provider_cooldown(name: str, model: str) -> None:
+    import asyncio
+
+    key = _cooldown_key(name, model)
+    until = _provider_cooldown_until.get(key, 0.0)
+    now = _time.monotonic()
+    if until > now:
+        delay = min(until - now, 60.0)
+        logger.warning(
+            "provider_cooldown_wait",
+            provider=name,
+            model=model,
+            wait_seconds=round(delay, 2),
+        )
+        await asyncio.sleep(delay)
+
+
+def _arm_provider_cooldown(name: str, model: str, seconds: float) -> None:
+    key = _cooldown_key(name, model)
+    until = _time.monotonic() + max(1.0, min(float(seconds), 90.0))
+    prev = _provider_cooldown_until.get(key, 0.0)
+    if until > prev:
+        _provider_cooldown_until[key] = until
+
 
 class ProviderErrorClass(str, Enum):
     TIMEOUT = "provider_timeout"
@@ -142,6 +175,7 @@ class OpenAICompatibleProvider(IntelligenceProvider):
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
+                await _respect_provider_cooldown(self.name, self.model)
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,
@@ -153,7 +187,24 @@ class OpenAICompatibleProvider(IntelligenceProvider):
             raise ProviderError(str(e), ProviderErrorClass.UNAVAILABLE, retryable=True) from e
 
         if resp.status_code == 429:
-            raise ProviderError("Rate limited", ProviderErrorClass.RATE_LIMITED, retryable=True)
+            ra = resp.headers.get("retry-after") or resp.headers.get("Retry-After")
+            try:
+                wait_s = float(ra) if ra else 8.0
+            except ValueError:
+                wait_s = 8.0
+            wait_s = max(5.0, min(wait_s, 60.0))
+            _arm_provider_cooldown(self.name, self.model, wait_s)
+            logger.warning(
+                "provider_rate_limited",
+                provider=self.name,
+                model=self.model,
+                retry_after=wait_s,
+            )
+            raise ProviderError(
+                f"Rate limited (retry_after={wait_s}s)",
+                ProviderErrorClass.RATE_LIMITED,
+                retryable=True,
+            )
         if resp.status_code in (401, 403):
             body_preview = (resp.text or "")[:200].replace("\n", " ")
             logger.warning(
@@ -521,7 +572,7 @@ class IntelligenceService:
             stop=stop_after_attempt(
                 max(1, retries if retries is not None else getattr(settings, "primary_max_retries", 2))
             ),
-            wait=wait_exponential_jitter(initial=1, max=30),
+            wait=wait_exponential_jitter(initial=2, max=60),
             reraise=True,
         )
         async def _inner() -> CompletionResponse:

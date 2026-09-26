@@ -460,10 +460,23 @@ async def process_memory_work(session, work: Work) -> None:
         work.completed_at = datetime.now(timezone.utc)
         await session.flush()
     except Exception as e:
+        err = str(e)
         logger.exception("memory_work_failed", work_id=_work_id)
-        await _mark_work_terminal(
-            session, work, status="failed", error=str(e), error_class="memory_failure"
-        )
+        # Rate limits should not permanently fail memory jobs — defer and retry later.
+        if "Rate limited" in err or "rate_limited" in err.lower() or "429" in err:
+            delay = min(600, 30 * max(1, int(getattr(work, "attempt", 0) or 1)))
+            await _mark_work_terminal(
+                session,
+                work,
+                status="retrying",
+                error=err,
+                error_class="provider_rate_limited",
+                next_retry_at=datetime.now(timezone.utc) + timedelta(seconds=delay),
+            )
+        else:
+            await _mark_work_terminal(
+                session, work, status="failed", error=err, error_class="memory_failure"
+            )
 
 
 async def process_media_prepare(session, work: Work) -> None:

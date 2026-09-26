@@ -25,6 +25,10 @@ REQUIRED_TABLES = (
     "memories",
     "scheduled_actions",
     "alembic_version",
+    "publications",
+    "principal_workloads",
+    "learning_events",
+    "surfaces",
 )
 
 
@@ -60,9 +64,21 @@ async def main() -> int:
     engine = create_async_engine(url)
     try:
         async with engine.connect() as conn:
-            rev = await conn.scalar(
-                text("SELECT version_num FROM alembic_version LIMIT 1")
-            )
+            revs = [
+                r[0]
+                for r in (
+                    await conn.execute(text("SELECT version_num FROM alembic_version"))
+                ).fetchall()
+            ]
+            print(f"verify_schema_alembic_revisions={revs!r}")
+            if len(revs) > 1:
+                print(
+                    "verify_schema_FAILED multiple alembic_version rows "
+                    f"(overlap risk): {revs!r}",
+                    file=sys.stderr,
+                )
+                return 1
+            rev = revs[0] if revs else None
             print(f"verify_schema_alembic_revision={rev}")
             if not rev:
                 print(

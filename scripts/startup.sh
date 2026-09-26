@@ -48,6 +48,10 @@ except Exception as e:
     print(f"migration_target parse_error={e}")
 PY
 
+# Normalize multi-head / renamed revision rows left by earlier deploys
+echo "=== WAX ALEMBIC STATE REPAIR ==="
+$PYTHON scripts/repair_alembic_state.py
+echo "=== WAX ALEMBIC UPGRADE ==="
 $PYTHON -m alembic upgrade head
 
 echo "=== WAX DATABASE MIGRATION COMPLETE ==="
