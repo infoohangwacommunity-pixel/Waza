@@ -32,33 +32,46 @@ import time as _time
 _provider_cooldown_until: dict[str, float] = {}
 
 
-def _cooldown_key(name: str, model: str) -> str:
-    return f"{name}:{model}"
+def _cooldown_key(*, name: str, base_url: str = "", model: str = "") -> str:
+    # Prefer host endpoint — same Groq base URL shares one rate budget across models/roles
+    host = (base_url or "").strip().rstrip("/").lower()
+    if host:
+        return f"host:{host}"
+    return f"name:{(name or '').lower()}:{(model or '').lower()}"
 
 
-async def _respect_provider_cooldown(name: str, model: str) -> None:
+async def _respect_provider_cooldown(name: str, model: str, base_url: str = "") -> None:
     import asyncio
 
-    key = _cooldown_key(name, model)
+    key = _cooldown_key(name=name, base_url=base_url, model=model)
     until = _provider_cooldown_until.get(key, 0.0)
     now = _time.monotonic()
     if until > now:
-        delay = min(until - now, 60.0)
+        delay = min(until - now, 90.0)
         logger.warning(
             "provider_cooldown_wait",
             provider=name,
             model=model,
+            base_url=(base_url or "")[:80],
             wait_seconds=round(delay, 2),
         )
         await asyncio.sleep(delay)
 
 
-def _arm_provider_cooldown(name: str, model: str, seconds: float) -> None:
-    key = _cooldown_key(name, model)
-    until = _time.monotonic() + max(1.0, min(float(seconds), 90.0))
+def _arm_provider_cooldown(
+    name: str, model: str, seconds: float, base_url: str = ""
+) -> None:
+    key = _cooldown_key(name=name, base_url=base_url, model=model)
+    # Floor 10s so concurrent jobs do not re-stampede immediately
+    until = _time.monotonic() + max(10.0, min(float(seconds), 120.0))
     prev = _provider_cooldown_until.get(key, 0.0)
     if until > prev:
         _provider_cooldown_until[key] = until
+
+
+def provider_cooldown_remaining(name: str, base_url: str = "", model: str = "") -> float:
+    key = _cooldown_key(name=name, base_url=base_url, model=model)
+    return max(0.0, _provider_cooldown_until.get(key, 0.0) - _time.monotonic())
 
 
 class ProviderErrorClass(str, Enum):
@@ -72,10 +85,17 @@ class ProviderErrorClass(str, Enum):
 
 
 class ProviderError(Exception):
-    def __init__(self, message: str, error_class: ProviderErrorClass, retryable: bool = False):
+    def __init__(
+        self,
+        message: str,
+        error_class: ProviderErrorClass,
+        retryable: bool = False,
+        retry_after_seconds: float | None = None,
+    ):
         super().__init__(message)
         self.error_class = error_class
         self.retryable = retryable
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass
@@ -175,7 +195,7 @@ class OpenAICompatibleProvider(IntelligenceProvider):
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
-                await _respect_provider_cooldown(self.name, self.model)
+                await _respect_provider_cooldown(self.name, self.model, self.base_url)
                 resp = await client.post(
                     f"{self.base_url}/chat/completions",
                     headers=headers,
@@ -193,7 +213,7 @@ class OpenAICompatibleProvider(IntelligenceProvider):
             except ValueError:
                 wait_s = 8.0
             wait_s = max(5.0, min(wait_s, 60.0))
-            _arm_provider_cooldown(self.name, self.model, wait_s)
+            _arm_provider_cooldown(self.name, self.model, wait_s, self.base_url)
             logger.warning(
                 "provider_rate_limited",
                 provider=self.name,
@@ -204,6 +224,7 @@ class OpenAICompatibleProvider(IntelligenceProvider):
                 f"Rate limited (retry_after={wait_s}s)",
                 ProviderErrorClass.RATE_LIMITED,
                 retryable=True,
+                retry_after_seconds=wait_s,
             )
         if resp.status_code in (401, 403):
             body_preview = (resp.text or "")[:200].replace("\n", " ")
@@ -333,6 +354,7 @@ class AnthropicProvider(IntelligenceProvider):
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
+                await _respect_provider_cooldown(self.name, self.model, self.base_url)
                 resp = await client.post(
                     f"{self.base_url}/v1/messages",
                     headers=headers,
@@ -344,7 +366,19 @@ class AnthropicProvider(IntelligenceProvider):
             raise ProviderError(str(e), ProviderErrorClass.UNAVAILABLE, retryable=True) from e
 
         if resp.status_code == 429:
-            raise ProviderError("Rate limited", ProviderErrorClass.RATE_LIMITED, retryable=True)
+            ra = resp.headers.get("retry-after") or resp.headers.get("Retry-After")
+            try:
+                wait_s = float(ra) if ra else 15.0
+            except ValueError:
+                wait_s = 15.0
+            wait_s = max(10.0, min(wait_s, 120.0))
+            _arm_provider_cooldown(self.name, self.model, wait_s, self.base_url)
+            raise ProviderError(
+                f"Rate limited (retry_after={wait_s}s)",
+                ProviderErrorClass.RATE_LIMITED,
+                retryable=True,
+                retry_after_seconds=wait_s,
+            )
         if resp.status_code in (401, 403):
             body_preview = (resp.text or "")[:200].replace("\n", " ")
             logger.warning(
@@ -594,7 +628,21 @@ class IntelligenceService:
                     provider=provider.name,
                     error_class=e.error_class.value,
                     retryable=e.retryable,
+                    retry_after=getattr(e, "retry_after_seconds", None),
                 )
+                # Rate limited: do not burn through the whole provider list immediately
+                if e.error_class == ProviderErrorClass.RATE_LIMITED:
+                    ra = float(getattr(e, "retry_after_seconds", None) or 15.0)
+                    base = getattr(provider, "base_url", "") or ""
+                    _arm_provider_cooldown(provider.name, getattr(provider, "model", "") or "", ra, base)
+                    # Only try a different host for fallback; same host shares budget
+                    if allow_fallback and provider is not providers[-1]:
+                        next_p = providers[providers.index(provider) + 1] if provider in providers else None
+                        next_base = getattr(next_p, "base_url", "") or "" if next_p else ""
+                        if next_p and next_base.rstrip("/") == base.rstrip("/") and base:
+                            raise  # same quota pool — fail fast to caller
+                    if not allow_fallback:
+                        raise
                 if not e.retryable and provider is providers[-1]:
                     raise
                 continue

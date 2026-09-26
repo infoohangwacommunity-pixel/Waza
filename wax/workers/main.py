@@ -48,7 +48,6 @@ async def process_message_response(session, work: Work) -> None:
     # inbound messages as ordered context. Original Message rows are never deleted.
     if (payload.get("recovery") or (work.metadata_ or {}).get("recovery")) and work.principal_id and work.conversation_id:
         try:
-            from datetime import datetime, timezone
             anchor = work.created_at or datetime.now(timezone.utc)
             siblings = await find_recovery_batch_candidates(
                 session,
@@ -246,10 +245,31 @@ async def process_message_response(session, work: Work) -> None:
 
         work.error = str(e)[:1000]  # internal only
         work.error_class = classify_error(e)
+        # Provider rate limit → wait at least retry_after before reclaiming work
+        rate_delay = None
+        try:
+            from wax.intelligence.providers import ProviderError, ProviderErrorClass
+
+            if isinstance(e, ProviderError) and e.error_class == ProviderErrorClass.RATE_LIMITED:
+                rate_delay = float(getattr(e, "retry_after_seconds", None) or 20.0)
+                work.error_class = "provider_rate_limited"
+        except Exception:
+            if "Rate limited" in str(e) or "429" in str(e):
+                rate_delay = 20.0
+                work.error_class = "provider_rate_limited"
         if work.attempt < work.max_attempts:
             work.status = "retrying"
-            delay = min(300, 2 ** int(work.attempt or 0) * 5)
+            if rate_delay is not None:
+                delay = min(600, max(15.0, rate_delay))
+            else:
+                delay = min(300, 2 ** int(work.attempt or 0) * 5)
             work.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+            logger.info(
+                "work_scheduled_retry",
+                work_id=str(work.id),
+                delay_seconds=delay,
+                error_class=work.error_class,
+            )
         else:
             work.status = "failed"
             work.completed_at = datetime.now(timezone.utc)
@@ -700,8 +720,7 @@ async def claim_next(session, worker_id: str) -> Work | None:
     # Lease metadata for recovery (stale claim detection)
     meta = dict(work.metadata_ or {})
     lease_s = int(getattr(settings, "work_stale_seconds", 300) or 300)
-    from datetime import timedelta as _td
-    meta["lease_until"] = (now + _td(seconds=lease_s)).isoformat()
+    meta["lease_until"] = (now + timedelta(seconds=lease_s)).isoformat()
     meta["lease_worker"] = worker_id
     work.metadata_ = meta
     work.attempt += 1
