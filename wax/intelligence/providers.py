@@ -413,29 +413,72 @@ def _build_provider(
     base_url: str = "",
     timeout: float = 120.0,
 ) -> IntelligenceProvider | None:
-    if not api_key or provider_name in ("none", "", "null"):
+    """
+    Instantiate a chat provider from configuration.
+
+    Provider *name* is an identifier for logging/config only.
+    Any name with an API key + model uses the OpenAI-compatible client
+    (/chat/completions) unless the name is a known non-compatible native API.
+
+    Optional base_url defaults exist only as convenience when the operator
+    omits PRIMARY_BASE_URL for a few well-known hosts — they are not a
+    closed allowlist. Unknown names work when BASE_URL is set.
+    """
+    name = (provider_name or "").strip().lower()
+    key = (api_key or "").strip()
+    model_id = (model or "").strip()
+    url = (base_url or "").strip()
+
+    if not key or name in ("none", "", "null"):
         return None
-    defaults = {
+    if not model_id:
+        logger.warning(
+            "provider_missing_model",
+            provider=name or "(empty)",
+            hint="Set PRIMARY_MODEL / FALLBACK_MODEL / matching *_MODEL",
+        )
+        return None
+
+    # Native protocol (Messages API) — not OpenAI-compatible
+    if name == "anthropic":
+        return AnthropicProvider(
+            api_key=key,
+            model=model_id,
+            base_url=url or "https://api.anthropic.com",
+            timeout=timeout,
+        )
+
+    # Optional convenience defaults when BASE_URL is omitted (not an allowlist)
+    convenience_base = {
         "openai": "https://api.openai.com/v1",
         "grok": "https://api.x.ai/v1",
+        "xai": "https://api.x.ai/v1",
         "openrouter": "https://openrouter.ai/api/v1",
+        "groq": "https://api.groq.com/openai/v1",
+        "together": "https://api.together.xyz/v1",
+        "fireworks": "https://api.fireworks.ai/inference/v1",
+        "deepseek": "https://api.deepseek.com/v1",
+        "mistral": "https://api.mistral.ai/v1",
     }
-    if provider_name in ("openai", "grok", "openrouter"):
-        return OpenAICompatibleProvider(
-            name=provider_name,
-            api_key=api_key,
-            model=model,
-            base_url=base_url or defaults.get(provider_name, "https://api.openai.com/v1"),
-            timeout=timeout,
+    resolved = url or convenience_base.get(name, "")
+    if not resolved:
+        logger.warning(
+            "provider_missing_base_url",
+            provider=name,
+            hint=(
+                "Set PRIMARY_BASE_URL (or FALLBACK_BASE_URL) to the OpenAI-compatible "
+                "API root, e.g. https://api.groq.com/openai/v1"
+            ),
         )
-    if provider_name == "anthropic":
-        return AnthropicProvider(
-            api_key=api_key,
-            model=model,
-            base_url=base_url or "https://api.anthropic.com",
-            timeout=timeout,
-        )
-    return None
+        return None
+
+    return OpenAICompatibleProvider(
+        name=name or "openai_compatible",
+        api_key=key,
+        model=model_id,
+        base_url=resolved,
+        timeout=timeout,
+    )
 
 
 class IntelligenceService:

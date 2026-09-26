@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     # Context Intelligence — independent provider/model namespace (not the tutor by default)
     context_intelligence_enabled: bool = True
     context_intelligence_use_model: bool = True
-    # Provider: openai | grok | openrouter | anthropic | none
+    # Provider name is an identifier; OpenAI-compatible APIs work with any name + BASE_URL
     # Empty/"none" = no CI model (deterministic probe only). Does NOT auto-use primary.
     context_intelligence_provider: str = "none"
     context_intelligence_api_key: str = ""
