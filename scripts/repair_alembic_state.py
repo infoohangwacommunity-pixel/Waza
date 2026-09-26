@@ -1,19 +1,16 @@
 #!/usr/bin/env python3
-"""Normalize alembic_version before upgrade when production has multi-head or stale IDs.
+"""Pre-upgrade Alembic state check for the canonical baseline era.
 
-Railway error seen:
-  Requested revision 017_principal_workloads overlaps with other requested
-  revisions 009_channel_link_challenges
+Active graph is only:
+  001_waza_baseline (down_revision=None)
 
-That almost always means alembic_version has multiple rows (or a stale short
-revision id), not a broken linear graph in source.
+If alembic_version still references the archived 001–017 chain, or has
+multiple rows, this script reports the conflict and refuses to silently
+stamp when user tables still exist.
 
-Safe rules:
-- Never DROP user data.
-- Never invent schema.
-- Map known renamed revision ids.
-- If multiple version rows, keep the single farthest revision on the known
-  linear chain (or stamp HEAD if 017 schema objects already exist).
+For intentional clean rebuild (documented in ops):
+  DROP SCHEMA public CASCADE; CREATE SCHEMA public;
+  then alembic upgrade head
 """
 from __future__ import annotations
 
@@ -25,8 +22,8 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
-# Canonical linear chain (must match alembic/versions)
-CHAIN = [
+BASELINE = "001_waza_baseline"
+LEGACY_PREFIXES = (
     "001",
     "002",
     "003",
@@ -35,36 +32,15 @@ CHAIN = [
     "006",
     "007",
     "008",
-    "009_channel_link_challenges",
-    "010_worlds",
-    "011_learner_intelligence",
-    "012_learner_intelligence_cleanup",
-    "013_publications",
-    "014_web_surfaces",
-    "015_surface_ai_loop",
-    "016_surface_hardening",
-    "017_principal_workloads",
-]
-HEAD = CHAIN[-1]
-ORDER = {r: i for i, r in enumerate(CHAIN)}
-
-# Historical short ids that were renamed in-repo
-ALIASES = {
-    "009": "009_channel_link_challenges",
-    "010": "010_worlds",
-    "011": "011_learner_intelligence",
-    "012": "012_learner_intelligence_cleanup",
-    "013": "013_publications",
-    "014": "014_web_surfaces",
-    "015": "015_surface_ai_loop",
-    "016": "016_surface_hardening",
-    "017": "017_principal_workloads",
-}
-
-HEAD_MARKERS = (
-    "principal_workloads",
-    "publications",
-    "surfaces",
+    "009",
+    "010",
+    "011",
+    "012",
+    "013",
+    "014",
+    "015",
+    "016",
+    "017",
 )
 
 
@@ -79,11 +55,10 @@ def _to_asyncpg(raw: str) -> str:
     return raw
 
 
-def _normalize(rev: str | None) -> str | None:
-    if not rev:
-        return None
-    rev = rev.strip()
-    return ALIASES.get(rev, rev)
+def _is_legacy(rev: str) -> bool:
+    if rev == BASELINE:
+        return False
+    return rev.startswith(LEGACY_PREFIXES) or rev in LEGACY_PREFIXES
 
 
 async def main() -> int:
@@ -107,7 +82,6 @@ async def main() -> int:
     engine = create_async_engine(url)
     try:
         async with engine.begin() as conn:
-            # Ensure table exists
             exists = await conn.scalar(
                 text(
                     "SELECT 1 FROM information_schema.tables "
@@ -115,7 +89,7 @@ async def main() -> int:
                 )
             )
             if not exists:
-                print("repair_alembic: alembic_version missing — leaving for upgrade")
+                print("repair_alembic: no alembic_version — clean path for baseline upgrade")
                 return 0
 
             rows = (
@@ -124,78 +98,63 @@ async def main() -> int:
             versions = [r[0] for r in rows if r and r[0]]
             print(f"repair_alembic_current_rows={versions!r}")
 
-            # Detect HEAD schema markers
-            present = {}
-            for tname in HEAD_MARKERS:
-                present[tname] = bool(
-                    await conn.scalar(
+            user_tables = [
+                r[0]
+                for r in (
+                    await conn.execute(
                         text(
-                            "SELECT 1 FROM information_schema.tables "
-                            "WHERE table_schema='public' AND table_name=:t"
-                        ),
-                        {"t": tname},
+                            "SELECT table_name FROM information_schema.tables "
+                            "WHERE table_schema='public' AND table_type='BASE TABLE' "
+                            "AND table_name <> 'alembic_version' "
+                            "ORDER BY table_name"
+                        )
                     )
-                )
-            print(f"repair_alembic_schema_markers={present}")
+                ).fetchall()
+            ]
+            print(f"repair_alembic_user_table_count={len(user_tables)}")
 
-            normalized = []
-            for v in versions:
-                n = _normalize(v)
-                if n not in ORDER:
-                    print(f"repair_alembic_WARN unknown_revision={v!r} normalized={n!r}")
-                normalized.append(n)
-
-            # Already clean single head
-            if len(versions) == 1 and normalized[0] == versions[0] and normalized[0] in ORDER:
-                if normalized[0] == HEAD or not all(present.values()):
-                    print(f"repair_alembic: single revision ok ({normalized[0]})")
-                    return 0
-                # single non-head, fine — upgrade will advance
-                print(f"repair_alembic: single revision {normalized[0]} — upgrade may proceed")
+            if len(versions) == 1 and versions[0] == BASELINE:
+                print("repair_alembic: already on 001_waza_baseline")
                 return 0
 
-            # Alias-only fix (one row, old short id)
-            if len(versions) == 1 and normalized[0] != versions[0] and normalized[0] in ORDER:
+            if len(versions) > 1:
                 print(
-                    f"repair_alembic: renaming version {versions[0]!r} -> {normalized[0]!r}"
-                )
-                await conn.execute(text("DELETE FROM alembic_version"))
-                await conn.execute(
-                    text("INSERT INTO alembic_version (version_num) VALUES (:v)"),
-                    {"v": normalized[0]},
-                )
-                print("repair_alembic: alias normalized")
-                return 0
-
-            # Multiple rows or messy state
-            known = [n for n in normalized if n in ORDER]
-            if all(present.values()):
-                # Full 017 schema already present — stamp HEAD only
-                target = HEAD
-                print(
-                    "repair_alembic: multi-row or messy version with HEAD schema present "
-                    f"— stamping {target}"
-                )
-            elif known:
-                target = max(known, key=lambda r: ORDER[r])
-                print(
-                    "repair_alembic: multi-row version — keeping farthest known "
-                    f"revision {target}"
-                )
-            else:
-                print(
-                    "repair_alembic_FAILED cannot determine safe stamp "
-                    f"versions={versions!r} markers={present}",
+                    "repair_alembic_FAILED multiple alembic_version rows "
+                    f"{versions!r}. Clean rebuild required: "
+                    "DROP SCHEMA public CASCADE; CREATE SCHEMA public; "
+                    "then redeploy so alembic upgrade head applies 001_waza_baseline.",
                     file=sys.stderr,
                 )
                 return 1
 
-            await conn.execute(text("DELETE FROM alembic_version"))
-            await conn.execute(
-                text("INSERT INTO alembic_version (version_num) VALUES (:v)"),
-                {"v": target},
-            )
-            print(f"repair_alembic: normalized to single revision {target}")
+            if versions and _is_legacy(versions[0]):
+                if user_tables:
+                    print(
+                        "repair_alembic_FAILED database still has legacy revision "
+                        f"{versions[0]!r} and {len(user_tables)} user tables. "
+                        "This environment is configured for a clean baseline rebuild. "
+                        "Run against the intended Railway Postgres only:\n"
+                        "  DROP SCHEMA public CASCADE;\n"
+                        "  CREATE SCHEMA public;\n"
+                        "Then redeploy Web so startup runs alembic upgrade head.",
+                        file=sys.stderr,
+                    )
+                    return 1
+                # Empty of user tables — clear legacy version so baseline can apply
+                await conn.execute(text("DELETE FROM alembic_version"))
+                print(
+                    f"repair_alembic: cleared legacy revision {versions[0]!r} "
+                    "(no user tables); baseline upgrade may proceed"
+                )
+                return 0
+
+            if versions and versions[0] != BASELINE:
+                print(
+                    f"repair_alembic_FAILED unknown revision {versions[0]!r}",
+                    file=sys.stderr,
+                )
+                return 1
+
             return 0
     finally:
         await engine.dispose()

@@ -80,6 +80,11 @@ async def main() -> int:
                 return 1
             rev = revs[0] if revs else None
             print(f"verify_schema_alembic_revision={rev}")
+            if rev and rev != "001_waza_baseline":
+                print(
+                    f"verify_schema_WARN expected 001_waza_baseline got {rev!r}",
+                    file=sys.stderr,
+                )
             if not rev:
                 print(
                     "verify_schema_FAILED alembic_version empty or missing",
