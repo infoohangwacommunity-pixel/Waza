@@ -180,6 +180,30 @@ class MemoryService:
             for obs in data.get("learning_observations", []):
                 await self._upsert_learning_observation(principal_id, obs)
 
+            try:
+                from wax.memory.graph import MemoryGraphService, layer_for_memory_type
+
+                graph = MemoryGraphService(self.session)
+                last_user = ""
+                for m in reversed(recent_messages or []):
+                    if (m.get("role") or "") == "user" and m.get("content"):
+                        last_user = str(m.get("content"))[:500]
+                        break
+                episode = await graph.open_or_continue_episode(
+                    principal_id,
+                    conversation_id=conversation_id,
+                    work_id=source_work_id,
+                    title=(last_user[:80] if last_user else "Learning session"),
+                    summary=last_user,
+                )
+                for mem in stored:
+                    await graph.attach_memory(
+                        mem, episode, layer=layer_for_memory_type(mem.memory_type)
+                    )
+                    await graph.auto_link_similar(principal_id, mem, limit=4)
+            except Exception:
+                logger.exception("memory_graph_attach_failed")
+
             await self.session.flush()
             logger.info(
                 "memory_extraction_done",
@@ -267,6 +291,9 @@ class MemoryService:
                 score += 0.05
             if m.memory_type in ("learning", "preference", "goal"):
                 score += 0.05
+            layer = getattr(m, "layer", None) or ""
+            if layer in ("relationship", "goal", "procedural"):
+                score += 0.04
             # Semantic boost when embeddings exist
             if query_vec and m.embedding:
                 try:
@@ -494,10 +521,13 @@ class MemoryService:
             except (TypeError, ValueError):
                 pass
 
+        from wax.memory.graph import layer_for_memory_type
+
         mem = Memory(
             id=uuid4(),
             principal_id=principal_id,
             memory_type=item.get("memory_type", "semantic"),
+            layer=layer_for_memory_type(item.get("memory_type", "semantic")),
             content=content,
             structured=item.get("structured") or {},
             confidence=float(item.get("confidence", 0.6)),

@@ -202,7 +202,23 @@ async def _deterministic_probe(
                 if not brief.capability_families:
                     brief.capability_families = []
                 return brief
-            # Non-minimal but rich digest: still allow limited further probe
+            # Non-minimal: pull memory graph once (bounded)
+            try:
+                g = await caps.execute("inspect_memory_graph", {"query": user_text[:200]})
+                tools.append("inspect_memory_graph")
+                if g.get("ok") and g.get("block"):
+                    brief.items.append(
+                        BriefItem(
+                            kind="evidence",
+                            text=str(g.get("block"))[:600],
+                            source="memory_graph",
+                            confidence="high",
+                            why="multi_layer_graph",
+                        )
+                    )
+                    brief.needs_evidence_gather = False
+            except Exception:
+                pass
             brief.needs_evidence_gather = False
     except Exception:
         pass

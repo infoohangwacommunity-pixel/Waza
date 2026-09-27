@@ -290,6 +290,30 @@ async def rebuild_digest_from_state(
     dig.open_threads = _dedup(dig.open_threads, 6)
     dig.mastery = _dedup(dig.mastery, 8)
     dig.style_notes = _dedup(dig.style_notes, 4)
+    # Enrich from multi-layer graph when available
+    try:
+        from wax.memory.graph import MemoryGraphService
+
+        pkg = await MemoryGraphService(session).retrieve_graph_package(
+            principal_id, query="", seed_limit=10
+        )
+        for item in (pkg.get("layers") or {}).get("relationship") or []:
+            dig.preferences.append(str(item.get("content") or "")[:220])
+        for item in (pkg.get("layers") or {}).get("goal") or []:
+            dig.goals.append(str(item.get("content") or "")[:220])
+        for item in (pkg.get("layers") or {}).get("procedural") or []:
+            dig.style_notes.append(str(item.get("content") or "")[:180])
+        for item in (pkg.get("layers") or {}).get("episodic") or []:
+            dig.open_threads.append(str(item.get("content") or "")[:220])
+        for ep in pkg.get("episodes") or []:
+            if ep.get("summary"):
+                dig.open_threads.append(str(ep.get("summary"))[:220])
+        dig.preferences = _dedup(dig.preferences, 8)
+        dig.goals = _dedup(dig.goals, 6)
+        dig.open_threads = _dedup(dig.open_threads, 6)
+        dig.style_notes = _dedup(dig.style_notes, 4)
+    except Exception:
+        logger.exception("continuity_digest_graph_enrich_failed")
     return dig
 
 

@@ -20,6 +20,20 @@ logger = get_logger(__name__)
 # Tool specs for the orchestration model (OpenAI-compatible function schema)
 CAPABILITY_SPECS: list[dict[str, Any]] = [
     {
+        "name": "inspect_memory_graph",
+        "description": (
+            "Multi-layer memory graph for this learner: relationship, goal, procedural, "
+            "semantic, episodic nodes with active episodes. Prefer for deep personalization "
+            "beyond the continuity digest."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Optional focus query"},
+            },
+        },
+    },
+    {
         "name": "inspect_continuity_digest",
         "description": (
             "Dense learner self-model (relationship, focus, preferences, goals, "
@@ -165,6 +179,8 @@ class ContextCapabilities:
     async def execute(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         args = args or {}
         try:
+            if name == "inspect_memory_graph":
+                return await self._memory_graph(str(args.get("query") or self.user_text or ""))
             if name == "inspect_continuity_digest":
                 return await self._continuity_digest()
             if name == "inspect_learner_state":
@@ -600,5 +616,26 @@ class ContextCapabilities:
             }
         except Exception as e:
             logger.exception("continuity_digest_capability_failed")
+            return {"ok": False, "error": str(e)[:200]}
+
+    async def _memory_graph(self, query: str = "") -> dict[str, Any]:
+        try:
+            from wax.memory.graph import MemoryGraphService
+
+            pkg = await MemoryGraphService(self.session).retrieve_graph_package(
+                self.principal_id, query=query or self.user_text or ""
+            )
+            text = MemoryGraphService(self.session).render_package_text(pkg)
+            return {
+                "ok": True,
+                "kind": "evidence",
+                "source": "memory_graph",
+                "total": pkg.get("total"),
+                "episodes": pkg.get("episodes"),
+                "layers": pkg.get("layers"),
+                "block": text[:2500],
+            }
+        except Exception as e:
+            logger.exception("memory_graph_capability_failed")
             return {"ok": False, "error": str(e)[:200]}
 
