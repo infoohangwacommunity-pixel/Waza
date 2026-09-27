@@ -1128,6 +1128,13 @@ class TutorService:
                         "user_text": user_text[:2000],
                         "reply_text": reply_text[:2000],
                         "recent": recent[-8:] if recent else [],
+                        "capability_families": list(
+                            getattr(ctx, "capability_families", None) or []
+                        ),
+                        "orchestration_path": str(
+                            getattr(ctx, "orchestration_path", "") or ""
+                        ),
+                        "tools_used": list(tool_notes or [])[:12],
                     },
                 )
                 self.session.add(mem_work)
@@ -1158,6 +1165,8 @@ class TutorService:
             "tool_notes": tool_notes,
             "interactive": interactive_payload,
             "execution_id": str(agent.execution.id) if agent.execution else None,
+            "orchestration_path": str(getattr(ctx, "orchestration_path", "") or ""),
+            "capability_families": list(getattr(ctx, "capability_families", None) or []),
         }
 
 

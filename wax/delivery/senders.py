@@ -113,6 +113,7 @@ async def send_telegram(chat_id: str, text: str, interactive: dict | None = None
     profile = get_profile("telegram")
     chunks = chunk_message(safe, max_chars=profile.max_text_chars)
     results = []
+    delay = float(getattr(settings, "delivery_chunk_delay_seconds", 0.55) or 0.55)
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
     async with httpx.AsyncClient(timeout=30.0) as client:
         for i, chunk in enumerate(chunks):
@@ -179,6 +180,9 @@ async def send_telegram(chat_id: str, text: str, interactive: dict | None = None
                 if resp2.status_code >= 400:
                     logger.error("telegram_send_failed", status=resp2.status_code)
                     return {"status": "failed", "results": results}
+            if i < len(chunks) - 1 and delay > 0:
+                import asyncio
+                await asyncio.sleep(delay)
     return {"status": "ok", "chunks": len(chunks), "results": results}
 
 

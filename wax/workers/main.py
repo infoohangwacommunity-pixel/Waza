@@ -38,6 +38,14 @@ def _handle_signal(*_):
 
 async def process_message_response(session, work: Work) -> None:
     """Full AI tutor path — every learner message passes through intelligence."""
+    from wax.observability.turn_telemetry import begin_turn, end_turn, get_turn
+
+    payload0 = work.input_payload or {}
+    begin_turn(
+        work_id=str(work.id),
+        principal_id=str(work.principal_id or ""),
+        channel=str(payload0.get("channel") or ""),
+    )
     # Safe outage / recovery context for the tutor (no internals)
     from wax.work.recovery import attach_outage_to_payload, find_recovery_batch_candidates, build_outage_context
 
@@ -238,8 +246,24 @@ async def process_message_response(session, work: Work) -> None:
             work_id=str(work.id),
             memories_used=result.get("memories_used"),
         )
+        tel = get_turn()
+        if tel:
+            tel.orchestration_path = str(
+                (result or {}).get("orchestration_path")
+                or tel.orchestration_path
+                or ""
+            )
+            tel.capability_families = list(
+                (result or {}).get("capability_families") or tel.capability_families or []
+            )
+            tel.tools_called = len((result or {}).get("tools") or [])
+            end_turn(outcome="completed")
         await _attempt_deliveries(session, work.id)
     except Exception as e:
+        try:
+            end_turn(outcome="failed")
+        except Exception:
+            pass
         logger.exception("tutor_turn_failed", work_id=str(work.id))
         from wax.security.safe_errors import classify_error, student_facing_message
 
@@ -555,6 +579,14 @@ async def process_memory_work(session, work: Work) -> None:
                 if src_meta:
                     dig.recent_families = [str(x) for x in src_meta][:8]
                 await save_digest(session, principal_id, dig)
+                from wax.observability.events import emit
+
+                emit(
+                    "lifecycle.memory_refreshed",
+                    principal_id=str(principal_id),
+                    work_id=str(work.id),
+                    source_work_id=str((work.input_payload or {}).get("source_work_id") or ""),
+                )
             except Exception:
                 logger.exception("continuity_digest_refresh_failed")
         work.status = "completed"

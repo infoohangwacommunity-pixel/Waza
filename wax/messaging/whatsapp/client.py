@@ -66,8 +66,9 @@ async def send_text(to: str, text: str) -> dict[str, Any]:
     profile = get_profile("whatsapp")
     chunks = chunk_message(text, max_chars=profile.max_text_chars)
     results = []
+    delay = float(getattr(settings, "delivery_chunk_delay_seconds", 0.55) or 0.55)
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             body = {
                 "messaging_product": "whatsapp",
                 "to": to,
@@ -79,6 +80,9 @@ async def send_text(to: str, text: str) -> dict[str, Any]:
             if resp.status_code >= 400:
                 logger.error("whatsapp_text_failed", status=resp.status_code)
                 return {"status": "failed", "results": results}
+            if i < len(chunks) - 1 and delay > 0:
+                import asyncio
+                await asyncio.sleep(delay)
     return {"status": "ok", "chunks": len(chunks), "results": results}
 
 

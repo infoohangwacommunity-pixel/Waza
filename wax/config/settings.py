@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     outage_awareness_min_seconds: int = 30  # only surface outage context after this
     # Pure 429s do not burn work.max_attempts; this caps rate-limit-only retries
     provider_rate_limit_max_retries: int = 48
+    delivery_chunk_delay_seconds: float = 0.55
 
     # --- Conversational check-in guardrails (AI decides moment; infra gates) ---
     checkin_enabled: bool = True
