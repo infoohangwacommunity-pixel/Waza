@@ -33,7 +33,12 @@ from wax.intelligence.context import ContextAssembler
 logger = get_logger(__name__)
 
 
-TUTOR_SYSTEM = """You are WAX Prep — a persistent tutor that gets to know this person over time.
+TUTOR_SYSTEM = """You are WAX — a persistent adaptive tutor created by WAX Prep.
+
+WAX Prep is the product/company. You are WAX, the tutor. Underlying models and providers
+(Upstage, Solar, Gemini, OpenAI, Groq, etc.) are infrastructure only — never say you *are*
+those products or companies. If asked what powers you, you may say you run on models
+configured by WAX Prep without treating the vendor as your identity.
 
 Talk naturally. You are not a form, a menu, or a rigid course system.
 
@@ -62,6 +67,14 @@ Teaching judgment (principles, not a script):
 - You may explain, simplify, analogize, demonstrate, scaffold, increase/reduce difficulty, revisit a prerequisite, pause, or stop when continuing would not help.
 - Doing less is allowed: one clear sentence, one question, or a short pause can be the right move.
 - Never claim a tool, schedule, file, research, or transcription succeeded unless the tool result says it did.
+
+Privacy and memory (truthful):
+- You retain durable memories, teaching state, and continuity to personalize learning.
+- If they ask what you store, describe categories honestly: conversation context, learner memories,
+  goals/preferences when known, materials they shared, operational logs — not secrets or passwords.
+- If they ask to forget something specific, use forget_memory / tools when available and confirm from tool results.
+- Do not promise a full account wipe or legal deletion in chat unless a dedicated export/delete flow succeeds.
+- Never invent privacy guarantees.
 
 First contact and onboarding:
 - Respond to what they actually said. Do not run an intake questionnaire.
@@ -861,6 +874,10 @@ class TutorService:
                 recent.append({"role": m.role, "content": m.content})
 
         assembler = ContextAssembler(self.session)
+        from wax.intelligence.system_state import (
+            build_runtime_system_state,
+            render_system_state_for_model,
+        )
         ctx = await assembler.assemble(
             principal_id=principal_id,
             conversation_id=conversation_id,
@@ -992,17 +1009,43 @@ class TutorService:
         try:
             from wax.observability.logging import get_logger as _gl
 
-            _gl(__name__).info(
-                "tutor_capability_selection",
-                **cap_instrumentation(
-                    families=fams,
-                    tools_exposed=len(turn_tools),
-                    tools_total=len(AVAILABLE_TOOLS),
-                    path=path,
-                ),
+            _instr = cap_instrumentation(
+                families=fams,
+                tools_exposed=len(turn_tools),
+                tools_total=len(AVAILABLE_TOOLS),
+                path=path,
             )
+            _gl(__name__).info("tutor_capability_selection", **_instr)
+            try:
+                from wax.observability.turn_telemetry import get_turn
+
+                _tel = get_turn()
+                if _tel:
+                    _tel.tools_exposed = len(turn_tools)
+                    _tel.orchestration_path = path
+                    _tel.capability_families = sorted(fams)
+            except Exception:
+                pass
         except Exception:
             pass
+
+        # Dynamic system-state (runtime capabilities) — not a static brochure
+        try:
+            tool_names = [getattr(x, "name", str(x)) for x in (turn_tools or [])]
+            state_block = render_system_state_for_model(
+                build_runtime_system_state(
+                    channel=channel,
+                    capability_families=sorted(fams),
+                    tools_available=tool_names,
+                )
+            )
+            if llm_messages and llm_messages[0].role == "system":
+                llm_messages[0] = ChatMessage(
+                    role="system",
+                    content=(llm_messages[0].content or "") + "\n\n" + state_block,
+                )
+        except Exception:
+            logger.exception("system_state_inject_failed")
 
         # Tool loop: up to a few rounds so the model can act then respond
         reply_text = ""

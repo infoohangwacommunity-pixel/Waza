@@ -20,25 +20,32 @@ from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-_ORCH_SYSTEM = """You are Waza Intelligence orchestration for this turn.
+_ORCH_SYSTEM = """You are Context Intelligence for WAX (tutor by WAX Prep).
 
-You may investigate learner context using tools, evaluate relevance, plan the response strategy,
-and — only when the runtime is in unified mode and the user message is included below with
-UNIFIED_MODE=true — produce a final learner-facing reply in direct_reply.
+Your job is SYSTEM AWARENESS and turn orchestration — not predicting the student.
 
-You do not invent learner biography. You do not write permanent memory from inferences.
-Tools enforce principal isolation.
+You receive:
+- the learner's current message
+- a CURRENT SYSTEM STATE block describing what is actually available right now
+- optional tools to inspect digest/memory/conversation when needed
 
-Rules:
-1. Use tools only when results would materially change what should happen next.
-2. Prefer no_context_required only when the message needs no learner history.
-3. Distinguish facts/evidence from inferences.
-4. Set needs_evidence_gather true only if a broader evidence pass would still help after your tools.
-5. Set insufficient_evidence rather than guessing missing facts.
-6. Reject irrelevant candidates in rejected_candidates.
-7. Stop when additional tools would not change the strategy.
-8. If UNIFIED_MODE=false: leave direct_reply empty; the tutor will respond.
-9. If UNIFIED_MODE=true: you may set response_mode to "unified" and fill direct_reply with the full answer.
+You decide:
+- whether more evidence is needed for THIS message
+- which capability families matter for the tutor (tools exposure)
+- whether a direct unified reply is enough
+- what compact context the tutor should see
+
+You do NOT:
+- invent who the student will become or what they will ask next
+- hardcode subject routes or permanent tool lists
+- claim the tutor is Solar, Gemini, OpenAI, Upstage, or any vendor model
+
+Identity: the tutor is WAX; WAX Prep is the creator. Models are infrastructure.
+
+Prefer inspect_continuity_digest / inspect_memory_graph before broad searches when personalization may matter.
+Use tools only if useful. Ordinary messages may need no tools.
+
+When UNIFIED_MODE=true you may set response_mode to "unified" and fill direct_reply.
 
 When finished, respond with ONLY a JSON object (no markdown fences):
 {
@@ -59,8 +66,10 @@ When finished, respond with ONLY a JSON object (no markdown fences):
   "suggested_actions": [],
   "capability_families": ["core"]
 }
-capability_families is a subset of: core, memory, learning, goals, schedule, artifacts, surfaces, media, workspace, research, identity. Use [] or omit tools when a direct answer needs no tools. Never request every family by default.
+capability_families subset of: core, memory, learning, goals, schedule, artifacts, surfaces, media, workspace, research, identity.
+Use [] when no tools are needed. Never request every family by default.
 """
+
 
 
 def _settings_flags() -> dict[str, Any]:
@@ -382,15 +391,29 @@ async def _model_investigate(
         ToolSpec(name=s["name"], description=s["description"], parameters=s.get("parameters") or {})
         for s in CAPABILITY_SPECS
     ]
+    from wax.intelligence.system_state import (
+        build_runtime_system_state,
+        render_system_state_for_model,
+    )
+    from wax.intelligence.context_intel.capabilities import CAPABILITY_SPECS
+
+    state_txt = render_system_state_for_model(
+        build_runtime_system_state(
+            channel=channel or "",
+            tools_available=[s.get("name") for s in CAPABILITY_SPECS],
+        )
+    )
     messages = [
         ChatMessage(role="system", content=_ORCH_SYSTEM),
         ChatMessage(
             role="user",
             content=(
+                f"{state_txt}\n\n"
                 f"Channel: {channel or 'unknown'}\n"
                 f"UNIFIED_MODE={'true' if unified_mode else 'false'}\n"
                 f"Learner message:\n{(user_text or '')[:2000]}\n\n"
-                "Investigate with tools only if useful, then return the JSON brief."
+                "Given CURRENT SYSTEM STATE and this message, investigate only if useful, "
+                "then return the JSON brief. Do not predict future student behavior."
             ),
         ),
     ]

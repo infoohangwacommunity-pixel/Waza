@@ -104,7 +104,7 @@ def platform_context_block(channel: str) -> str:
         f"\n--- Delivery channel: {p.name} ---\n"
         f"Max practical message length: ~{p.max_text_chars} characters per bubble.\n"
         f"{p.notes}\n"
-        f"Write so the response is readable in a chat environment. "
+        f"Student UX: short bubbles, scannable structure, one clear next step when teaching. Write so the response is readable in a chat environment. "
         f"Prefer clear paragraph breaks for long content. "
         f"Avoid document-style formatting when conversational text is enough.\n"
         f"--- End channel constraints ---\n"
