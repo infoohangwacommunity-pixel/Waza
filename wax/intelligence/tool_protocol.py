@@ -221,3 +221,89 @@ def normalize_completion_payload(
         "raw": raw,
         "protocol_anomaly": anomaly,
     }
+
+
+_URL_RE = re.compile(r"https?://\S+", re.I)
+
+
+def verified_urls_from_tool_results(tool_results: list[dict] | None) -> set[str]:
+    """URLs that tools actually returned (page_url, url, public_url)."""
+    out: set[str] = set()
+    for item in tool_results or []:
+        if not isinstance(item, dict):
+            continue
+        res = item.get("result") if "result" in item else item
+        if not isinstance(res, dict) or not res.get("ok"):
+            continue
+        for key in ("page_url", "url", "public_url", "link"):
+            v = res.get(key)
+            if isinstance(v, str) and v.startswith("http"):
+                out.add(v.rstrip(".,);]}"))
+        # nested data
+        data = res.get("data") if isinstance(res.get("data"), dict) else {}
+        for key in ("page_url", "url", "public_url"):
+            v = data.get(key)
+            if isinstance(v, str) and v.startswith("http"):
+                out.add(v.rstrip(".,);]}"))
+    return out
+
+
+def surface_tool_succeeded(tool_results: list[dict] | None) -> bool:
+    for item in tool_results or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "")
+        res = item.get("result") if "result" in item else item
+        if name in ("create_surface", "update_surface") and isinstance(res, dict) and res.get("ok"):
+            if res.get("page_url") or (isinstance(res.get("data"), dict) and res["data"].get("page_url")):
+                return True
+    return False
+
+
+def enforce_verified_artifacts(
+    text: str | None,
+    *,
+    tool_results: list[dict] | None = None,
+    surfaces_tools_exposed: bool = False,
+) -> str:
+    """
+    Learner-visible text may only cite surface/page URLs that tools returned.
+
+    Prevents invented domains (e.g. wax.run) when create_surface never ran.
+    """
+    if not text:
+        return ""
+    verified = verified_urls_from_tool_results(tool_results)
+    cleaned = text
+    found_unverified = False
+    for m in list(_URL_RE.finditer(text)):
+        url = m.group(0).rstrip(".,);]}")
+        if url in verified:
+            continue
+        # Block unverified links when surface tools were in play or URL looks like a page share
+        if surfaces_tools_exposed or "/s/" in url or "wax.run" in url.lower() or "surface" in url.lower():
+            found_unverified = True
+            cleaned = cleaned.replace(m.group(0), "")
+        elif not verified and surfaces_tools_exposed:
+            found_unverified = True
+            cleaned = cleaned.replace(m.group(0), "")
+    cleaned = re.sub(r"[ \t]+", " ", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    if found_unverified and not verified:
+        note = (
+            "I wasn't able to publish a live page this turn — no verified link was created. "
+            "I can try again if you still want an interactive page."
+        )
+        if not cleaned or len(cleaned) < 20:
+            return note
+        # Avoid stacking false "link is ready" with the note
+        low = cleaned.lower()
+        if any(p in low for p in ("link is ready", "page is ready", "here's the link", "here is the link", "i've created", "i created the page")):
+            return note
+        return cleaned + "\n\n" + note
+    if found_unverified and verified:
+        # Keep text but ensure at least one verified URL remains visible
+        primary = next(iter(verified))
+        if primary not in cleaned:
+            cleaned = cleaned + f"\n\n{primary}"
+    return cleaned

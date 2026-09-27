@@ -147,6 +147,83 @@ class IntelligenceProvider(abc.ABC):
         ...
 
 
+
+def _serialize_openai_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    """OpenAI-compatible message list; tool call arguments must be JSON strings."""
+    import json as _json
+    out: list[dict[str, Any]] = []
+    for m in messages:
+        msg: dict[str, Any] = {"role": m.role}
+        # Tool role requires content string
+        if m.role == "tool":
+            msg["content"] = m.content if m.content is not None else ""
+            if m.tool_call_id:
+                msg["tool_call_id"] = m.tool_call_id
+            if m.name:
+                msg["name"] = m.name
+            out.append(msg)
+            continue
+        if m.tool_calls:
+            ser_calls = []
+            for tc in m.tool_calls:
+                if not isinstance(tc, dict):
+                    continue
+                fn = dict(tc.get("function") or {})
+                args = fn.get("arguments")
+                if isinstance(args, dict):
+                    fn["arguments"] = _json.dumps(args, ensure_ascii=False)
+                elif args is None:
+                    fn["arguments"] = "{}"
+                elif not isinstance(args, str):
+                    fn["arguments"] = _json.dumps(args, ensure_ascii=False, default=str)
+                ser_calls.append(
+                    {
+                        "id": tc.get("id") or "call",
+                        "type": tc.get("type") or "function",
+                        "function": {
+                            "name": fn.get("name") or "unknown",
+                            "arguments": fn.get("arguments") or "{}",
+                        },
+                    }
+                )
+            msg["tool_calls"] = ser_calls
+            # Many providers require content null or "" with tool_calls
+            msg["content"] = m.content if m.content else None
+        else:
+            msg["content"] = m.content if m.content is not None else ""
+        if m.name and m.role != "tool":
+            msg["name"] = m.name
+        out.append(msg)
+    return out
+
+
+def _sanitize_tool_specs_for_provider(tools: list[ToolSpec] | None) -> list[dict[str, Any]] | None:
+    """Ensure tool schemas are plain JSON-serializable objects."""
+    if not tools:
+        return None
+    import json as _json
+    out = []
+    for t in tools:
+        params = t.parameters or {"type": "object", "properties": {}}
+        # Round-trip to drop non-JSON types
+        try:
+            params = _json.loads(_json.dumps(params, default=str))
+        except Exception:
+            params = {"type": "object", "properties": {}}
+        desc = (t.description or "")[:500]
+        out.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": t.name,
+                    "description": desc,
+                    "parameters": params,
+                },
+            }
+        )
+    return out
+
+
 class OpenAICompatibleProvider(IntelligenceProvider):
     """OpenAI, Grok (xAI), OpenRouter, and any OpenAI-compatible endpoint."""
 
@@ -171,32 +248,20 @@ class OpenAICompatibleProvider(IntelligenceProvider):
         }
         body: dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": m.role,
-                    "content": m.content,
-                    **({"name": m.name} if m.name else {}),
-                    **({"tool_calls": m.tool_calls} if m.tool_calls else {}),
-                    **({"tool_call_id": m.tool_call_id} if m.tool_call_id else {}),
-                }
-                for m in request.messages
-            ],
+            "messages": _serialize_openai_messages(request.messages),
             "temperature": request.temperature if request.temperature is not None else 0.7,
             "max_tokens": request.max_tokens if request.max_tokens is not None else 4096,
         }
-        if request.tools:
-            body["tools"] = [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description,
-                        "parameters": t.parameters,
-                    },
-                }
-                for t in request.tools
-            ]
+        tool_payload = _sanitize_tool_specs_for_provider(request.tools)
+        if tool_payload:
+            body["tools"] = tool_payload
             body["tool_choice"] = "auto"
+        # Ensure body is JSON-serializable (Upstage rejects malformed bodies)
+        try:
+            import json as _json
+            body = _json.loads(_json.dumps(body, ensure_ascii=False, default=str))
+        except Exception:
+            pass
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

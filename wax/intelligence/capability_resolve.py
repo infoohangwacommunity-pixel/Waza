@@ -212,6 +212,25 @@ def families_from_brief(brief: Any | None) -> set[str]:
     return inferred
 
 
+# Hard ceiling: some providers reject oversized tool arrays / request bodies
+MAX_TOOLS_PER_TURN = 18
+
+# Prefer action tools when capping (create_surface before long-tail schedule tools)
+_TOOL_PRIORITY = (
+    "create_surface",
+    "update_surface",
+    "list_surfaces",
+    "inspect_surface",
+    "transcribe_audio",
+    "inspect_media",
+    "describe_image",
+    "fetch_inbound_media",
+    "present_choices",
+    "get_learner_state",
+    "inspect_memories",
+)
+
+
 def select_tool_specs(all_tools: list[Any], families: set[str] | None) -> list[Any]:
     """Filter ToolSpec list to the selected families (+ always-core if any tools)."""
     if not families:
@@ -221,7 +240,11 @@ def select_tool_specs(all_tools: list[Any], families: set[str] | None) -> list[A
     for fam in families:
         allowed |= FAMILY_TOOLS.get(fam, frozenset())
     selected = [t for t in all_tools if getattr(t, "name", None) in allowed]
-    return selected
+    if len(selected) <= MAX_TOOLS_PER_TURN:
+        return selected
+    rank = {name: i for i, name in enumerate(_TOOL_PRIORITY)}
+    selected.sort(key=lambda t: rank.get(getattr(t, "name", ""), 100))
+    return selected[:MAX_TOOLS_PER_TURN]
 
 
 def instrumentation(

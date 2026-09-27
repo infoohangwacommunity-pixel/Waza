@@ -67,6 +67,7 @@ Teaching judgment (principles, not a script):
 - You may explain, simplify, analogize, demonstrate, scaffold, increase/reduce difficulty, revisit a prerequisite, pause, or stop when continuing would not help.
 - Doing less is allowed: one clear sentence, one question, or a short pause can be the right move.
 - Never claim a tool, schedule, file, research, or transcription succeeded unless the tool result says it did.
+- Surfaces: only share a page link if create_surface/update_surface returned ok with page_url. Never invent domains or URLs. If the tool did not run, say you could not publish the page yet.
 
 Privacy and memory (truthful):
 - You retain durable memories, teaching state, and continuity to personalize learning.
@@ -1157,21 +1158,45 @@ class TutorService:
                     )
                 continue
 
-            from wax.intelligence.tool_protocol import sanitize_learner_reply
+            from wax.intelligence.tool_protocol import (
+                sanitize_learner_reply,
+                enforce_verified_artifacts,
+            )
 
             reply_text = sanitize_learner_reply(
                 response.content,
                 had_tool_results=bool(tool_results),
+            )
+            surfaces_exposed = any(
+                (getattr(x, "name", None) or "") == "create_surface"
+                for x in (turn_tools or [])
+            )
+            reply_text = enforce_verified_artifacts(
+                reply_text,
+                tool_results=tool_results,
+                surfaces_tools_exposed=surfaces_exposed,
             )
             break
 
         if not reply_text:
             reply_text = "I'm here with you. Could you say that again another way?"
         else:
-            from wax.intelligence.tool_protocol import sanitize_learner_reply
+            from wax.intelligence.tool_protocol import (
+                sanitize_learner_reply,
+                enforce_verified_artifacts,
+            )
 
             reply_text = sanitize_learner_reply(
                 reply_text, had_tool_results=bool(tool_results)
+            )
+            surfaces_exposed = any(
+                (getattr(x, "name", None) or "") == "create_surface"
+                for x in (turn_tools or [])
+            )
+            reply_text = enforce_verified_artifacts(
+                reply_text,
+                tool_results=tool_results,
+                surfaces_tools_exposed=surfaces_exposed,
             )
 
         out_msg_id = None
