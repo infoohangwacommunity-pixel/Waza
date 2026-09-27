@@ -928,7 +928,7 @@ class TutorService:
                 + (f"; {count} message(s) waited" if count else "")
                 + ". Respond naturally; acknowledge the delay only if it helps the learner.]"
             )
-        batch = payload.get("recovery_batch")
+        batch = payload.get("recovery_batch") or payload.get("coalesced_messages")
         if isinstance(batch, list) and len(batch) > 1:
             lines = []
             for item in batch[:8]:
@@ -936,10 +936,14 @@ class TutorService:
                     lines.append(str(item["text"])[:500])
             if lines:
                 media_note += (
-                    "\n[System: recovered message sequence in original order:\n"
-                    + "\n".join(f"- {t}" for t in lines)
-                    + "\nRespond to the full sequence; do not ignore earlier parts.]"
+                    "\n[System: several related messages arrived together "
+                    "(delay/outage or rapid sequence). Address them as ONE turn "
+                    "in original order — do not send multiple separate replies:\n"
+                    + "\n".join(f"- {line}" for line in lines)
+                    + "\n]"
                 )
+        if payload.get("coalesced_combined"):
+            user_text = str(payload.get("coalesced_combined"))[:4000]
 
         user_content = user_text + media_note
         if not recent or recent[-1].get("content") != user_text:

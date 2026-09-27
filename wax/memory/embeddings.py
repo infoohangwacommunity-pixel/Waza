@@ -83,13 +83,39 @@ def _embedding_config() -> tuple[str, str, str] | None:
     return key, base, model
 
 
+def _usable_embed_text(text: str | None) -> str | None:
+    """Return stripped text safe for embedding APIs, or None if empty/noise."""
+    if text is None:
+        return None
+    s = str(text).strip()
+    if not s:
+        return None
+    # Reject pure whitespace / zero-width / control-only
+    if not any(ch.isalnum() for ch in s):
+        # Allow short symbolic math only if it has digits or operators with length
+        if len(s) < 2:
+            return None
+    if len(s) < 1:
+        return None
+    return s[:6000]
+
+
 async def embed_texts(texts: list[str]) -> list[list[float]] | None:
     cfg = _embedding_config()
     if not cfg or not texts:
         return None
     api_key, base, model = cfg
-    cleaned = [(t or "")[:6000] for t in texts]
+    # Preserve alignment: drop empties entirely (do not send "" — Gemini empty Part)
+    cleaned = []
+    for t in texts:
+        u = _usable_embed_text(t)
+        if u is not None:
+            cleaned.append(u)
+    if not cleaned:
+        logger.info("embed_skipped_empty_input", requested=len(texts))
+        return None
     url = f"{base}/embeddings"
+    # Gemini OpenAI-compat and native both reject empty parts in the batch
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(
@@ -98,7 +124,7 @@ async def embed_texts(texts: list[str]) -> list[list[float]] | None:
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
-                json={"model": model, "input": cleaned},
+                json={"model": model, "input": cleaned},  # always non-empty list; never ""
             )
         if resp.status_code >= 400:
             logger.warning(
@@ -126,6 +152,9 @@ async def embed_texts(texts: list[str]) -> list[list[float]] | None:
 
 
 async def embed_one(text: str) -> list[float] | None:
+    if _usable_embed_text(text) is None:
+        logger.info("embed_one_skipped_empty")
+        return None
     result = await embed_texts([text])
     if not result:
         return None

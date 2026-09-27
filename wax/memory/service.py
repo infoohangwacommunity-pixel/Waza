@@ -269,7 +269,8 @@ class MemoryService:
 
         query_vec = None
         try:
-            query_vec = await embed_one(query)
+            if (query or "").strip():
+                query_vec = await embed_one(query)
         except Exception:
             query_vec = None
 
@@ -602,12 +603,15 @@ class MemoryService:
         self.session.add(mem)
         await self.session.flush()
         try:
-            vec = await embed_one(content)
-            if vec:
-                mem.embedding = vec
-                await self.session.flush()
+            if content and content.strip() and any(c.isalnum() for c in content):
+                vec = await embed_one(content)
+                if vec:
+                    mem.embedding = vec
+                    await self.session.flush()
+            else:
+                logger.info("memory_embed_skipped_empty_content", memory_id=str(mem.id))
         except Exception:
-            pass
+            logger.exception("memory_embed_failed", memory_id=str(mem.id))
         return mem
 
     async def _upsert_learning_observation(

@@ -47,14 +47,38 @@ async def process_message_response(session, work: Work) -> None:
         channel=str(payload0.get("channel") or ""),
     )
     # Safe outage / recovery context for the tutor (no internals)
-    from wax.work.recovery import attach_outage_to_payload, find_recovery_batch_candidates, build_outage_context
+    from wax.work.recovery import (
+        attach_outage_to_payload,
+        find_recovery_batch_candidates,
+        build_outage_context,
+        find_coalescable_works,
+        coalesce_works_into,
+    )
 
     payload = work.input_payload or {}
     payload = attach_outage_to_payload(payload, work=work)
 
+    # Intelligent coalesce: related queued/retrying works for same conversation → one turn
+    try:
+        if work.principal_id and work.conversation_id:
+            siblings = await find_coalescable_works(session, anchor_work=work)
+            if siblings:
+                result = await coalesce_works_into(
+                    session, primary=work, siblings=siblings
+                )
+                payload = work.input_payload or payload
+                logger.info(
+                    "works_coalesced",
+                    work_id=str(work.id),
+                    coalesced=result.get("coalesced"),
+                    texts=len(result.get("texts") or []),
+                )
+    except Exception:
+        logger.exception("work_coalesce_failed")
+
     # Recovery batching: if this is a recovered/delayed work, include nearby sibling
     # inbound messages as ordered context. Original Message rows are never deleted.
-    if (payload.get("recovery") or (work.metadata_ or {}).get("recovery")) and work.principal_id and work.conversation_id:
+    if (payload.get("recovery") or (work.metadata_ or {}).get("recovery") or payload.get("coalesced_messages")) and work.principal_id and work.conversation_id:
         try:
             anchor = work.created_at or datetime.now(timezone.utc)
             siblings = await find_recovery_batch_candidates(
