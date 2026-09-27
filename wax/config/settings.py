@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     context_intelligence_mode: str = "investigate"
     # When True, full gather_evidence only if brief.needs_evidence_gather is True
     context_intelligence_controls_evidence: bool = True
+    # Dense learner self-model: more personalization, fewer retrieval/model calls
+    continuity_digest_enabled: bool = True
+    continuity_digest_max_age_hours: float = 72.0
+    continuity_digest_max_chars: int = 1400
+    # When digest is fresh+rich, skip CI model call and broad evidence gather
+    continuity_digest_short_circuit: bool = True
 
     embedding_provider: str = "none"
     embedding_api_key: str = ""

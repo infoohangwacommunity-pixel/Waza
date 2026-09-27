@@ -476,6 +476,21 @@ async def process_memory_work(session, work: Work) -> None:
                 )
             except Exception:
                 pass
+            try:
+                # Refresh dense continuity digest from structured state (no provider call)
+                from wax.learner.continuity_digest import (
+                    rebuild_digest_from_state,
+                    save_digest,
+                )
+
+                dig = await rebuild_digest_from_state(session, principal_id)
+                # Remember capability families used on the source turn when present
+                src_meta = (work.input_payload or {}).get("capability_families") or []
+                if src_meta:
+                    dig.recent_families = [str(x) for x in src_meta][:8]
+                await save_digest(session, principal_id, dig)
+            except Exception:
+                logger.exception("continuity_digest_refresh_failed")
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
         await session.flush()

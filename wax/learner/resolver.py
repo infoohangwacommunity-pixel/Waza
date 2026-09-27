@@ -109,54 +109,113 @@ class ContextResolver:
             pack.degradation_reason = "no_principal"
             return pack
 
+        # Continuity Digest: dense self-model → more personal, fewer provider calls
+        digest_short_circuit = False
+        try:
+            from wax.config.settings import get_settings as _gs_dig
+            from wax.learner.continuity_digest import (
+                ensure_fresh_digest,
+                render_digest_block,
+            )
+
+            _sdig = _gs_dig()
+            if bool(getattr(_sdig, "continuity_digest_enabled", True)):
+                dig = await ensure_fresh_digest(
+                    self.session,
+                    principal_id,
+                    max_age_hours=float(
+                        getattr(_sdig, "continuity_digest_max_age_hours", 72) or 72
+                    ),
+                )
+                dblock = render_digest_block(
+                    dig,
+                    user_text or "",
+                    max_chars=int(getattr(_sdig, "continuity_digest_max_chars", 1400) or 1400),
+                )
+                if dblock:
+                    pack.system_prefix = pack.system_prefix + dblock
+                    pack.decision_hints.append("continuity_digest:injected")
+                    pack.memories_used = max(
+                        pack.memories_used,
+                        len(dig.preferences) + len(dig.focus) + len(dig.goals),
+                    )
+                if (
+                    bool(getattr(_sdig, "continuity_digest_short_circuit", True))
+                    and dig.is_fresh()
+                    and dig.is_rich()
+                ):
+                    digest_short_circuit = True
+                    pack.skip_evidence_gather = True
+                    pack.orchestration_path = "continuity_digest"
+                    fams = list(dig.recent_families or []) or ["core", "memory", "learning"]
+                    pack.capability_families = fams
+                    pack.decision_hints.append("continuity_digest:short_circuit")
+                    logger.info(
+                        "continuity_digest_short_circuit",
+                        principal_id=str(principal_id),
+                        age_hours=round(dig.age_hours(), 2),
+                        families=fams,
+                    )
+        except Exception:
+            logger.exception("continuity_digest_failed")
+
         # Context Intelligence: orchestration truth for this turn
         brief = None
         try:
             from wax.intelligence.context_intel import investigate_context, brief_to_tutor_text
             from wax.config.settings import get_settings as _gs
 
-            brief = await investigate_context(
-                self.session,
-                principal_id=principal_id,
-                conversation_id=conversation_id,
-                channel=channel,
-                user_text=user_text,
-            )
-            pack.orchestration_brief = brief
-            from wax.intelligence.capability_resolve import families_from_brief
-            fams = families_from_brief(brief)
-            pack.capability_families = sorted(fams)
-            pack.orchestration_path = (
-                "minimal" if brief.no_context_required and not fams
-                else ("unified" if getattr(brief, "response_mode", "") == "unified" else "investigate")
-            )
+            if not digest_short_circuit:
+                brief = await investigate_context(
+                    self.session,
+                    principal_id=principal_id,
+                    conversation_id=conversation_id,
+                    channel=channel,
+                    user_text=user_text,
+                )
+                pack.orchestration_brief = brief
+                from wax.intelligence.capability_resolve import families_from_brief
 
-            brief_txt = brief_to_tutor_text(brief)
-            if brief_txt:
-                pack.system_prefix = pack.system_prefix + brief_txt
-            if brief.tools_used:
-                pack.decision_hints.append(
-                    "context_intel_tools:" + ",".join(brief.tools_used[:8])
+                fams = families_from_brief(brief)
+                pack.capability_families = sorted(fams)
+                pack.orchestration_path = (
+                    "minimal"
+                    if brief.no_context_required and not fams
+                    else (
+                        "unified"
+                        if getattr(brief, "response_mode", "") == "unified"
+                        else "investigate"
+                    )
                 )
-            if brief.no_context_required:
-                pack.decision_hints.append("context_intel:no_context_required")
-            if brief.insufficient_evidence:
-                pack.decision_hints.append("context_intel:insufficient_evidence")
-            if brief.degraded:
-                pack.decision_hints.append(
-                    f"context_intel_degraded:{brief.degradation_reason or 'partial'}"
-                )
-            controls = bool(getattr(_gs(), "context_intelligence_controls_evidence", True))
-            if controls and brief is not None and not brief.needs_evidence_gather:
-                pack.skip_evidence_gather = True
-                pack.decision_hints.append("context_intel:skip_evidence_gather")
-            if (
-                brief
-                and getattr(brief, "response_mode", "") == "unified"
-                and (brief.direct_reply or "").strip()
-            ):
-                pack.unified_direct_reply = brief.direct_reply.strip()
-                pack.decision_hints.append("context_intel:unified_direct_reply")
+
+                brief_txt = brief_to_tutor_text(brief)
+                if brief_txt:
+                    pack.system_prefix = pack.system_prefix + brief_txt
+                if brief.tools_used:
+                    pack.decision_hints.append(
+                        "context_intel_tools:" + ",".join(brief.tools_used[:8])
+                    )
+                if brief.no_context_required:
+                    pack.decision_hints.append("context_intel:no_context_required")
+                if brief.insufficient_evidence:
+                    pack.decision_hints.append("context_intel:insufficient_evidence")
+                if brief.degraded:
+                    pack.decision_hints.append(
+                        f"context_intel_degraded:{brief.degradation_reason or 'partial'}"
+                    )
+                controls = bool(getattr(_gs(), "context_intelligence_controls_evidence", True))
+                if controls and not brief.needs_evidence_gather:
+                    pack.skip_evidence_gather = True
+                    pack.decision_hints.append("context_intel:skip_evidence_gather")
+                if (
+                    getattr(brief, "response_mode", "") == "unified"
+                    and (brief.direct_reply or "").strip()
+                ):
+                    pack.unified_direct_reply = brief.direct_reply.strip()
+                    pack.decision_hints.append("context_intel:unified_direct_reply")
+            else:
+                # Digest path already set families + skip_evidence_gather
+                pack.decision_hints.append("context_intel:skipped_for_continuity_digest")
         except Exception:
             logger.exception("context_intelligence_integration_failed")
 
