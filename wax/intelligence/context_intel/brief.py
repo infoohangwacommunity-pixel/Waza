@@ -53,6 +53,11 @@ class ContextBrief:
     rejected_candidates: list[str] = field(default_factory=list)
     # Capability families for tutor tool exposure (empty = no tools)
     capability_families: list[str] = field(default_factory=list)
+    # Multimodal orchestration (Phase 4)
+    asset_requirements: list[dict[str, Any]] = field(default_factory=list)
+    required_capabilities: list[str] = field(default_factory=list)
+    experience_requirements: list[str] = field(default_factory=list)
+    # chat | interactive | visual | document | workspace
     degraded: bool = False
     degradation_reason: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -65,7 +70,7 @@ class ContextBrief:
 
 
 def brief_to_tutor_text(brief: ContextBrief, *, max_chars: int = 6000) -> str:
-    if brief.no_context_required and not brief.items and not brief.direct_reply:
+    if brief.no_context_required and not brief.items and not brief.direct_reply and not brief.asset_requirements:
         return (
             "\n--- Context Intelligence ---\n"
             "No learner-specific context is materially required for this turn.\n"
@@ -112,6 +117,15 @@ def brief_to_tutor_text(brief: ContextBrief, *, max_chars: int = 6000) -> str:
         lines.append("Suggested actions (optional):")
         for a in brief.suggested_actions[:6]:
             lines.append(f"  - {a}")
+
+    if brief.asset_requirements:
+        lines.append("Asset requirements:")
+        for ar in brief.asset_requirements[:8]:
+            lines.append(f"  - {ar}")
+    if brief.required_capabilities:
+        lines.append("Required capabilities: " + ", ".join(brief.required_capabilities[:12]))
+    if brief.experience_requirements:
+        lines.append("Experience: " + ", ".join(brief.experience_requirements[:6]))
 
     if brief.degraded:
         lines.append(f"(degraded: {brief.degradation_reason or 'partial'})")

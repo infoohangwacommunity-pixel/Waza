@@ -74,6 +74,7 @@ class ContextResolver:
         tutor_system: str,
         budget: int = DEFAULT_BUDGET,
         purpose: str = "reply",
+        asset_manifest: object | None = None,
     ) -> LearnerContextPack:
         platform = platform_context_block(channel)
         identity_txt = ""
@@ -124,6 +125,7 @@ class ContextResolver:
                 conversation_id=conversation_id,
                 channel=channel,
                 user_text=user_text,
+                asset_manifest=asset_manifest,
             )
             pack.orchestration_brief = brief
             fams = families_from_brief(brief)

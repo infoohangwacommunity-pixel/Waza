@@ -309,6 +309,16 @@ async def process_message_response(session, work: Work) -> None:
                 await send_typing(ch, str(tgt), inbound_message_id=str(inbound) if inbound else None)
         except Exception:
             logger.exception("typing_indicator_failed")
+        try:
+            from wax.media.manifest import build_manifest_from_payload
+            man = build_manifest_from_payload(work.input_payload or {})
+            if man.assets:
+                pl = dict(work.input_payload or {})
+                pl["assets"] = [a.to_dict() for a in man.assets]
+                work.input_payload = pl
+                await session.flush()
+        except Exception:
+            logger.exception("asset_manifest_persist_failed")
         result = await tutor.handle_message(work)
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)

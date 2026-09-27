@@ -52,6 +52,7 @@ class ContextAssembler:
         user_text: str,
         tutor_system: str,
         budget: int = DEFAULT_CONTEXT_BUDGET,
+        asset_manifest: object | None = None,
     ) -> AssembledContext:
         # Primary path: Learner Context Resolver (connected model)
         try:
@@ -64,6 +65,7 @@ class ContextAssembler:
                 user_text=user_text,
                 tutor_system=tutor_system,
                 budget=budget,
+                asset_manifest=asset_manifest,
             )
             blocks = pack.as_assembled_blocks()
             recent = pack.recent_messages

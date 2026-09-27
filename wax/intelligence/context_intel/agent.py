@@ -45,6 +45,13 @@ Identity: the tutor is WAX; WAX Prep is the creator. Models are infrastructure.
 Prefer inspect_continuity_digest / inspect_memory_graph before broad searches when personalization may matter.
 Use tools only if useful. Ordinary messages may need no tools.
 
+You may receive ATTACHED ASSETS metadata (kind, mime, capabilities). Decide relevance and
+required operations from the student request + asset capabilities + system state.
+Do not choose a capability only because of MIME type. Do not claim extraction succeeded
+without tool evidence. Prefer the minimum sufficient capability set.
+If interactive browser experience would help, include family "surfaces" and optionally
+experience_requirements: ["interactive"].
+
 When UNIFIED_MODE=true you may set response_mode to "unified" and fill direct_reply.
 
 When finished, respond with ONLY a JSON object (no markdown fences):
@@ -64,10 +71,14 @@ When finished, respond with ONLY a JSON object (no markdown fences):
   "rejected_candidates": [],
   "uncertainties": [],
   "suggested_actions": [],
-  "capability_families": ["core"]
+  "capability_families": ["core"],
+  "asset_requirements": [{"asset_id": "...", "required": true, "operations": ["transcribe"]}],
+  "required_capabilities": ["media.transcribe"],
+  "experience_requirements": []
 }
 capability_families subset of: core, memory, learning, goals, schedule, artifacts, surfaces, media, workspace, research, identity.
 Use [] when no tools are needed. Never request every family by default.
+asset_requirements operations map to media capabilities (transcribe, inspect, vision, ocr, pdf_text, …).
 """
 
 
@@ -154,6 +165,13 @@ def _parse_brief_json(raw: str) -> ContextBrief | None:
         suggested_actions=[str(a)[:120] for a in (data.get("suggested_actions") or [])[:6]],
         uncertainties=[str(u)[:160] for u in (data.get("uncertainties") or [])[:8]],
         rejected_candidates=[str(r)[:160] for r in (data.get("rejected_candidates") or [])[:6]],
+        asset_requirements=list(data.get("asset_requirements") or [])[:12],
+        required_capabilities=[
+            str(x) for x in (data.get("required_capabilities") or [])[:16]
+        ],
+        experience_requirements=[
+            str(x) for x in (data.get("experience_requirements") or [])[:8]
+        ],
         capability_families=[
             str(f).strip().lower()
             for f in (data.get("capability_families") or [])[:12]
@@ -231,7 +249,23 @@ async def _deterministic_probe(
             brief.needs_evidence_gather = False
     except Exception:
         pass
-    if _looks_minimal(user_text):
+    # Structural asset presence (not keyword routing)
+    try:
+        if asset_manifest is not None and getattr(asset_manifest, "assets", None):
+            from wax.media.manifest import structural_media_families
+            extra = structural_media_families(asset_manifest, user_text)
+            # Only force media when non-minimal OR explicit attachment without pure ack
+            if not _looks_minimal(user_text) or len(getattr(asset_manifest, "assets", []) or []) > 0:
+                if not _looks_minimal(user_text):
+                    brief.capability_families = list(
+                        dict.fromkeys(list(brief.capability_families or []) + extra)
+                    )
+                    brief.metadata = dict(brief.metadata or {})
+                    brief.metadata["assets"] = asset_manifest.to_dict() if hasattr(asset_manifest, "to_dict") else {}
+    except Exception:
+        pass
+
+    if _looks_minimal(user_text) and not (asset_manifest and getattr(asset_manifest, "assets", None)):
         brief.no_context_required = True
         brief.request_understanding = "Brief social or minimal message"
         brief.task_intent = "acknowledge"
@@ -379,6 +413,7 @@ async def _model_investigate(
     max_tokens: int,
     temperature: float,
     unified_mode: bool = False,
+    asset_manifest_text: str = "",
 ) -> ContextBrief:
     from wax.intelligence.providers import (
         ChatMessage,
@@ -410,8 +445,9 @@ async def _model_investigate(
                 f"{state_txt}\n\n"
                 f"Channel: {channel or 'unknown'}\n"
                 f"UNIFIED_MODE={'true' if unified_mode else 'false'}\n"
+                f"{(asset_manifest_text + chr(10) + chr(10)) if asset_manifest_text else ''}"
                 f"Learner message:\n{(user_text or '')[:2000]}\n\n"
-                "Given CURRENT SYSTEM STATE and this message, investigate only if useful, "
+                "Given CURRENT SYSTEM STATE, assets (if any), and this message, investigate only if useful, "
                 "then return the JSON brief. Do not predict future student behavior."
             ),
         ),
@@ -498,6 +534,7 @@ async def investigate_context(
     conversation_id: UUID | None,
     channel: str,
     user_text: str,
+    asset_manifest: object | None = None,
 ) -> ContextBrief:
     """
     Entry point for Context Intelligence.
@@ -525,6 +562,18 @@ async def investigate_context(
         user_text=user_text,
     )
 
+    asset_txt = ""
+    try:
+        if asset_manifest is not None and hasattr(asset_manifest, "render_for_ci"):
+            asset_txt = asset_manifest.render_for_ci()
+            try:
+                from wax.media.capability_registry import render_registry_for_ci
+                asset_txt = asset_txt + "\n\n" + render_registry_for_ci()
+            except Exception:
+                pass
+    except Exception:
+        asset_txt = ""
+
     try:
         # Only call the CI model when a context provider is configured (or explicit primary fallback)
         has_ci_model = False
@@ -543,6 +592,7 @@ async def investigate_context(
                     max_tokens=flags["max_tokens"],
                     temperature=flags["temperature"],
                     unified_mode=(str(flags.get("mode") or "").lower() == "unified"),
+                    asset_manifest_text=asset_txt,
                 )
                 logger.info(
                     "context_intelligence_complete",

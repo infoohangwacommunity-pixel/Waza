@@ -878,12 +878,27 @@ class TutorService:
             build_runtime_system_state,
             render_system_state_for_model,
         )
+        from wax.media.manifest import build_manifest_from_payload
+
+        asset_manifest = build_manifest_from_payload(payload)
+        try:
+            from wax.observability.events import emit as _emit_asset
+            if asset_manifest.assets:
+                _emit_asset(
+                    "asset.manifest_ready",
+                    work_id=str(work.id),
+                    count=len(asset_manifest.assets),
+                    kinds=asset_manifest.kinds(),
+                )
+        except Exception:
+            pass
         ctx = await assembler.assemble(
             principal_id=principal_id,
             conversation_id=conversation_id,
             channel=channel,
             user_text=user_text,
             tutor_system=TUTOR_SYSTEM,
+            asset_manifest=asset_manifest,
         )
         # Unified intelligence mode: CI produced the final reply (optional)
         _unified_done = bool((getattr(ctx, "unified_direct_reply", None) or "").strip())
@@ -1007,9 +1022,19 @@ class TutorService:
         except Exception:
             fams = set()
             path = "investigate"
-        # Media inbound → ensure media family available
-        if payload.get("media_id") or payload.get("local_media_path"):
+        # Media inbound / asset manifest → ensure media family (controlled expansion)
+        if payload.get("media_id") or payload.get("local_media_path") or (
+            asset_manifest and asset_manifest.assets
+        ):
             fams = set(fams) | {"media", "core"}
+        # Experience: interactive request without surfaces family → expand surfaces
+        try:
+            brief = getattr(ctx, "orchestration_brief", None)
+            exp = list(getattr(brief, "experience_requirements", None) or [])
+            if any(x in ("interactive", "visual") for x in exp):
+                fams = set(fams) | {"surfaces", "core"}
+        except Exception:
+            pass
         turn_tools = select_tool_specs(AVAILABLE_TOOLS, fams)
         try:
             from wax.observability.logging import get_logger as _gl
