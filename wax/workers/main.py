@@ -257,12 +257,73 @@ async def process_message_response(session, work: Work) -> None:
             if "Rate limited" in str(e) or "429" in str(e):
                 rate_delay = 20.0
                 work.error_class = "provider_rate_limited"
-        if work.attempt < work.max_attempts:
-            work.status = "retrying"
-            if rate_delay is not None:
-                delay = min(600, max(15.0, rate_delay))
+        meta = dict(work.metadata_ or {})
+        rate_limit_retries = int(meta.get("rate_limit_retries") or 0)
+
+        # Rate limits must NOT burn permanent attempts — otherwise the user gets
+        # "I'll continue when ready" and the work is never truly completed.
+        if rate_delay is not None:
+            rate_limit_retries += 1
+            meta["rate_limit_retries"] = rate_limit_retries
+            meta["last_rate_limit_at"] = datetime.now(timezone.utc).isoformat()
+            work.metadata_ = meta
+            # Undo this claim's attempt burn for pure provider pressure
+            if work.attempt and work.attempt > 0:
+                work.attempt = max(0, int(work.attempt) - 1)
+            max_rl = int(getattr(settings, "provider_rate_limit_max_retries", 48) or 48)
+            if rate_limit_retries <= max_rl:
+                work.status = "retrying"
+                delay = min(900, max(15.0, float(rate_delay)))
+                # Back off harder as pressure continues
+                delay = min(900, delay * (1.0 + 0.15 * min(rate_limit_retries, 10)))
+                work.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
+                work.error_class = "provider_rate_limited"
+                logger.info(
+                    "work_scheduled_retry_rate_limit",
+                    work_id=str(work.id),
+                    delay_seconds=round(delay, 1),
+                    rate_limit_retries=rate_limit_retries,
+                )
+                # One interim student ack (idempotent) — promise we will finish
+                try:
+                    from wax.db.models import Delivery
+                    from uuid import uuid4
+
+                    target = (work.input_payload or {}).get("target_external_id")
+                    channel = (work.input_payload or {}).get("channel") or "whatsapp"
+                    if target and work.principal_id:
+                        idem = f"rate-ack:{work.id}"
+                        existing = await session.scalar(
+                            select(Delivery.id).where(Delivery.idempotency_key == idem)
+                        )
+                        if not existing:
+                            session.add(
+                                Delivery(
+                                    id=uuid4(),
+                                    work_id=work.id,
+                                    principal_id=work.principal_id,
+                                    channel=channel,
+                                    target_external_id=str(target),
+                                    content=student_facing_message(
+                                        e, error_class="provider_rate_limited"
+                                    ),
+                                    status="pending",
+                                    idempotency_key=idem,
+                                )
+                            )
+                except Exception:
+                    logger.exception("rate_ack_delivery_failed")
             else:
-                delay = min(300, 2 ** int(work.attempt or 0) * 5)
+                work.status = "failed"
+                work.completed_at = datetime.now(timezone.utc)
+                logger.warning(
+                    "work_rate_limit_exhausted",
+                    work_id=str(work.id),
+                    rate_limit_retries=rate_limit_retries,
+                )
+        elif work.attempt < work.max_attempts:
+            work.status = "retrying"
+            delay = min(300, 2 ** int(work.attempt or 0) * 5)
             work.next_retry_at = datetime.now(timezone.utc) + timedelta(seconds=delay)
             logger.info(
                 "work_scheduled_retry",
@@ -273,7 +334,7 @@ async def process_message_response(session, work: Work) -> None:
         else:
             work.status = "failed"
             work.completed_at = datetime.now(timezone.utc)
-            # Permanent failure: queue a safe student-facing apology once (idempotent delivery key)
+            # Permanent failure: queue a safe student-facing apology once
             try:
                 from wax.db.models import Delivery
                 from uuid import uuid4
@@ -302,6 +363,11 @@ async def process_message_response(session, work: Work) -> None:
             except Exception:
                 logger.exception("safe_error_delivery_failed")
         await session.flush()
+        if work.status == "retrying":
+            try:
+                await _attempt_deliveries(session, work.id)
+            except Exception:
+                logger.exception("retry_ack_delivery_flush_failed")
 
 
 
@@ -760,6 +826,63 @@ async def renew_lease(session, work: Work, worker_id: str) -> None:
     await session.flush()
 
 
+
+async def resuscitate_rate_limited_works(session, limit: int = 25) -> int:
+    """
+    Re-queue works that failed solely due to provider rate limits.
+
+    Guarantees the "I'll continue once the system is ready" promise is kept
+    when capacity returns — instead of leaving the work permanently failed.
+    """
+    now = datetime.now(timezone.utc)
+    stmt = (
+        select(Work)
+        .where(
+            Work.status == "failed",
+            Work.kind == "message_response",
+            Work.error_class.in_(("provider_rate_limited", "rate_protection", "transient_provider")),
+        )
+        .order_by(Work.updated_at.asc())
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    )
+    result = await session.execute(stmt)
+    n = 0
+    for work in result.scalars().all():
+        meta = dict(work.metadata_ or {})
+        rl = int(meta.get("rate_limit_retries") or 0)
+        max_rl = int(getattr(settings, "provider_rate_limit_max_retries", 48) or 48)
+        if rl >= max_rl:
+            continue
+        # Skip if a real reply delivery already exists for this work
+        try:
+            from wax.db.models import Delivery
+
+            done = await session.scalar(
+                select(Delivery.id).where(
+                    Delivery.work_id == work.id,
+                    Delivery.status == "delivered",
+                    ~Delivery.idempotency_key.like("rate-ack:%"),
+                    ~Delivery.idempotency_key.like("safe-err:%"),
+                )
+            )
+            if done:
+                continue
+        except Exception:
+            pass
+        work.status = "retrying"
+        work.completed_at = None
+        work.claimed_by = None
+        work.next_retry_at = now
+        work.error = (work.error or "")[:500]
+        meta["resuscitated_at"] = now.isoformat()
+        work.metadata_ = meta
+        n += 1
+    if n:
+        await session.flush()
+    return n
+
+
 async def reclaim_stale_works(session, limit: int = 20) -> int:
     """Re-queue works whose lease expired while status=running."""
     now = datetime.now(timezone.utc)
@@ -953,18 +1076,37 @@ async def recovery_loop() -> None:
                 except Exception:
                     logger.exception("surface_lifecycle_error")
 
+                # Resuscitate works that died only to rate limits (promise to user was made)
+                if cycle % 5 == 0:
+                    try:
+                        n = await resuscitate_rate_limited_works(session)
+                        if n:
+                            logger.info("resuscitated_rate_limited_works", count=n)
+                    except Exception:
+                        logger.exception("resuscitate_rate_limited_failed")
+
                 if cycle % 10 == 0:
                     try:
-                        from wax.db.models import Principal
-                        result = await session.execute(select(Principal.id).limit(5))
-                        for (pid,) in result.all():
-                            try:
-                                await MemoryConsolidationService(session).consolidate_principal(pid)
-                            except Exception:
-                                logger.exception(
-                                    "memory_consolidation_failed",
-                                    principal_id=str(pid),
-                                )
+                        # Do not burn provider quota on background consolidation
+                        # while the hot path is rate-limited.
+                        from wax.intelligence.providers import any_provider_cooling_down
+
+                        if any_provider_cooling_down():
+                            logger.info("memory_consolidation_deferred_provider_cooldown")
+                        else:
+                            from wax.db.models import Principal
+
+                            result = await session.execute(select(Principal.id).limit(5))
+                            for (pid,) in result.all():
+                                try:
+                                    await MemoryConsolidationService(session).consolidate_principal(
+                                        pid
+                                    )
+                                except Exception:
+                                    logger.exception(
+                                        "memory_consolidation_failed",
+                                        principal_id=str(pid),
+                                    )
                     except Exception:
                         logger.exception("memory_consolidation_batch_error")
         except Exception:

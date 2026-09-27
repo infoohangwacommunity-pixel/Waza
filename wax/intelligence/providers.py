@@ -74,6 +74,11 @@ def provider_cooldown_remaining(name: str, base_url: str = "", model: str = "") 
     return max(0.0, _provider_cooldown_until.get(key, 0.0) - _time.monotonic())
 
 
+def any_provider_cooling_down(min_seconds: float = 1.0) -> bool:
+    now = _time.monotonic()
+    return any(v - now >= min_seconds for v in _provider_cooldown_until.values())
+
+
 class ProviderErrorClass(str, Enum):
     TIMEOUT = "provider_timeout"
     UNAVAILABLE = "provider_unavailable"

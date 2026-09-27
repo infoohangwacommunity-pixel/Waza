@@ -151,6 +151,8 @@ class Settings(BaseSettings):
     recovery_max_batch_size: int = 8
     recovery_poll_interval_seconds: float = 5.0
     outage_awareness_min_seconds: int = 30  # only surface outage context after this
+    # Pure 429s do not burn work.max_attempts; this caps rate-limit-only retries
+    provider_rate_limit_max_retries: int = 48
 
     # --- Conversational check-in guardrails (AI decides moment; infra gates) ---
     checkin_enabled: bool = True

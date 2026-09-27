@@ -55,7 +55,7 @@ def student_facing_message(exc: BaseException | str | None = None, *, error_clas
     cls = error_class or classify_error(exc)
     if cls in ("timeout",):
         msg = SAFE_TIMEOUT
-    elif cls in ("transient_provider", "service_interruption", "rate_protection"):
+    elif cls in ("transient_provider", "service_interruption", "rate_protection", "provider_rate_limited"):
         msg = SAFE_RETRY
     else:
         msg = SAFE_GENERIC
