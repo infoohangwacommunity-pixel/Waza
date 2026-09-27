@@ -1,63 +1,30 @@
-"""Post-turn continuity — durable teaching state without updating on trivial messages."""
+"""Post-turn continuity — durable teaching state without keyword triggers."""
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.learner.events import record_learner_event
-from wax.learner.teaching import update_from_turn, load_teaching_state, branch_thread
+from wax.learner.teaching import update_from_turn
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
 
-_TRIVIAL = re.compile(
-    r"^(hi|hello|hey|thanks|thank you|ok|okay|yes|no|lol|haha|good morning|good night)[.!]?$",
-    re.I,
-)
-
 
 def _is_meaningful(user_text: str, reply_text: str, tool_notes: list[str] | None) -> bool:
+    """Structure-based signal only — no keyword / phrase dictionaries."""
     u = (user_text or "").strip()
-    if not u or _TRIVIAL.match(u):
+    if not u:
         return False
-    if len(u) < 8 and not (tool_notes):
-        return False
-    # learning-ish signals
-    low = u.lower()
-    if any(
-        k in low
-        for k in (
-            "teach",
-            "explain",
-            "continue",
-            "what is",
-            "why",
-            "how do",
-            "help me",
-            "understand",
-            "practice",
-            "revise",
-            "remind",
-        )
-    ):
-        return True
-    if tool_notes and any(
-        n.startswith(
-            (
-                "update_concept",
-                "record_evidence",
-                "start_activity",
-                "schedule_",
-                "world_",
-            )
-        )
-        for n in tool_notes
-    ):
+    if tool_notes:
         return True
     if len(u) >= 40 or len(reply_text or "") >= 200:
+        return True
+    if "?" in u and len(u) >= 12:
+        return True
+    if len(u) >= 12 and len(reply_text or "") >= 80:
         return True
     return False
 
@@ -70,54 +37,25 @@ async def maybe_update_teaching_after_turn(
     reply_text: str,
     tool_notes: list[str] | None = None,
 ) -> dict[str, Any]:
+    """
+    Update teaching state from turn outcomes.
+
+    Topic is taken from the user text as a free-form hint when the turn is
+    substantive — not from a phrase list. Tool activity is authoritative.
+    """
     if not _is_meaningful(user_text, reply_text, tool_notes):
         return {"updated": False, "reason": "trivial"}
 
-    low = (user_text or "").lower()
-    # Branch on explicit topic switch-ish requests while a thread is active
-    if any(k in low for k in ("wait, what is", "actually explain", "switch to", "instead teach")):
-        # extract a short topic guess after keywords
-        topic = user_text.strip()[:120]
-        try:
-            await branch_thread(session, principal_id, new_topic=topic, reason="learner_interruption")
-            await record_learner_event(
-                session,
-                principal_id=principal_id,
-                kind="activity_started",
-                summary=f"Branched teaching thread: {topic[:160]}",
-                confidence=0.7,
-            )
-            return {"updated": True, "reason": "branched"}
-        except Exception:
-            logger.exception("branch_failed")
-
-    # Continue signal — ensure active thread is resumed in state
-    if low.strip() in ("continue", "continue.", "let's continue", "lets continue", "go on"):
-        ts = await load_teaching_state(session, principal_id)
-        if ts and ts.status == "paused":
-            ts.status = "active"
-            ts.last_move = "resumed_on_continue"
-            from wax.learner.teaching import save_teaching_state
-
-            await save_teaching_state(session, principal_id, ts)
-            await record_learner_event(
-                session,
-                principal_id=principal_id,
-                kind="session_reentered",
-                summary=f"Resumed: {ts.topic[:160]}",
-                confidence=0.85,
-            )
-            return {"updated": True, "reason": "resumed"}
-
-    # Generic teach turn: set topic from user text if no strong topic
     topic_hint = None
-    for prefix in ("teach me ", "explain ", "what is ", "help me with "):
-        if low.startswith(prefix):
-            topic_hint = user_text[len(prefix) :].strip()[:200]
-            break
+    u = (user_text or "").strip()
+    # Free-form topic: first line of a substantive user turn (no prefix strip lists)
+    if len(u) >= 24:
+        topic_hint = u.split("\n")[0][:200]
+
     planned = None
     if reply_text and len(reply_text) > 80:
         planned = "continue from last explanation"
+
     await update_from_turn(
         session,
         principal_id,
@@ -133,5 +71,9 @@ async def maybe_update_teaching_after_turn(
         summary=(topic_hint or user_text)[:200],
         confidence=0.55,
     )
-    logger.info("teaching_state_post_turn", principal_id=str(principal_id), topic=topic_hint)
+    logger.info(
+        "teaching_state_post_turn",
+        principal_id=str(principal_id),
+        topic=topic_hint,
+    )
     return {"updated": True, "reason": "post_turn", "topic": topic_hint}

@@ -78,7 +78,8 @@ class Settings(BaseSettings):
     continuity_digest_max_age_hours: float = 72.0
     continuity_digest_max_chars: int = 1400
     # When digest is fresh+rich, skip CI model call and broad evidence gather
-    continuity_digest_short_circuit: bool = True
+    # Deprecated: digest is CI-owned; short-circuit no longer used by resolver
+    continuity_digest_short_circuit: bool = False
 
     embedding_provider: str = "none"
     embedding_api_key: str = ""

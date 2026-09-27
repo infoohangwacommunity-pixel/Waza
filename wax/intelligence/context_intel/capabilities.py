@@ -20,6 +20,16 @@ logger = get_logger(__name__)
 # Tool specs for the orchestration model (OpenAI-compatible function schema)
 CAPABILITY_SPECS: list[dict[str, Any]] = [
     {
+        "name": "inspect_continuity_digest",
+        "description": (
+            "Dense learner self-model (relationship, focus, preferences, goals, "
+            "open threads, mastery) already maintained for this principal. "
+            "Prefer this before broad memory/evidence search. Resonance-ranked "
+            "to the current user text. Zero extra provider cost."
+        ),
+        "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
+    },
+    {
         "name": "inspect_learner_state",
         "description": (
             "Authoritative snapshot of the current learner's situation (activity, goals, "
@@ -155,6 +165,8 @@ class ContextCapabilities:
     async def execute(self, name: str, args: dict[str, Any] | None = None) -> dict[str, Any]:
         args = args or {}
         try:
+            if name == "inspect_continuity_digest":
+                return await self._continuity_digest()
             if name == "inspect_learner_state":
                 return await self._learner_state()
             if name == "search_memories":
@@ -557,3 +569,36 @@ class ContextCapabilities:
         except Exception:
             logger.exception("continuity_capability_failed")
             return {"ok": True, "kind": "fact", "source": "cross_channel", "items": []}
+
+    async def _continuity_digest(self) -> dict[str, Any]:
+        """CI-native access to Continuity Digest (not a parallel tutor inject)."""
+        try:
+            from wax.learner.continuity_digest import (
+                ensure_fresh_digest,
+                render_digest_block,
+                ContinuityDigest,
+            )
+
+            dig = await ensure_fresh_digest(self.session, self.principal_id)
+            block = render_digest_block(dig, self.user_text or "")
+            return {
+                "ok": True,
+                "kind": "evidence",
+                "source": "continuity_digest",
+                "fresh": dig.is_fresh(),
+                "rich": dig.is_rich(),
+                "age_hours": round(dig.age_hours(), 2),
+                "recent_families": list(dig.recent_families or []),
+                "block": block[:2000],
+                "display_name": dig.display_name,
+                "relationship": dig.relationship[:300],
+                "focus": dig.focus[:6],
+                "preferences": dig.preferences[:6],
+                "goals": dig.goals[:5],
+                "open_threads": dig.open_threads[:5],
+                "mastery": dig.mastery[:6],
+            }
+        except Exception as e:
+            logger.exception("continuity_digest_capability_failed")
+            return {"ok": False, "error": str(e)[:200]}
+

@@ -31,7 +31,7 @@ Tools enforce principal isolation.
 
 Rules:
 1. Use tools only when results would materially change what should happen next.
-2. Prefer no_context_required for greetings / trivial messages.
+2. Prefer no_context_required only when the message needs no learner history.
 3. Distinguish facts/evidence from inferences.
 4. Set needs_evidence_gather true only if a broader evidence pass would still help after your tools.
 5. Set insufficient_evidence rather than guessing missing facts.
@@ -79,20 +79,13 @@ def _settings_flags() -> dict[str, Any]:
 
 
 def _looks_minimal(text: str) -> bool:
-    t = (text or "").strip().lower()
+    """Structure-only minimal signal — length/punctuation, not word lists."""
+    t = (text or "").strip()
     if len(t) <= 2:
         return True
-    greetings = {
-        "hi", "hello", "hey", "yo", "sup", "good morning", "good evening",
-        "good night", "thanks", "thank you", "ok", "okay", "k", "yes", "no",
-        "yeah", "yep", "nah",
-    }
-    if t in greetings:
+    # Extremely short with no question/task markers (no keyword dictionary)
+    if len(t) <= 8 and "?" not in t and not any(ch.isdigit() for ch in t):
         return True
-    if len(t) < 12 and not any(c.isdigit() for c in t):
-        # short social noise without substance
-        if all(w in greetings or len(w) <= 3 for w in t.replace("!", "").replace("?", "").split()):
-            return True
     return False
 
 
@@ -169,6 +162,50 @@ async def _deterministic_probe(
     """Bounded investigation without a model — uses existing services, not subject rules."""
     brief = ContextBrief()
     tools: list[str] = []
+    # Always try continuity digest first (CI-owned substrate, no keyword routing)
+    try:
+        dig_res = await caps.execute("inspect_continuity_digest", {})
+        tools.append("inspect_continuity_digest")
+        if dig_res.get("ok") and dig_res.get("rich"):
+            if dig_res.get("relationship"):
+                brief.items.append(
+                    BriefItem(
+                        kind="fact",
+                        text=str(dig_res.get("relationship"))[:400],
+                        source="continuity_digest",
+                        confidence="high",
+                        why="learner self-model",
+                    )
+                )
+            for key in ("focus", "preferences", "goals", "open_threads", "mastery"):
+                for frag in (dig_res.get(key) or [])[:3]:
+                    brief.items.append(
+                        BriefItem(
+                            kind="evidence",
+                            text=str(frag)[:300],
+                            source="continuity_digest",
+                            confidence="medium",
+                            why=key,
+                        )
+                    )
+            if dig_res.get("recent_families"):
+                brief.capability_families = [
+                    str(f) for f in dig_res["recent_families"][:8]
+                ]
+            # Digest satisfied personalization — avoid redundant DB sweeps when minimal
+            if _looks_minimal(user_text):
+                brief.no_context_required = True
+                brief.needs_evidence_gather = False
+                brief.request_understanding = "Message does not require expanded retrieval"
+                brief.task_intent = "respond"
+                brief.tools_used = tools
+                if not brief.capability_families:
+                    brief.capability_families = []
+                return brief
+            # Non-minimal but rich digest: still allow limited further probe
+            brief.needs_evidence_gather = False
+    except Exception:
+        pass
     if _looks_minimal(user_text):
         brief.no_context_required = True
         brief.request_understanding = "Brief social or minimal message"
