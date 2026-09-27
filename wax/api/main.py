@@ -94,7 +94,24 @@ async def health_detail():
             "learner_export",
             "html_pages",
             "work_leases",
+            "continuity_digest",
+            "turn_telemetry",
+            "rate_limit_recovery",
         ],
+        "intelligence": {
+            "continuity_digest_enabled": bool(
+                getattr(settings, "continuity_digest_enabled", True)
+            ),
+            "context_intelligence_provider": getattr(
+                settings, "context_intelligence_provider", None
+            ),
+            "provider_rate_limit_max_retries": getattr(
+                settings, "provider_rate_limit_max_retries", 48
+            ),
+            "delivery_chunk_delay_seconds": getattr(
+                settings, "delivery_chunk_delay_seconds", 0.55
+            ),
+        },
     }
 
 

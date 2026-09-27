@@ -48,7 +48,7 @@ class Principal(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     goals: Mapped[list["Goal"]] = relationship(back_populates="principal")
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="principal")
     publications: Mapped[list["Publication"]] = relationship(back_populates="principal")
-    surfaces: Mapped[list["Surface"]] = relationship()
+    surfaces: Mapped[list["Surface"]] = relationship(back_populates="principal")
 
 
 
@@ -1103,7 +1103,7 @@ class Surface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     state_json: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
-    principal: Mapped["Principal"] = relationship()
+    principal: Mapped["Principal"] = relationship(back_populates="surfaces")
 
 
 class SurfaceRevision(Base, UUIDPrimaryKeyMixin, TimestampMixin):

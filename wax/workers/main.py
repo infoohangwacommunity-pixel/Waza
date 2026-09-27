@@ -231,6 +231,18 @@ async def process_message_response(session, work: Work) -> None:
     tutor = TutorService(session)
     try:
         await renew_lease(session, work, work.claimed_by or "worker")
+        # Progressive presence: typing indicator while intelligence runs
+        try:
+            from wax.delivery.senders import send_typing
+
+            pl = work.input_payload or {}
+            tgt = pl.get("target_external_id")
+            ch = pl.get("channel") or ""
+            inbound = pl.get("provider_message_id") or pl.get("message_id")
+            if tgt and ch:
+                await send_typing(ch, str(tgt), inbound_message_id=str(inbound) if inbound else None)
+        except Exception:
+            logger.exception("typing_indicator_failed")
         result = await tutor.handle_message(work)
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
@@ -1126,6 +1138,31 @@ async def recovery_loop() -> None:
                         if any_provider_cooling_down():
                             logger.info("memory_consolidation_deferred_provider_cooldown")
                         else:
+                            try:
+                                from wax.db.models import Principal
+                                from wax.memory.research_loop import ResearchLoopService
+
+                                svc = ResearchLoopService(session)
+                                pres = await session.execute(select(Principal.id).limit(5))
+                                for (pid,) in pres.all():
+                                    try:
+                                        suggestion = await svc.propose_next_test(pid)
+                                        if suggestion:
+                                            from wax.observability.events import emit
+
+                                            emit(
+                                                "lifecycle.research_suggestion",
+                                                principal_id=str(pid),
+                                                claim_key=str(suggestion.get("claim_key") or ""),
+                                                priority=suggestion.get("priority"),
+                                            )
+                                    except Exception:
+                                        logger.exception(
+                                            "research_loop_principal_failed",
+                                            principal_id=str(pid),
+                                        )
+                            except Exception:
+                                logger.exception("research_loop_batch_error")
                             from wax.db.models import Principal
 
                             result = await session.execute(select(Principal.id).limit(5))

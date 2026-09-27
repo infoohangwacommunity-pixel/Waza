@@ -123,6 +123,31 @@ class MemoryService:
         Failures are logged and isolated — never raise to the tutor path.
         """
         try:
+            # Structure gate: skip empty/tiny turns (no keyword lists)
+            user_bits = [
+                (m.get("content") or "")
+                for m in (recent_messages or [])
+                if (m.get("role") or "") == "user"
+            ]
+            joined = " ".join(user_bits).strip()
+            if len(joined) < 12:
+                logger.info(
+                    "memory_extraction_skipped",
+                    reason="too_short",
+                    principal_id=str(principal_id),
+                )
+                return []
+            try:
+                from wax.intelligence.providers import any_provider_cooling_down
+
+                if any_provider_cooling_down():
+                    logger.info(
+                        "memory_extraction_deferred_provider_cooldown",
+                        principal_id=str(principal_id),
+                    )
+                    return []
+            except Exception:
+                pass
             prompt = self._build_extraction_prompt(recent_messages)
             response = await self.intelligence.complete(
                 CompletionRequest(
