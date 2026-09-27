@@ -445,13 +445,19 @@ async def handle_inspect_media(
         return {"ok": False, "error": "path_required"}
     principal_id = ctx.get("principal_id")
     if principal_id:
-        base = principal_workspace(principal_id)
-        try:
-            resolved = P(path).resolve()
-            if not str(resolved).startswith(str(base.resolve())):
-                return {"ok": False, "error": "path_escape"}
-        except Exception:
-            return {"ok": False, "error": "invalid_path"}
+        from wax.terminal.workspace import path_in_principal_scope, stage_media_for_work
+
+        if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
+            try:
+                staged = stage_media_for_work(
+                    principal_id, path, work_id=ctx.get("work_id")
+                )
+                if staged.get("ok"):
+                    path = staged.get("work_path") or staged.get("path") or path
+            except Exception:
+                pass
+            if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
+                return {"ok": False, "error": "path_escape", "path": str(path)}
     # Inspection-only by default; OCR/PDF extraction must be explicit.
     extract_text = bool(args.get("extract_text") or False)
     max_pages = args.get("max_pages")
@@ -1744,15 +1750,23 @@ async def handle_transcribe_audio(
         path = str(ctx.get("local_media_path"))
     if not path:
         return {"ok": False, "error": "path_required"}
-    # Path isolation: must live under principal workspace when principal known
+    # Path isolation: principal workspace or work media dir
     if principal_id:
-        base = principal_workspace(principal_id)
-        try:
-            resolved = Path(path).resolve()
-            if not str(resolved).startswith(str(base.resolve())):
-                return {"ok": False, "error": "path_escape"}
-        except Exception:
-            return {"ok": False, "error": "invalid_path"}
+        from wax.terminal.workspace import path_in_principal_scope
+
+        if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
+            # Last chance: stage into workspace then retry
+            try:
+                from wax.terminal.workspace import stage_media_for_work
+                staged = stage_media_for_work(
+                    principal_id, path, work_id=ctx.get("work_id")
+                )
+                if staged.get("ok"):
+                    path = staged.get("work_path") or staged.get("path") or path
+            except Exception:
+                pass
+            if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
+                return {"ok": False, "error": "path_escape", "path": path}
     return await transcribe_local_audio(
         path,
         language=args.get("language"),

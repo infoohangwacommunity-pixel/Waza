@@ -149,10 +149,31 @@ async def process_message_response(session, work: Work) -> None:
                 fetched = await fetch_telegram_media(payload["media_id"], work.principal_id)
             else:
                 fetched = {}
-            if fetched.get("ok"):
-                payload = {**payload, "local_media_path": fetched.get("path")}
+            if fetched.get("ok") and fetched.get("path"):
+                from wax.terminal.workspace import stage_media_for_work
+
+                staged = stage_media_for_work(
+                    work.principal_id,
+                    fetched["path"],
+                    work_id=work.id,
+                    filename=Path(str(fetched["path"])).name,
+                )
+                local = (staged.get("work_path") or staged.get("path") or fetched.get("path"))
+                payload = {
+                    **payload,
+                    "local_media_path": local,
+                    "principal_media_path": staged.get("path") or fetched.get("path"),
+                    "media_mime": fetched.get("mime"),
+                    "media_size": fetched.get("size"),
+                }
                 work.input_payload = payload
                 await session.flush()
+                logger.info(
+                    "media_staged_for_agent",
+                    work_id=str(work.id),
+                    path=local,
+                    ok=staged.get("ok"),
+                )
         except Exception:
             logger.exception("media_prepare_inline_failed")
 
@@ -163,6 +184,27 @@ async def process_message_response(session, work: Work) -> None:
     from wax.media.probe import probe_local_file
 
     local_path = payload.get("local_media_path")
+    if local_path and work.principal_id:
+        try:
+            from wax.terminal.workspace import stage_media_for_work, path_in_principal_scope
+            from pathlib import Path as _P
+
+            staged = stage_media_for_work(
+                work.principal_id,
+                local_path,
+                work_id=work.id,
+                filename=_P(str(local_path)).name,
+            )
+            if staged.get("ok"):
+                local_path = staged.get("work_path") or staged.get("path") or local_path
+                payload = {
+                    **payload,
+                    "local_media_path": local_path,
+                    "principal_media_path": staged.get("path"),
+                }
+                work.input_payload = payload
+        except Exception:
+            logger.exception("media_restage_failed")
     content_type = (payload.get("content_type") or "").lower()
     if local_path and not payload.get("media_probe"):
         try:
@@ -663,6 +705,23 @@ async def process_media_prepare(session, work: Work) -> None:
             result = await fetch_telegram_media(media_id, principal_id)
         else:
             result = {"ok": False, "error": "no_media"}
+        if result.get("ok") and result.get("path") and principal_id:
+            from wax.terminal.workspace import stage_media_for_work
+            from pathlib import Path as _P
+
+            staged = stage_media_for_work(
+                principal_id,
+                result["path"],
+                work_id=work.id,
+                filename=_P(str(result["path"])).name,
+            )
+            if staged.get("ok"):
+                result = {
+                    **result,
+                    "path": staged.get("work_path") or staged.get("path"),
+                    "principal_media_path": staged.get("path"),
+                    "staged": True,
+                }
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
         work.result_payload = result

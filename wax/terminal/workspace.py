@@ -143,3 +143,93 @@ def safe_write_bytes(dest_dir: Path, filename: str, data: bytes, max_bytes: int 
 
 def content_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
+
+
+def path_in_principal_scope(path: str | Path, principal_id: Any, work_id: Any | None = None) -> bool:
+    """True if path is under this principal's workspace (or work subdir)."""
+    try:
+        resolved = Path(path).resolve()
+    except Exception:
+        return False
+    bases: list[Path] = []
+    try:
+        bases.append(principal_workspace(principal_id).resolve())
+    except Exception:
+        pass
+    if work_id:
+        try:
+            bases.append(work_workspace(work_id, principal_id).resolve())
+        except Exception:
+            pass
+    for base in bases:
+        try:
+            resolved.relative_to(base)
+            return True
+        except ValueError:
+            continue
+        except Exception:
+            continue
+    # Same volume root + principal id fragment (worlds/<id>/… layout)
+    try:
+        root = workspace_root().resolve()
+        if str(resolved).startswith(str(root) + os.sep):
+            pid = str(principal_id).replace("/", "_")[:64]
+            if pid and pid in str(resolved):
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def stage_media_for_work(
+    principal_id: Any,
+    source_path: str | Path,
+    *,
+    work_id: Any | None = None,
+    filename: str | None = None,
+) -> dict[str, Any]:
+    """
+    Ensure inbound media is readable from the agent workspace.
+
+    Copies (or hardlinks) into principal workspace/media and, when work_id is set,
+    into work/<id>/media so terminal cwd can see the file without path_escape.
+    """
+    src = Path(str(source_path)).resolve()
+    if not src.is_file():
+        return {"ok": False, "error": "source_missing", "path": str(source_path)}
+
+    base = principal_workspace(principal_id)
+    media_dir = base / "media"
+    media_dir.mkdir(parents=True, exist_ok=True)
+    name = filename or src.name
+    name = "".join(c for c in name if c.isalnum() or c in "._-")[:120] or f"media-{uuid4().hex[:8]}"
+    dest = media_dir / name
+    if dest.resolve() != src:
+        try:
+            if not dest.exists() or dest.stat().st_size != src.stat().st_size:
+                dest.write_bytes(src.read_bytes())
+        except Exception as e:
+            return {"ok": False, "error": f"stage_failed:{e}", "path": str(src)}
+    else:
+        dest = src
+
+    work_path = None
+    if work_id:
+        wmedia = work_workspace(work_id, principal_id) / "media"
+        wmedia.mkdir(parents=True, exist_ok=True)
+        wdest = wmedia / name
+        try:
+            if not wdest.exists() or wdest.stat().st_size != dest.stat().st_size:
+                wdest.write_bytes(dest.read_bytes())
+            work_path = str(wdest.resolve())
+        except Exception as e:
+            logger.warning("work_media_stage_failed", error=str(e)[:200])
+
+    return {
+        "ok": True,
+        "path": str(dest.resolve()),
+        "work_path": work_path,
+        "principal_media_dir": str(media_dir.resolve()),
+        "filename": name,
+        "size": dest.stat().st_size if dest.exists() else 0,
+    }

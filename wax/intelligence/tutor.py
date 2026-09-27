@@ -907,7 +907,12 @@ class TutorService:
                 f"fetch_inbound_media if not on disk, then inspect_media to see capabilities.]"
             )
         if payload.get("local_media_path"):
-            media_note += f"\n[System: media on disk at {payload.get('local_media_path')}]"
+            media_note += (
+                f"\n[System: media is in the agent workspace at "
+                f"{payload.get('local_media_path')}. "
+                f"Use inspect_media / transcribe_audio / terminal on this path — "
+                f"it is readable from the principal workspace.]"
+            )
         probe = payload.get("media_probe") or {}
         caps = payload.get("media_capabilities") or probe.get("capability_list") or []
         if probe or caps:

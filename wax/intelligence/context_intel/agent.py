@@ -395,7 +395,6 @@ async def _model_investigate(
         build_runtime_system_state,
         render_system_state_for_model,
     )
-    from wax.intelligence.context_intel.capabilities import CAPABILITY_SPECS
 
     state_txt = render_system_state_for_model(
         build_runtime_system_state(
