@@ -265,6 +265,9 @@ async def execute_tool(
         "write_workspace_file",
         "start_activity",
         "manage_goal",
+        "create_surface",
+        "update_surface",
+        "revoke_surface",
     }
     args_hash = hashlib.sha256(
         json.dumps({"name": name, "args": args}, sort_keys=True, default=str).encode()

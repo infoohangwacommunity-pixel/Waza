@@ -1083,6 +1083,9 @@ class TutorService:
             )
 
             if response.tool_calls and agent.can_call_tool():
+                from wax.intelligence.tool_protocol import parse_arguments
+                from wax.observability.events import emit as _emit
+
                 llm_messages.append(
                     ChatMessage(
                         role="assistant",
@@ -1097,9 +1100,23 @@ class TutorService:
                     name = fn.get("name") or "unknown"
                     args = fn.get("arguments")
                     tc_id = tc.get("id") or str(uuid4())
-                    parsed_args = args if isinstance(args, dict) else {}
-                    outcome = await execute_tool(self.session, name, args, tool_ctx)
+                    parsed_args = parse_arguments(args)
+                    _emit(
+                        "tool_call_started",
+                        tool=name,
+                        call_id=tc_id,
+                        work_id=str(work.id),
+                    )
+                    outcome = await execute_tool(self.session, name, parsed_args, tool_ctx)
                     out_dict = outcome if isinstance(outcome, dict) else {"ok": False}
+                    _emit(
+                        "tool_call_completed",
+                        tool=name,
+                        call_id=tc_id,
+                        work_id=str(work.id),
+                        ok=bool(out_dict.get("ok")),
+                        error=str(out_dict.get("error") or "")[:120] or None,
+                    )
                     await agent.record_tool(name, parsed_args, out_dict)
                     tool_notes.append(f"{name}:{out_dict.get('ok')}")
                     tool_results.append({"name": name, "result": out_dict})
@@ -1115,11 +1132,22 @@ class TutorService:
                     )
                 continue
 
-            reply_text = (response.content or "").strip()
+            from wax.intelligence.tool_protocol import sanitize_learner_reply
+
+            reply_text = sanitize_learner_reply(
+                response.content,
+                had_tool_results=bool(tool_results),
+            )
             break
 
         if not reply_text:
             reply_text = "I'm here with you. Could you say that again another way?"
+        else:
+            from wax.intelligence.tool_protocol import sanitize_learner_reply
+
+            reply_text = sanitize_learner_reply(
+                reply_text, had_tool_results=bool(tool_results)
+            )
 
         out_msg_id = None
         if conversation_id and principal_id:

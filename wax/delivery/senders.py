@@ -78,7 +78,18 @@ def _boundary_normalize(text: str, channel: str) -> str:
     Thin delivery-boundary safety net only.
     Does not re-parse or re-render. Catches residual HTML / MD tables / headings
     if Delivery.content was somehow written without going through presentation.
+    Blocks leaked tool-protocol / raw HTML documents from reaching the learner.
     """
+    try:
+        from wax.intelligence.tool_protocol import (
+            content_has_tool_protocol_leak,
+            sanitize_learner_reply,
+        )
+
+        if content_has_tool_protocol_leak(text):
+            text = sanitize_learner_reply(text)
+    except Exception:
+        pass
     try:
         return normalize_for_channel(text or "", channel)
     except Exception:

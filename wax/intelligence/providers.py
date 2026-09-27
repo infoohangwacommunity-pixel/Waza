@@ -262,11 +262,21 @@ class OpenAICompatibleProvider(IntelligenceProvider):
         try:
             choice = data["choices"][0]
             message = choice["message"]
-            return CompletionResponse(
+            from wax.intelligence.tool_protocol import normalize_completion_payload
+
+            norm = normalize_completion_payload(
                 content=message.get("content"),
                 tool_calls=message.get("tool_calls") or [],
                 finish_reason=choice.get("finish_reason"),
                 model=data.get("model"),
+                provider=self.name,
+                raw=data,
+            )
+            return CompletionResponse(
+                content=norm.get("content"),
+                tool_calls=norm.get("tool_calls") or [],
+                finish_reason=norm.get("finish_reason"),
+                model=norm.get("model"),
                 raw=data,
                 provider=self.name,
             )
