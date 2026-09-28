@@ -34,48 +34,52 @@ TUTOR_SYSTEM = """You are WAX — a persistent adaptive tutor by WAX Prep.
 You are the tutor. Model vendors are infrastructure only — never claim to be those products.
 
 You have a secure persistent World for this student (files, packages, terminal) and durable
-memory you control. Infrastructure enforces security and delivery; you decide.
+state you control. Infrastructure enforces security and delivery; you decide.
 
 How you work:
 - Meet the student where they are. Discover needs through conversation.
-- Recent conversation is provided for continuity. You decide what durable memory or World state to inspect.
-- When you need student memory, World files, packages, or schedules, write a fenced directive block.
-- Infrastructure runs directives and returns observations. Ordinary chat needs no directives.
+- Recent conversation is provided for continuity. You decide what durable state or World
+  content to inspect.
+- When you need infrastructure to act, write a fenced block. Infrastructure validates
+  security and returns observations. Ordinary chat needs no fences.
 
-Directive blocks (optional, only when action is required):
+Infrastructure channels (not a menu of app features — domains of reality):
 
 ```world
-# shell commands or a short script to run inside the student's World
-python3 -c "print('hello')"
+# general execution environment — shell, files, packages inside the student's World
+python3 -c "print(2+2)"
 ```
 
-```memory
+```state
+action: search
+query: preferred explanation style
+```
+
+```state
 action: create
-content: Student prefers short examples
-memory_type: semantic
+content: Student prefers short worked examples
 ```
-(action may be: search | create | update | supersede | forget; include memory_id when updating/forgetting)
 
-```schedule
-delay_seconds: 5
-message_hint: Follow up on the practice problem
+```time
+delay_seconds: 3600
+reason: check-in on practice set
 ```
-(or delay_hours / execute_at ISO timestamp)
 
 ```publish
-title: Practice page
-# HTML or path relative to World
+title: Practice sheet
+<div>…html…</div>
 ```
 
-```choices
-Option A
-Option B
+```interact
+prompt: Which path?
+- More examples
+- Try a problem
 ```
 
-After directives, wait for observations. Then continue or finish with a clear reply to the student.
-Do not invent results. Only claim what observations confirm.
-Teaching: adapt to this person. Prefer a useful next step over a lecture dump.
-Privacy: if they ask to forget something, use a memory forget directive and confirm from the result.
+Aliases still accepted: memory→state, schedule→time, choices→interact.
+
+After infrastructure observations, continue or finish with a clear reply to the student.
+Privacy: if they ask to forget something, use state forget and confirm from the result.
 """
 
 
@@ -163,7 +167,7 @@ class TutorService:
                 result = await self._execute_directive(d, principal_id=principal_id, work=work)
                 actions_log.append({"kind": d.kind, "ok": result.get("ok"), "summary": str(result)[:300]})
                 obs_parts.append(f"[{d.kind}] {self._format_obs(result)}")
-                if d.kind == "choices" and result.get("ok"):
+                if getattr(d, "channel", d.kind) == "interact" and result.get("ok"):
                     interactive = result.get("interactive")
 
             observation = "OBSERVATIONS:\n" + "\n".join(obs_parts)
@@ -172,8 +176,8 @@ class TutorService:
             await agent.record_continuation("directive", {"n": len(turn.directives)})
 
             # If only choices / publish with a reply, can stop
-            kinds = {d.kind for d in turn.directives}
-            if kinds <= {"choices", "publish"} and final_reply:
+            kinds = {getattr(d, "channel", d.kind) for d in turn.directives}
+            if kinds <= {"interact", "publish"} and final_reply:
                 break
 
         else:
@@ -211,18 +215,20 @@ class TutorService:
             "conversation_id": work.conversation_id,
         }
         try:
-            if d.kind == "world":
+            # Infrastructure channels only — not an application capability menu
+            ch = getattr(d, "channel", None) or d.kind
+            if ch == "world":
                 body = d.parsed.get("commands") or d.body
                 return await world_ops.world_exec(
                     self.session,
                     {"command": body},
                     ctx,
                 )
-            if d.kind == "memory":
+            if ch == "state":
                 return await self._memory_directive(d, principal_id)
-            if d.kind == "schedule":
+            if ch == "time":
                 return await sched.schedule_action(self.session, d.parsed, ctx)
-            if d.kind == "publish":
+            if ch == "publish":
                 return await pub.publish_surface(
                     self.session,
                     {
@@ -231,14 +237,15 @@ class TutorService:
                     },
                     ctx,
                 )
-            if d.kind == "choices":
+            if ch == "interact":
                 choices = d.parsed.get("choices") or []
+                prompt = d.parsed.get("prompt") or d.body
                 return await present_choices(
                     self.session,
-                    {"choices": choices, "prompt": d.body},
+                    {"choices": choices, "prompt": prompt},
                     ctx,
                 )
-            return {"ok": False, "error": f"unknown_directive:{d.kind}"}
+            return {"ok": False, "error": f"unknown_channel:{ch}"}
         except Exception as e:
             logger.exception("directive_failed", kind=d.kind)
             return {"ok": False, "error": str(e)[:500]}

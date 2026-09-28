@@ -75,3 +75,21 @@ Infrastructure **may** enforce safety boundaries against:
 - security violations (sandbox, principal isolation)
 
 Those safety boundaries are not conceptual limits on what the AI is allowed to understand or decide.
+
+
+## Infrastructure channels (directive bridge)
+
+Fenced blocks are a **minimal machine-readable bridge**, not a tool catalogue.
+
+| Channel | Infrastructure domain |
+|---------|----------------------|
+| `world` | General execution environment |
+| `state` | Durable student persistence |
+| `time` | Delayed / scheduled wake |
+| `publish` | Secure temporary publication |
+| `interact` | Channel interaction (choices) |
+
+Aliases: `memory`→`state`, `schedule`→`time`, `choices`→`interact`.
+
+The AI decides the objective. Infrastructure validates security and executes.
+No specialized teaching actions. No application capability menu sent to the model.
