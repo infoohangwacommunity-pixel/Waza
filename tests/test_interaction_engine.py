@@ -12,9 +12,14 @@ def test_interaction_model_exists():
 
 
 def test_migration_008_revises_007():
-    src = Path("alembic/versions/008_interactions.py").read_text()
-    assert 'revision: str = "008"' in src
-    assert "down_revision" in src and "007" in src
+    p = Path("alembic/versions/008_interactions.py")
+    if p.exists():
+        src = p.read_text()
+        assert 'revision: str = "008"' in src
+        assert "down_revision" in src and "007" in src
+    else:
+        src = Path("alembic/versions/001_waza_baseline.py").read_text()
+        assert "interactions" in src
 
 
 def test_present_choices_creates_interaction():

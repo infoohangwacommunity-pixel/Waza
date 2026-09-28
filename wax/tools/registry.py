@@ -27,43 +27,77 @@ logger = get_logger(__name__)
 ToolHandler = Callable[[AsyncSession, dict[str, Any], dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
-async def handle_schedule_followup(
+async def handle_schedule(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
-    """Legacy adapter → TemporalIntent (followup)."""
+    """
+    Generic durable scheduling primitive.
+
+    Accepts absolute ISO execute_at, delay_hours, or natural when_text.
+    Guarantees persistence, restart survival, and worker execution at the requested time.
+    Infrastructure does not enforce semantic meaning — payload is flexible.
+    """
     from datetime import datetime, timedelta, timezone
-    from wax.learner.temporal import TemporalService
+    from wax.learner.temporal import TemporalService, resolve_natural_time, now_in_tz
     from wax.learner.model import build_learner_model
 
     principal_id = ctx.get("principal_id")
     if not principal_id:
         return {"ok": False, "error": "no_principal"}
-    hours = float(args.get("delay_hours") or args.get("hours") or 24)
-    reason = str(args.get("reason") or "follow-up")
-    hint = args.get("message_hint") or reason
-    tz = "UTC"
-    try:
-        model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
-        tz = model.timezone or tz
-    except Exception:
-        pass
-    when = datetime.now(timezone.utc) + timedelta(hours=max(0.05, hours))
+
+    reason = str(args.get("reason") or args.get("target") or "scheduled_wake").strip()
+    tz = str(args.get("timezone") or ctx.get("timezone") or "UTC").strip()
+    if principal_id:
+        try:
+            model = await build_learner_model(session, principal_id, include_retention=False, include_events=False)
+            tz = model.timezone or tz
+        except Exception:
+            pass
+
+    execute_at = None
+    if args.get("execute_at"):
+        try:
+            execute_at = datetime.fromisoformat(str(args["execute_at"]).replace("Z", "+00:00"))
+            if execute_at.tzinfo is None:
+                execute_at = execute_at.replace(tzinfo=timezone.utc)
+        except Exception:
+            return {"ok": False, "error": "invalid_execute_at_format"}
+    elif args.get("delay_hours") is not None:
+        try:
+            dh = float(args["delay_hours"])
+            execute_at = datetime.now(timezone.utc) + timedelta(hours=max(0.01, dh))
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "invalid_delay_hours"}
+    elif args.get("when_text"):
+        resolved = resolve_natural_time(str(args["when_text"]), reference=now_in_tz(tz), tz_name=tz)
+        if not resolved:
+            return {"ok": False, "error": "could_not_resolve_time", "timezone": tz}
+        execute_at = resolved["execute_at"]
+
+    if not execute_at:
+        return {"ok": False, "error": "execute_at_delay_hours_or_when_text_required"}
+
+    payload = args.get("payload") if isinstance(args.get("payload"), dict) else {}
+    if args.get("message_hint"):
+        payload["message_hint"] = args.get("message_hint")
+
     intent = await TemporalService(session).create_intent(
         principal_id=principal_id,
-        purpose="followup",
+        purpose=str(args.get("purpose") or "scheduled_wake"),
         target=reason,
-        execute_at=when,
+        execute_at=execute_at,
         timezone_name=tz,
         original_request=reason,
         flexibility="soft",
-        payload={"message_hint": hint, "legacy_schedule_followup": True},
+        payload=payload,
     )
     return {
         "ok": True,
+        "action_id": str(intent.scheduled_action_id) if intent.scheduled_action_id else str(intent.id),
         "intent_id": str(intent.id),
-        "scheduled_action_id": str(intent.scheduled_action_id) if intent.scheduled_action_id else None,
         "execute_at": intent.execute_at.isoformat(),
-        "via": "temporal_intent",
+        "reason": reason,
+        "timezone": intent.timezone,
     }
 
 
@@ -397,145 +431,6 @@ async def handle_forget_memory(
     return {"ok": ok, "memory_id": memory_id}
 
 
-HANDLERS["forget_memory"] = handle_forget_memory
-
-
-async def handle_fetch_inbound_media(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Download channel media into the principal workspace."""
-    from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
-
-    principal_id = ctx.get("principal_id")
-    channel = (args.get("channel") or ctx.get("channel") or "").lower()
-    media_id = args.get("media_id")
-    if not principal_id or not media_id:
-        return {"ok": False, "error": "principal_and_media_id_required"}
-    if channel == "whatsapp":
-        return await fetch_whatsapp_media(media_id, principal_id, args.get("filename"))
-    if channel == "telegram":
-        return await fetch_telegram_media(media_id, principal_id, args.get("filename"))
-    return {"ok": False, "error": f"unsupported_channel:{channel}"}
-
-
-async def handle_list_workspace(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    from wax.terminal.workspace import principal_workspace, list_files
-
-    principal_id = ctx.get("principal_id")
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    sub = (args.get("subdir") or "media").strip().lstrip("/")
-    base = principal_workspace(principal_id)
-    path = base / sub if sub else base
-    if not str(path.resolve()).startswith(str(base.resolve())):
-        return {"ok": False, "error": "path_escape"}
-    files = list_files(path, limit=int(args.get("limit") or 40))
-    return {"ok": True, "cwd": str(path), "files": files}
-
-
-async def handle_inspect_media(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Probe media and optionally extract text (OCR/PDF). Does not auto-transcribe."""
-    from wax.terminal.executor import get_terminal
-    from wax.terminal.workspace import principal_workspace
-    from pathlib import Path as P
-
-    path = args.get("path") or ctx.get("local_media_path")
-    if not path:
-        return {"ok": False, "error": "path_required"}
-    principal_id = ctx.get("principal_id")
-    if principal_id:
-        from wax.terminal.workspace import path_in_principal_scope, stage_media_for_work
-
-        if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
-            try:
-                staged = stage_media_for_work(
-                    principal_id, path, work_id=ctx.get("work_id")
-                )
-                if staged.get("ok"):
-                    path = staged.get("work_path") or staged.get("path") or path
-            except Exception:
-                pass
-            if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
-                return {"ok": False, "error": "path_escape", "path": str(path)}
-    # Inspection-only by default; OCR/PDF extraction must be explicit.
-    extract_text = bool(args.get("extract_text") or False)
-    max_pages = args.get("max_pages")
-    terminal = get_terminal()
-    result = await terminal.inspect_media_file(
-        path,
-        principal_id=principal_id,
-        extract_text=bool(extract_text),
-        max_pages=int(max_pages) if max_pages is not None else None,
-    )
-    out: dict[str, Any] = {
-        "ok": result.success,
-        "stdout": result.stdout[:8000],
-        "stderr": result.stderr[:1500],
-        "error": result.error,
-        "cwd": result.cwd,
-    }
-    if result.structured:
-        out["probe"] = result.structured.get("probe")
-        out["evidence"] = result.structured.get("evidence")
-        out["capabilities"] = (result.structured.get("probe") or {}).get("capability_list")
-        out["note"] = result.structured.get("note")
-    return out
-
-
-async def handle_workspace_command(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Deprecated — use world_exec. Runs argv in World isolation (no binary allowlist)."""
-    import shlex
-    from wax.world.manager import get_or_create_world
-    from wax.world.exec import world_exec
-
-    line = (args.get("command") or "").strip()
-    if not line:
-        return {"ok": False, "error": "command_required"}
-    principal_id = ctx.get("principal_id")
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    try:
-        argv = shlex.split(line)
-    except ValueError as e:
-        return {"ok": False, "error": str(e)}
-    world = get_or_create_world(str(principal_id))
-    return await world_exec(world, argv=argv, budget_class="interactive")
-
-
-HANDLERS["fetch_inbound_media"] = handle_fetch_inbound_media
-HANDLERS["list_workspace"] = handle_list_workspace
-HANDLERS["inspect_media"] = handle_inspect_media
-HANDLERS["workspace_command"] = handle_workspace_command
-
-
-
-async def handle_describe_image(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Multimodal fallback — use only when local OCR/inspect is not enough."""
-    from pathlib import Path as P
-    from wax.tools.multimodal import describe_local_image
-    from wax.terminal.workspace import principal_workspace
-
-    path = (args.get("path") or "").strip()
-    if not path:
-        return {"ok": False, "error": "path_required"}
-    principal_id = ctx.get("principal_id")
-    if principal_id:
-        base = principal_workspace(principal_id)
-        try:
-            resolved = P(path).resolve()
-            if not str(resolved).startswith(str(base.resolve())):
-                return {"ok": False, "error": "path_escape"}
-        except Exception:
-            return {"ok": False, "error": "invalid_path"}
-    return await describe_local_image(path, args.get("question"))
 
 
 async def handle_list_artifacts(
@@ -591,9 +486,6 @@ async def handle_read_artifact(
     }
 
 
-HANDLERS["describe_image"] = handle_describe_image
-HANDLERS["list_artifacts"] = handle_list_artifacts
-HANDLERS["read_artifact"] = handle_read_artifact
 
 
 async def handle_write_workspace_file(
@@ -682,7 +574,6 @@ async def handle_schedule_continuous(
 
 
 
-HANDLERS["schedule_continuous"] = handle_schedule_continuous
 
 
 async def handle_start_activity(
@@ -759,9 +650,6 @@ async def handle_update_concept_state(
     }
 
 
-HANDLERS["start_activity"] = handle_start_activity
-HANDLERS["complete_activity"] = handle_complete_activity
-HANDLERS["update_concept_state"] = handle_update_concept_state
 
 
 async def handle_create_assessment(
@@ -851,8 +739,6 @@ async def handle_submit_assessment_answer(
     }
 
 
-HANDLERS["create_assessment"] = handle_create_assessment
-HANDLERS["submit_assessment_answer"] = handle_submit_assessment_answer
 
 
 async def handle_why_we_believe(
@@ -911,9 +797,6 @@ async def handle_form_hypothesis(
     }
 
 
-HANDLERS["why_we_believe"] = handle_why_we_believe
-HANDLERS["record_evidence"] = handle_record_evidence
-HANDLERS["form_hypothesis"] = handle_form_hypothesis
 
 # Complete registry (must be after all handle_* definitions)
 
@@ -1304,7 +1187,7 @@ async def handle_cancel_schedule(
     try:
         uid = UUID(str(aid))
     except Exception:
-        return {"ok": False, "error": "invalid_id"}
+        uid = str(aid)
     action = await SchedulerService(session).cancel(uid, principal_id=principal_id)
     if not action:
         return {"ok": False, "error": "not_found_or_forbidden"}
@@ -1588,97 +1471,6 @@ async def handle_revoke_surface(
     return await SurfaceService(session).revoke(surface_id, principal_id)
 
 
-async def handle_publish_web_surface(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """
-    Publish a temporary browser surface from semantic material.
-
-    The AI decides WHEN this is useful. Do not use merely because content is long.
-    Not a chat replacement. Not a permanent website.
-    Pass semantic nodes/blocks — never HTML/CSS/JS.
-    """
-    from wax.publication.service import PublicationService
-    from wax.artifacts.access import make_download_token, public_download_url
-
-    principal_id = ctx.get("principal_id")
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-
-    document = args.get("document")
-    if not document:
-        title = (args.get("title") or "Notes").strip()[:500]
-        blocks = args.get("blocks") or args.get("nodes")
-        if not blocks:
-            content = args.get("content") or args.get("body") or ""
-            blocks = [{"type": "paragraph", "text": content}] if content else []
-        document = {
-            "title": title,
-            "subtitle": args.get("subtitle"),
-            "summary": args.get("summary"),
-            "nodes": blocks,
-            "preferred_lifetime_hours": args.get("preferred_lifetime_hours"),
-            "share_title": args.get("share_title"),
-            "share_description": args.get("share_description"),
-        }
-
-    artifact_urls: dict[str, str] = {}
-    raw_nodes = (document.get("nodes") or document.get("blocks") or []) if isinstance(document, dict) else []
-
-    def _collect(nodes):
-        for b in nodes or []:
-            if not isinstance(b, dict):
-                continue
-            aid = None
-            if isinstance(b.get("artifact"), dict):
-                aid = b["artifact"].get("artifact_id")
-            if isinstance(b.get("media"), dict):
-                aid = aid or b["media"].get("artifact_id")
-            if aid and str(aid) not in artifact_urls:
-                try:
-                    tok = make_download_token(str(aid), str(principal_id), ttl_seconds=86400 * 7)
-                    url = public_download_url(str(aid), tok)
-                    if url:
-                        artifact_urls[str(aid)] = url
-                except Exception:
-                    pass
-            if b.get("children"):
-                _collect(b["children"])
-            if b.get("columns"):
-                for col in b["columns"]:
-                    _collect(col)
-
-    _collect(raw_nodes)
-
-    idem = args.get("idempotency_key") or ctx.get("tool_call_id") or ctx.get("work_id")
-    svc = PublicationService(session)
-    try:
-        return await svc.create(
-            principal_id=principal_id,
-            document=document,
-            work_id=ctx.get("work_id"),
-            parent_publication_id=args.get("parent_publication_id"),
-            idempotency_key=str(idem) if idem else None,
-            artifact_download_urls=artifact_urls or None,
-        )
-    except Exception as e:
-        logger.error("publish_web_surface_failed", error=str(e))
-        return {"ok": False, "error": "publication_failed", "detail": str(e)[:200]}
-
-
-async def handle_create_html_page(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Legacy adapter → publish_web_surface (semantic paragraph body)."""
-    return await handle_publish_web_surface(
-        session,
-        {
-            "title": args.get("title") or "Notes",
-            "content": args.get("content") or args.get("body") or "",
-            "preferred_lifetime_hours": args.get("preferred_lifetime_hours"),
-        },
-        ctx,
-    )
 
 
 async def handle_request_channel_link(
@@ -1740,298 +1532,6 @@ async def handle_confirm_channel_link(
     return {"ok": False, "error": "code_or_answers_required"}
 
 
-async def handle_transcribe_audio(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Transcribe a local audio/voice file. Does not invent success."""
-    from wax.tools.transcription import transcribe_local_audio
-    from wax.terminal.workspace import principal_workspace
-
-    path = (args.get("path") or "").strip()
-    principal_id = ctx.get("principal_id")
-    if not path and ctx.get("local_media_path"):
-        path = str(ctx.get("local_media_path"))
-    if not path:
-        return {"ok": False, "error": "path_required"}
-    # Path isolation: principal workspace or work media dir
-    if principal_id:
-        from wax.terminal.workspace import path_in_principal_scope
-
-        if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
-            # Last chance: stage into workspace then retry
-            try:
-                from wax.terminal.workspace import stage_media_for_work
-                staged = stage_media_for_work(
-                    principal_id, path, work_id=ctx.get("work_id")
-                )
-                if staged.get("ok"):
-                    path = staged.get("work_path") or staged.get("path") or path
-            except Exception:
-                pass
-            if not path_in_principal_scope(path, principal_id, work_id=ctx.get("work_id")):
-                return {"ok": False, "error": "path_escape", "path": path}
-    return await transcribe_local_audio(
-        path,
-        language=args.get("language"),
-        work_id=str(ctx.get("work_id") or "") or None,
-        principal_id=str(ctx.get("principal_id") or "") or None,
-    )
-
-
-async def handle_ingest_document(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """
-    Ingest learner-provided material into principal-scoped knowledge.
-    Accepts raw text and/or a workspace path (OCR/pdf text extracted when useful).
-    """
-    from wax.knowledge.ingest import KnowledgeIngestService
-    from wax.terminal.workspace import principal_workspace
-    from wax.terminal.executor import get_terminal
-
-    principal_id = ctx.get("principal_id")
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    title = (args.get("title") or "Learner material").strip()[:500]
-    text = (args.get("text") or "").strip()
-    path = (args.get("path") or "").strip()
-    kind = (args.get("kind") or "document").strip()[:80]
-
-    if path and not text:
-        base = principal_workspace(principal_id)
-        try:
-            resolved = Path(path).resolve()
-            if not str(resolved).startswith(str(base.resolve())):
-                return {"ok": False, "error": "path_escape"}
-        except Exception:
-            return {"ok": False, "error": "invalid_path"}
-        if not resolved.is_file():
-            return {"ok": False, "error": "file_not_found"}
-        # Prefer plain text read for .txt/.md; otherwise terminal inspect
-        if resolved.suffix.lower() in {".txt", ".md", ".csv", ".json"}:
-            try:
-                text = resolved.read_text(encoding="utf-8", errors="replace")[:200000]
-            except Exception as e:
-                return {"ok": False, "error": f"read_failed:{e}"}
-        else:
-            term = get_terminal()
-            insp = await term.inspect_media_file(str(resolved), principal_id=principal_id)
-            if not insp.success:
-                return {"ok": False, "error": insp.error or "inspect_failed"}
-            text = insp.stdout or ""
-            # Prefer OCR/pdftotext sections if present
-            if "ocr:" in text.lower() or "pdftotext:" in text.lower():
-                pass
-            if not text.strip():
-                return {"ok": False, "error": "no_text_extracted"}
-
-    if not text.strip():
-        return {"ok": False, "error": "text_or_path_required"}
-
-    svc = KnowledgeIngestService(session)
-    source = await svc.ingest_text(
-        principal_id=principal_id,
-        title=title,
-        text=text,
-        kind=kind,
-    )
-    return {
-        "ok": True,
-        "knowledge_source_id": str(source.id),
-        "title": source.title,
-        "status": source.status,
-        "kind": source.kind,
-        "chars": len(text),
-    }
-
-
-
-
-async def handle_extract_video_audio(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Extract audio track from a video into workspace (ffmpeg). Does not transcribe."""
-    from pathlib import Path as P
-    import asyncio
-    import shutil
-    from wax.terminal.workspace import principal_workspace
-
-    path = (args.get("path") or ctx.get("local_media_path") or "").strip()
-    principal_id = ctx.get("principal_id")
-    if not path:
-        return {"ok": False, "error": "path_required"}
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    base = principal_workspace(principal_id)
-    try:
-        src = P(path).resolve()
-        if not str(src).startswith(str(base.resolve())):
-            return {"ok": False, "error": "path_escape"}
-    except Exception:
-        return {"ok": False, "error": "invalid_path"}
-    if not src.is_file():
-        return {"ok": False, "error": "file_not_found"}
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        return {"ok": False, "error": "ffmpeg_not_found"}
-    out = base / "tmp" / f"{src.stem}-audio.wav"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    argv = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(src), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(out),
-    ]
-    from wax.world.run_tool import run_in_world
-
-    result = await run_in_world(
-        str(principal_id), argv, cwd_rel="workspace", network_mode="none", timeout_sec=120.0
-    )
-    if (result.error or "").startswith("Timed out"):
-        return {"ok": False, "error": "ffmpeg_timeout"}
-    if not result.success or not out.is_file():
-        return {
-            "ok": False,
-            "error": "extract_audio_failed",
-            "detail": (result.stderr or result.error or "")[:300],
-            "backend": result.backend,
-        }
-    return {
-        "ok": True,
-        "path": str(out),
-        "kind": "audio",
-        "note": "Audio extracted. Call transcribe_audio on this path if you need a transcript.",
-        "capabilities": ["transcribe", "inspect"],
-        "backend": result.backend,
-    }
-
-
-async def handle_extract_video_frames(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Extract a limited number of frames from video (ffmpeg). Cap enforced."""
-    from pathlib import Path as P
-    import asyncio
-    import shutil
-    from wax.terminal.workspace import principal_workspace
-
-    path = (args.get("path") or ctx.get("local_media_path") or "").strip()
-    principal_id = ctx.get("principal_id")
-    if not path:
-        return {"ok": False, "error": "path_required"}
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    base = principal_workspace(principal_id)
-    try:
-        src = P(path).resolve()
-        if not str(src).startswith(str(base.resolve())):
-            return {"ok": False, "error": "path_escape"}
-    except Exception:
-        return {"ok": False, "error": "invalid_path"}
-    if not src.is_file():
-        return {"ok": False, "error": "file_not_found"}
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        return {"ok": False, "error": "ffmpeg_not_found"}
-    max_frames = min(int(args.get("max_frames") or 3), 8)
-    fps = float(args.get("fps") or 0.2)  # ~1 frame / 5s default sampling intent
-    out_dir = base / "tmp" / f"{src.stem}-frames"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    pattern = str(out_dir / "frame-%03d.jpg")
-    # fps filter with frame limit via -frames:v
-    argv = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(src),
-        "-vf", f"fps={fps}",
-        "-frames:v", str(max_frames),
-        pattern,
-    ]
-    from wax.world.run_tool import run_in_world
-
-    result = await run_in_world(
-        str(principal_id), argv, cwd_rel="workspace", network_mode="none", timeout_sec=120.0
-    )
-    if (result.error or "").startswith("Timed out"):
-        return {"ok": False, "error": "ffmpeg_timeout"}
-    frames = sorted(str(f) for f in out_dir.glob("frame-*.jpg"))
-    if not frames:
-        return {
-            "ok": False,
-            "error": "no_frames",
-            "detail": (result.stderr or result.error or "")[:300],
-            "backend": result.backend,
-        }
-    return {
-        "ok": True,
-        "frames": frames[:max_frames],
-        "count": len(frames[:max_frames]),
-        "note": "Frames extracted. Call inspect_media or describe_image on a frame path if needed.",
-        "capabilities": ["ocr", "vision", "inspect"],
-    }
-
-
-
-async def handle_extract_subtitles(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Extract subtitle stream from video when present (ffmpeg)."""
-    from pathlib import Path as P
-    import asyncio
-    import shutil
-    from wax.terminal.workspace import principal_workspace
-    from wax.media.probe import probe_local_file
-
-    path = (args.get("path") or ctx.get("local_media_path") or "").strip()
-    principal_id = ctx.get("principal_id")
-    if not path:
-        return {"ok": False, "error": "path_required"}
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    base = principal_workspace(principal_id)
-    try:
-        src = P(path).resolve()
-        if not str(src).startswith(str(base.resolve())):
-            return {"ok": False, "error": "path_escape"}
-    except Exception:
-        return {"ok": False, "error": "invalid_path"}
-    if not src.is_file():
-        return {"ok": False, "error": "file_not_found"}
-    probe = probe_local_file(src)
-    if probe.has_subtitle_stream is False:
-        return {
-            "ok": False,
-            "error": "no_subtitle_stream",
-            "probe": {"kind": probe.kind, "has_subtitle_stream": probe.has_subtitle_stream},
-        }
-    ffmpeg = shutil.which("ffmpeg")
-    if not ffmpeg:
-        return {"ok": False, "error": "ffmpeg_not_found"}
-    out = base / "tmp" / f"{src.stem}-subs.srt"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    argv = [
-        ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
-        "-i", str(src), "-map", "0:s:0", str(out),
-    ]
-    from wax.world.run_tool import run_in_world
-
-    result = await run_in_world(
-        str(principal_id), argv, cwd_rel="workspace", network_mode="none", timeout_sec=90.0
-    )
-    if (result.error or "").startswith("Timed out"):
-        return {"ok": False, "error": "ffmpeg_timeout"}
-    if not result.success or not out.is_file() or out.stat().st_size == 0:
-        return {
-            "ok": False,
-            "error": "subtitle_extract_failed",
-            "detail": (result.stderr or result.error or "")[:300],
-            "backend": result.backend,
-        }
-    text_out = out.read_text(encoding="utf-8", errors="replace")[:20000]
-    return {
-        "ok": True,
-        "path": str(out),
-        "text": text_out,
-        "kind": "subtitle",
-        "chars": len(text_out),
-    }
 
 
 
@@ -2175,82 +1675,32 @@ async def handle_world_files(
 
 # Final registry — must run AFTER every handle_* is defined
 
-async def handle_revoke_publication(
-    session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
-) -> dict[str, Any]:
-    """Revoke a publication owned by this principal (infrastructure control)."""
-    from wax.publication.service import PublicationService
-    principal_id = ctx.get("principal_id")
-    if not principal_id:
-        return {"ok": False, "error": "no_principal"}
-    pub_id = args.get("publication_id")
-    if not pub_id:
-        return {"ok": False, "error": "publication_id_required"}
-    return await PublicationService(session).revoke(pub_id, principal_id)
 
 
 HANDLERS.update({
-    "schedule_followup": handle_schedule_followup,
+    "schedule": handle_schedule,
+    "cancel_schedule": handle_cancel_schedule,
     "create_artifact": handle_create_artifact,
-    "run_python": handle_run_python,
     "present_choices": handle_present_choices,
     "get_current_time": handle_get_current_time,
     "get_learner_state": handle_get_learner_state,
-    "schedule_at": handle_schedule_at,
-    "resolve_natural_time": handle_resolve_natural_time,
-    "schedule_intent": handle_schedule_intent,
-    "pause_activity": handle_pause_activity,
-    "resume_activity": handle_resume_activity,
     "set_preference": handle_set_preference,
-    "research_fetch": handle_research_fetch,
-    "research_search": handle_research_search,
-    "record_assessment_timeout": handle_record_assessment_timeout,
-    "workspace_env": handle_workspace_env,
-    "check_quiet_hours": handle_check_quiet_hours,
-    "cancel_schedule": handle_cancel_schedule,
-    "schedule_series": handle_schedule_series,
     "redeliver_artifact": handle_redeliver_artifact,
     "export_learner_data": handle_export_learner_data,
     "link_channel_identity": handle_link_channel_identity,
     "request_channel_link": handle_request_channel_link,
     "confirm_channel_link": handle_confirm_channel_link,
-    # LEGACY removed from active catalog: "create_html_page": handle_create_html_page,
     "retain_surface": handle_retain_surface,
     "inspect_surface": handle_inspect_surface,
     "create_surface": handle_create_surface,
     "update_surface": handle_update_surface,
     "list_surfaces": handle_list_surfaces,
     "revoke_surface": handle_revoke_surface,
-    # LEGACY removed from active catalog: "publish_web_surface": handle_publish_web_surface,
-    # LEGACY removed from active catalog: "revoke_publication": handle_revoke_publication,
     "inspect_memories": handle_inspect_memories,
     "manage_goal": handle_manage_goal,
     "forget_memory": handle_forget_memory,
-    "fetch_inbound_media": handle_fetch_inbound_media,
-    "list_workspace": handle_list_workspace,
-    "inspect_media": handle_inspect_media,
-    "workspace_command": handle_workspace_command,
-    "describe_image": handle_describe_image,
     "list_artifacts": handle_list_artifacts,
     "read_artifact": handle_read_artifact,
-    "write_workspace_file": handle_write_workspace_file,
-    "read_workspace_file": handle_read_workspace_file,
-    "schedule_continuous": handle_schedule_continuous,
-    "start_activity": handle_start_activity,
-    "complete_activity": handle_complete_activity,
-    "update_concept_state": handle_update_concept_state,
-    "create_assessment": handle_create_assessment,
-    "submit_assessment_answer": handle_submit_assessment_answer,
-    "why_we_believe": handle_why_we_believe,
-    "record_evidence": handle_record_evidence,
-    "form_hypothesis": handle_form_hypothesis,
-    "propose_learning_check": handle_propose_learning_check,
-    "schedule_hypothesis_recheck": handle_schedule_hypothesis_recheck,
-    "transcribe_audio": handle_transcribe_audio,
-    "ingest_document": handle_ingest_document,
-    "extract_video_audio": handle_extract_video_audio,
-    "extract_video_frames": handle_extract_video_frames,
-    "extract_subtitles": handle_extract_subtitles,
     "world_discover": handle_world_discover,
     "world_exec": handle_world_exec,
     "world_acquire": handle_world_acquire,

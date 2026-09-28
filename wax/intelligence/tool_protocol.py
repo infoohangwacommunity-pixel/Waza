@@ -30,11 +30,12 @@ def _log():
 
 # Suspicious markup that must never reach WhatsApp/Telegram as the reply body.
 _TOOL_LEAK_PATTERNS = [
-    re.compile(r"<\|tool_call[^|]*>", re.I),
-    re.compile(r"<\|tool_call_begin\|>", re.I),
-    re.compile(r"<\|tool_calls_section", re.I),
+    re.compile(r"<\|tool_call[^>]*>", re.I),
+    re.compile(r"<\|tool_calls_section[^>]*>", re.I),
+    re.compile(r"<\|start_tool_call\|>", re.I),
     re.compile(r"</?tool_call>", re.I),
-    re.compile(r"```(?:json|tool)?\s*\{\s*\"name\"\s*:\s*\"create_surface\"", re.I),
+    re.compile(r"\[/?TOOL_CALLS\]", re.I),
+    re.compile(r"```(?:json|tool)?\s*\{\s*\"name\"\s*:\s*\"[^\"]+\"", re.I),
 ]
 
 # Large HTML blobs that belong in create_surface args, not chat
@@ -127,20 +128,84 @@ def strip_tool_protocol_from_content(text: str | None) -> str:
     s = text
     # Remove common special-token tool blocks
     s = re.sub(
-        r"<\|tool_call[^|]*\|>.*?(?:<\|tool_call_end\|>|<\|end\|>|$)",
+        r"<\|tool_call[^>]*>.*?(?:<\|tool_call[^>]*>|<\|end[^>]*>|$)",
         "",
         s,
         flags=re.I | re.S,
     )
-    s = re.sub(r"<\|tool_calls_section_begin\|>.*?<\|tool_calls_section_end\|>", "", s, flags=re.I | re.S)
-    s = re.sub(r"<\|tool_call_begin\|>.*?<\|tool_call_end\|>", "", s, flags=re.I | re.S)
+    s = re.sub(
+        r"<\|tool_calls_section[^>]*>.*?<\|tool_calls_section[^>]*>",
+        "",
+        s,
+        flags=re.I | re.S,
+    )
+    s = re.sub(
+        r"<\|start_tool_call\|>.*?<\|end_tool_call\|>",
+        "",
+        s,
+        flags=re.I | re.S,
+    )
+    s = re.sub(r"<tool_call>.*?</tool_call>", "", s, flags=re.I | re.S)
     s = re.sub(r"</?tool_call>", "", s, flags=re.I)
+    s = re.sub(r"\[TOOL_CALLS\].*?(\[\/TOOL_CALLS\]|$)", "", s, flags=re.I | re.S)
+    s = re.sub(r"\[/?TOOL_CALLS\]", "", s, flags=re.I)
+    s = re.sub(
+        r"```(?:json|tool)?\s*\{\s*\"name\"\s*:\s*\"[^\"]+\".*?```",
+        "",
+        s,
+        flags=re.I | re.S,
+    )
     # If remaining is essentially an HTML document, drop it
     if _HTML_DOC_RE.search(s) and len(s) > 400:
         s = re.sub(r"(?is)<!DOCTYPE\s+html.*?</html>", "", s)
         s = re.sub(r"(?is)<html\b.*?</html>", "", s)
     s = s.strip()
     return s
+
+
+def extract_embedded_text_tool_calls(text: str | None) -> tuple[str | None, list[dict[str, Any]]]:
+    """
+    Extract structured tool calls embedded as text in content if provider emitted them in content text.
+    Returns (cleaned_content, extracted_tool_calls).
+    """
+    if not text:
+        return None, []
+    extracted: list[dict[str, Any]] = []
+
+    # Look for embedded JSON blocks with "name" and "arguments" / "args"
+    patterns = [
+        re.compile(r"<\|tool_call[^>]*>\s*(\{.*?\})\s*(?:<\|tool_call[^>]*>|<\|end[^>]*>|$)", re.I | re.S),
+        re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.I | re.S),
+        re.compile(r"```(?:json|tool)?\s*(\{\s*\"name\"\s*:\s*\"[^\"]+\".*?\})\s*```", re.I | re.S),
+    ]
+
+    for pat in patterns:
+        for m in pat.finditer(text):
+            try:
+                val = json.loads(m.group(1))
+                if isinstance(val, dict) and "name" in val:
+                    name = str(val["name"])
+                    args = val.get("arguments") if "arguments" in val else val.get("args")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except Exception:
+                            args = {"_raw": args}
+                    elif args is None:
+                        args = {}
+                    extracted.append({
+                        "id": f"call_text_{len(extracted)}_{name}",
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": args if isinstance(args, dict) else {"value": args},
+                        },
+                    })
+            except Exception:
+                pass
+
+    cleaned = strip_tool_protocol_from_content(text)
+    return (cleaned if cleaned.strip() else None), extracted
 
 
 def sanitize_learner_reply(text: str | None, *, had_tool_results: bool = False) -> str:
@@ -181,6 +246,13 @@ def normalize_completion_payload(
     text = content if content is not None else None
     anomaly = False
 
+    # Extract text-embedded tool calls if provider didn't populate native tool_calls
+    if not normalized_calls and text and ("<|tool_call" in text or "<tool_call>" in text or '"name"' in text):
+        clean_text, text_calls = extract_embedded_text_tool_calls(text)
+        if text_calls:
+            normalized_calls = text_calls
+            text = clean_text
+
     if content_has_tool_protocol_leak(text):
         anomaly = True
         _emit(
@@ -205,12 +277,7 @@ def normalize_completion_payload(
                 model,
                 len(normalized_calls),
             )
-        # Prefer structured calls; never leave leak in content for the tutor final path
-        if normalized_calls:
-            text = strip_tool_protocol_from_content(text) or None
-        else:
-            # No structured calls — strip leak; do not invent tool execution from text
-            text = strip_tool_protocol_from_content(text) or None
+        text = strip_tool_protocol_from_content(text) or None
 
     return {
         "content": text,

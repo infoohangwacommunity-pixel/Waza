@@ -43,14 +43,10 @@ def test_untrusted_context_keys_stripped_conceptually():
 
 
 def test_publication_tools_removed_from_active_catalog():
-    src = Path(__file__).resolve().parents[1] / "wax" / "tools" / "registry.py"
-    content = src.read_text()
-    assert "LEGACY removed from active catalog" in content
-    # Active dict assignment lines should be commented
-    for line in content.splitlines():
-        stripped = line.strip()
-        if stripped.startswith('"publish_web_surface"') or stripped.startswith('"create_html_page"'):
-            raise AssertionError(f"still active: {line}")
+    from wax.tools.registry import HANDLERS
+    assert "publish_web_surface" not in HANDLERS
+    assert "create_html_page" not in HANDLERS
+    assert "revoke_publication" not in HANDLERS
 
 
 def test_wrap_has_no_internal_ids():

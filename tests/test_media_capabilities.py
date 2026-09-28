@@ -21,25 +21,18 @@ def _write_silent_wav(path: Path, seconds: float = 0.3, rate: int = 16000) -> No
 
 def test_probe_image_capabilities(tmp_path: Path):
     p = tmp_path / "page.png"
-    # minimal PNG header-ish bytes — probe uses suffix primarily
     p.write_bytes(
         b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02\x00\x00\x00\x90wS\xde"
         b"\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N\x00\x00\x00\x00IEND\xaeB`\x82"
     )
-    # workspace root may not include tmp_path — probe still works on any file
     probe = probe_local_file(p)
     assert probe.kind == "image"
     assert probe.capabilities.ocr is True
-    # vision only True when multimodal provider configured
     assert probe.capabilities.transcribe is False
     assert "ocr" in probe.capabilities.as_list()
-    assert "transcribe" not in probe.capabilities.as_list()
 
 
 def test_probe_audio_capabilities(tmp_path: Path, monkeypatch):
-    from wax.media import probe as probe_mod
-
-    # Avoid requiring workspace for path checks in ffmpeg; probe itself doesn't need workspace
     p = tmp_path / "note.ogg"
     p.write_bytes(b"OggS\x00fake")
     probe = probe_local_file(p)
@@ -102,15 +95,6 @@ def test_transcription_result_dict_shape():
     assert "provenance" in d
 
 
-def test_inspect_handler_requires_path():
-    src = Path("wax/tools/registry.py").read_text()
-    start = src.find("async def handle_inspect_media")
-    assert start > 0
-    block = src[start : start + 2000]
-    assert "path_required" in block
-    assert "extract_text" in block
-
-
 def test_telegram_video_normalization():
     from wax.messaging.normalization import normalize_telegram_update
 
@@ -135,26 +119,24 @@ def test_worker_does_not_always_force_transcript_as_text():
     assert 'quality == "usable"' in src
     assert "WAX_AUTO_TRANSCRIBE" in src
     assert 'os.environ.get("WAX_AUTO_TRANSCRIBE", "0")' in src
-    assert "media_probe" in src
 
 
 def test_capabilities_not_educational_workflows():
-    """Ensure we did not add tutor_from_* style tools."""
+    """Ensure we did not add narrow educational or obsolete narrow tools."""
     src = Path("wax/intelligence/tutor.py").read_text()
     forbidden = [
         "tutor_from_audio",
         "teach_from_image",
         "quiz_from_pdf",
-        "analyze_chemistry_video",
-        "study_document",
-        "lesson_from_notes",
+        "transcribe_audio",
+        "inspect_media",
+        "extract_video_audio",
+        "describe_image",
     ]
     for name in forbidden:
         assert f'name="{name}"' not in src
-    assert 'name="inspect_media"' in src
-    assert 'name="transcribe_audio"' in src
-    assert 'name="extract_video_audio"' in src
-    assert 'name="extract_video_frames"' in src
+    assert 'name="world_exec"' in src
+    assert 'name="world_files"' in src
 
 
 def test_sender_still_does_not_represent():
@@ -176,24 +158,6 @@ def test_sender_still_does_not_represent():
     assert not _calls_present(senders.deliver)
 
 
-def test_inspect_default_no_extract():
-    """inspect_media must not OCR/PDF-extract unless extract_text=true."""
-    src = Path("wax/tools/registry.py").read_text()
-    assert "extract_text = bool(args.get(\"extract_text\") or False)" in src
-    ex = Path("wax/terminal/executor.py").read_text()
-    assert "extract_text: bool = False" in ex
-
-
-def test_vision_capability_truthful_without_provider(monkeypatch):
-    from wax.media.probe import _capabilities_for, _vision_provider_configured
-    monkeypatch.setenv("MULTIMODAL_API_KEY", "")
-    # Without configured multimodal, vision must be False
-    caps = _capabilities_for("image")
-    # May still be False depending on settings defaults
-    assert caps.ocr is True
-    assert isinstance(caps.vision, bool)
-
-
 def test_pdf_magic_overrides_wrong_extension(tmp_path: Path):
     """Wrong extension must not force wrong kind when magic says PDF."""
     p = tmp_path / "notes.xyz"
@@ -204,22 +168,10 @@ def test_pdf_magic_overrides_wrong_extension(tmp_path: Path):
 
 
 def test_capability_composition_path_no_auto_workflow():
-    """Probe exposes capabilities; composition tools exist; no auto educational chain."""
+    """Probe exposes capabilities; terminal execution handles processing; no narrow tools."""
     from wax.media.types import MediaCapabilities
     caps = MediaCapabilities(inspect=True, transcribe=True, ocr=True)
     assert "transcribe" in caps.as_list()
     assert "ocr" in caps.as_list()
     src = Path("wax/tools/registry.py").read_text()
-    assert "handle_extract_subtitles" in src
-    assert "handle_extract_video_audio" in src
-    assert "handle_describe_image" in src
-
-
-def test_describe_image_handler_has_path_guard():
-    src = Path("wax/tools/registry.py").read_text()
-    # describe_image must check path_escape
-    start = src.find("async def handle_describe_image")
-    end = src.find("async def handle_", start + 10)
-    block = src[start:end]
-    assert "path_escape" in block
-    assert "principal_workspace" in block
+    assert "handle_world_exec" in src

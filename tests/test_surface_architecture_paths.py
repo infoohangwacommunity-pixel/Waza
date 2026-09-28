@@ -75,12 +75,10 @@ def test_browser_identity_keys_stripped_in_api():
 
 
 def test_publication_tools_not_active():
-    src = _read("wax/tools/registry.py")
-    assert "LEGACY removed from active catalog" in src
-    for line in src.splitlines():
-        s = line.strip()
-        if s.startswith('"publish_web_surface"') or s.startswith('"create_html_page"'):
-            raise AssertionError(f"active registration: {line}")
+    from wax.tools.registry import HANDLERS
+    assert "publish_web_surface" not in HANDLERS
+    assert "create_html_page" not in HANDLERS
+    assert "revoke_publication" not in HANDLERS
 
 
 def test_no_second_surface_tutor_class():

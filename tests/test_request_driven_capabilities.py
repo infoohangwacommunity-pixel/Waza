@@ -41,7 +41,6 @@ def test_explicit_memory_family_only():
     tools = select_tool_specs(ALL_TOOLS, fams)
     names = {t.name for t in tools}
     assert "inspect_memories" in names
-    assert "run_python" not in names
     assert "world_exec" not in names
     assert len(tools) < len(ALL_TOOLS)
 
@@ -60,8 +59,8 @@ def test_complex_multi_family_still_possible():
     names = {t.name for t in tools}
     assert "inspect_memories" in names
     assert "read_artifact" in names
-    assert "ingest_document" in names
-    assert "run_python" in names
+    assert "world_exec" in names
+    assert "world_files" in names
 
 
 def test_tutor_source_filters_tools():

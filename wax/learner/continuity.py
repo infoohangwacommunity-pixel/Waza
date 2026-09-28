@@ -20,11 +20,13 @@ def _is_meaningful(user_text: str, reply_text: str, tool_notes: list[str] | None
         return False
     if tool_notes:
         return True
-    if len(u) >= 40 or len(reply_text or "") >= 200:
+    if u.lower() in ("continue", "next", "resume", "go on", "proceed"):
         return True
-    if "?" in u and len(u) >= 12:
+    if len(u) >= 20 or len(reply_text or "") >= 100:
         return True
-    if len(u) >= 12 and len(reply_text or "") >= 80:
+    if "?" in u and len(u) >= 10:
+        return True
+    if len(u) >= 12 and len(reply_text or "") >= 10:
         return True
     return False
 

@@ -59,8 +59,7 @@ def test_capability_evidence_has_reliability_flags():
         "stale_work_reclaim",
         "webhook_dedupe",
         "callback_dedupe",
-        "transcribe_audio",
-        "ingest_document",
+        "media_pipeline",
         "teaching_judgment",
     ):
         assert ev.get(key) is True, f"{key} not evidenced"
@@ -69,7 +68,7 @@ def test_capability_evidence_has_reliability_flags():
 def test_scenario_lookup():
     s = scenario_by_id("I_audio")
     assert s is not None
-    assert "transcribe_audio" in s.required_capabilities
+    assert "media_pipeline" in s.required_capabilities
 
 
 def test_no_quizmode_in_tutor_system_for_subject_switch():

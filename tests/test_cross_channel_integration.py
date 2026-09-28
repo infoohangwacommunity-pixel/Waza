@@ -29,6 +29,13 @@ async def test_link_then_both_channels_same_principal():
     if scope is None:
         pytest.skip("db session unavailable")
 
+    try:
+        from sqlalchemy import text
+        async with scope() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as e:
+        pytest.skip(f"db unavailable: {e}")
+
     from uuid import uuid4
     from wax.db.models import Principal, InterfaceIdentity, Memory
     from wax.domain.identity import (
@@ -117,6 +124,13 @@ async def test_already_linked_is_idempotent():
     from uuid import uuid4
     from wax.db.models import Principal
     from wax.domain.identity import link_identity_to_principal, list_identities
+
+    try:
+        from sqlalchemy import text
+        async with scope() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as e:
+        pytest.skip(f"db unavailable: {e}")
 
     async with scope() as session:
         principal = Principal(id=uuid4(), display_name="Sam")

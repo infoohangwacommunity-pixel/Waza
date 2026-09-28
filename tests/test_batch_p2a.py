@@ -25,5 +25,5 @@ def test_html_page_render():
 
 def test_tools_registered():
     src = Path("wax/tools/registry.py").read_text()
-    for n in ("export_learner_data", "link_channel_identity", "create_html_page"):
+    for n in ("export_learner_data", "link_channel_identity", "create_surface"):
         assert n in src

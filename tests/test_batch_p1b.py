@@ -3,8 +3,8 @@ from pathlib import Path
 
 def test_tool_meta_exists():
     from wax.tools.meta import tool_meta, TOOL_META
-    assert tool_meta("run_python")["risk"] == "high"
-    assert "research_fetch" in TOOL_META
+    assert tool_meta("world_exec")["risk"] == "high"
+    assert "world_discover" in TOOL_META
 
 
 def test_research_module():

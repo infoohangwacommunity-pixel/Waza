@@ -20,40 +20,9 @@ FAMILY_TOOLS: dict[str, frozenset[str]] = {
         }
     ),
     "memory": frozenset({"inspect_memories", "forget_memory", "set_preference"}),
-    "learning": frozenset(
-        {
-            "record_evidence",
-            "form_hypothesis",
-            "why_we_believe",
-            "propose_learning_check",
-            "schedule_hypothesis_recheck",
-            "update_concept_state",
-            "create_assessment",
-            "submit_assessment_answer",
-            "record_assessment_timeout",
-        }
-    ),
-    "goals": frozenset(
-        {
-            "manage_goal",
-            "start_activity",
-            "complete_activity",
-            "pause_activity",
-            "resume_activity",
-        }
-    ),
-    "schedule": frozenset(
-        {
-            "schedule_followup",
-            "schedule_at",
-            "resolve_natural_time",
-            "schedule_intent",
-            "schedule_continuous",
-            "schedule_series",
-            "cancel_schedule",
-            "check_quiet_hours",
-        }
-    ),
+    "learning": frozenset({"inspect_memories", "get_learner_state"}),
+    "goals": frozenset({"manage_goal"}),
+    "schedule": frozenset({"schedule", "cancel_schedule"}),
     "artifacts": frozenset(
         {
             "create_artifact",
@@ -74,24 +43,13 @@ FAMILY_TOOLS: dict[str, frozenset[str]] = {
     ),
     "media": frozenset(
         {
-            "fetch_inbound_media",
-            "inspect_media",
-            "describe_image",
-            "transcribe_audio",
-            "extract_video_audio",
-            "extract_video_frames",
-            "extract_subtitles",
-            "ingest_document",
+            "world_discover",
+            "world_exec",
+            "world_files",
         }
     ),
     "workspace": frozenset(
         {
-            "run_python",
-            "write_workspace_file",
-            "read_workspace_file",
-            "list_workspace",
-            "workspace_command",
-            "workspace_env",
             "world_discover",
             "world_exec",
             "world_acquire",
@@ -99,7 +57,13 @@ FAMILY_TOOLS: dict[str, frozenset[str]] = {
             "world_files",
         }
     ),
-    "research": frozenset({"research_fetch", "research_search"}),
+    "research": frozenset(
+        {
+            "world_discover",
+            "world_exec",
+            "world_acquire",
+        }
+    ),
     "identity": frozenset(
         {
             "request_channel_link",
@@ -159,7 +123,6 @@ def families_from_brief(brief: Any | None) -> set[str]:
     if getattr(brief, "no_context_required", False) and not getattr(
         brief, "suggested_actions", None
     ):
-        # Explicit families from CI win; empty list means truly no tools.
         raw_fams = getattr(brief, "capability_families", None)
         meta = getattr(brief, "metadata", None) or {}
         if raw_fams is not None:
@@ -178,7 +141,6 @@ def families_from_brief(brief: Any | None) -> set[str]:
         if explicit:
             return explicit
 
-    # Infer lightly from suggested_actions / strategy text (still not a message classifier)
     hints = " ".join(
         [
             str(getattr(brief, "response_strategy", "") or ""),
@@ -201,8 +163,8 @@ def families_from_brief(brief: Any | None) -> set[str]:
         ("surface", "surfaces"),
         ("python", "workspace"),
         ("code", "workspace"),
-        ("research", "research"),
-        ("search the web", "research"),
+        ("research", "workspace"),
+        ("search the web", "workspace"),
         ("channel", "identity"),
         ("whatsapp", "identity"),
         ("telegram", "identity"),
@@ -215,16 +177,14 @@ def families_from_brief(brief: Any | None) -> set[str]:
 # Hard ceiling: some providers reject oversized tool arrays / request bodies
 MAX_TOOLS_PER_TURN = 18
 
-# Prefer action tools when capping (create_surface before long-tail schedule tools)
+# Prefer action tools when capping
 _TOOL_PRIORITY = (
     "create_surface",
     "update_surface",
     "list_surfaces",
     "inspect_surface",
-    "transcribe_audio",
-    "inspect_media",
-    "describe_image",
-    "fetch_inbound_media",
+    "world_exec",
+    "world_files",
     "present_choices",
     "get_learner_state",
     "inspect_memories",
@@ -234,7 +194,6 @@ _TOOL_PRIORITY = (
 def select_tool_specs(all_tools: list[Any], families: set[str] | None) -> list[Any]:
     """Filter ToolSpec list to the selected families (+ always-core if any tools)."""
     if not families:
-        # Zero capabilities: no tool schemas in the request
         return []
     allowed: set[str] = set(ALWAYS_CORE)
     for fam in families:

@@ -42,6 +42,13 @@ configured by WAX Prep without treating the vendor as your identity.
 
 Talk naturally. You are not a form, a menu, or a rigid course system.
 
+Terminal & Execution Environment:
+- You have a sandboxed execution environment (world_exec, world_files, world_acquire, world_discover, world_jobs).
+- When you need to understand an audio, video, image, or document file, inspect the available files in the workspace and use the terminal (world_exec / Python scripts) to write and run appropriate code/tools yourself. Do not assume a specialized application-level function exists.
+- Build pages by writing HTML/CSS/JS in the workspace. Use the generic publication mechanism (create_surface / update_surface) only when a durable public URL is required.
+- Use available execution/network capabilities and tools as appropriate for research. Do not depend on a hardcoded research workflow when the same task can be performed through terminal code.
+- Use generic memory and persistence primitives (inspect_memories, forget_memory, set_preference, manage_goal, schedule) to store useful student state. The structure of that state is determined by your reasoning rather than a fixed feature-specific activity model.
+
 How you work:
 - Meet them where they are. Discover goals and needs through conversation.
 - Use what you genuinely remember about them when it helps.
@@ -140,87 +147,21 @@ Honesty:
 
 AVAILABLE_TOOLS = [
     ToolSpec(
-        name="schedule_followup",
-        description="Schedule a future follow-up when a later check-in would help this person.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
-                "delay_hours": {"type": "number"},
-                "message_hint": {"type": "string"},
-            },
-            "required": ["reason", "delay_hours"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_at",
-        description="Schedule a follow-up at an absolute datetime (ISO 8601). Optional IANA timezone.",
+        name="schedule",
+        description="Generic durable scheduling primitive. Specify when (ISO execute_at, delay_hours, or natural when_text), reason/target, and optional payload.",
         parameters={
             "type": "object",
             "properties": {
                 "execute_at": {"type": "string"},
-                "timezone": {"type": "string"},
-                "reason": {"type": "string"},
-                "message_hint": {"type": "string"},
-                "action_type": {"type": "string"},
-            },
-            "required": ["execute_at", "reason"],
-        },
-    ),
-    ToolSpec(
-        name="resolve_natural_time",
-        description="Resolve 'tomorrow at 10am' etc. to absolute time using learner timezone and authoritative clock. Prefer this over guessing.",
-        parameters={
-            "type": "object",
-            "properties": {"text": {"type": "string"}, "timezone": {"type": "string"}},
-            "required": ["text"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_intent",
-        description="Schedule a learner intention (reminder/review/followup). Stores intent to reassess at wake time — not fixed wording. Prefer when_text for natural language times.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "purpose": {"type": "string"},
-                "target": {"type": "string"},
+                "delay_hours": {"type": "number"},
                 "when_text": {"type": "string"},
-                "execute_at": {"type": "string"},
+                "reason": {"type": "string"},
+                "purpose": {"type": "string"},
                 "timezone": {"type": "string"},
-                "flexibility": {"type": "string"},
-                "completion_condition": {"type": "string"},
-                "concept_key": {"type": "string"},
-            },
-            "required": ["target"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_continuous",
-        description="Schedule several future follow-ups. Use only when the person wants ongoing support.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
                 "message_hint": {"type": "string"},
-                "hours_from_now": {"type": "array", "items": {"type": "number"}},
+                "payload": {"type": "object"},
             },
-            "required": ["reason", "hours_from_now"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_series",
-        description="Schedule a finite series of follow-ups (max 30) at a fixed interval.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "interval_hours": {"type": "number"},
-                "count": {"type": "number"},
-                "delay_hours": {"type": "number"},
-                "first_at": {"type": "string"},
-                "reason": {"type": "string"},
-                "message_hint": {"type": "string"},
-            },
-            "required": ["interval_hours", "reason"],
+            "required": ["reason"],
         },
     ),
     ToolSpec(
@@ -228,8 +169,8 @@ AVAILABLE_TOOLS = [
         description="Cancel a pending scheduled action by id.",
         parameters={
             "type": "object",
-            "properties": {"scheduled_action_id": {"type": "string"}},
-            "required": ["scheduled_action_id"],
+            "properties": {"action_id": {"type": "string"}},
+            "required": ["action_id"],
         },
     ),
     ToolSpec(
@@ -243,11 +184,6 @@ AVAILABLE_TOOLS = [
     ToolSpec(
         name="get_learner_state",
         description="Read current goals, activities, pending choices, and upcoming schedule.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="check_quiet_hours",
-        description="Check whether the learner is currently in quiet hours.",
         parameters={"type": "object", "properties": {}},
     ),
     ToolSpec(
@@ -397,47 +333,6 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
-        name="run_python",
-        description="Run Python in the learner World (isolated). Prefer world_exec for general commands.",
-        parameters={
-            "type": "object",
-            "properties": {"code": {"type": "string"}},
-            "required": ["code"],
-        },
-    ),
-    ToolSpec(
-        name="write_workspace_file",
-        description="Write a file in the workspace for multi-step work.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-            "required": ["path", "content"],
-        },
-    ),
-    ToolSpec(
-        name="read_workspace_file",
-        description="Read a workspace file.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="list_workspace",
-        description="List files in the learner workspace.",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}},
-    ),
-    ToolSpec(
-        name="workspace_command",
-        description="Deprecated alias for world_exec — runs a shell command line in the World (isolated).",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-    ),
-    ToolSpec(
         name="world_discover",
         description=(
             "Inspect the learner's personal computing World: lifecycle, disk, "
@@ -501,105 +396,6 @@ AVAILABLE_TOOLS = [
         },
     ),
     ToolSpec(
-        name="workspace_env",
-        description="Get or update workspace environment manifest (packages/tools).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string"},
-                "name": {"type": "string"},
-                "version": {"type": "string"},
-                "source": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="fetch_inbound_media",
-        description="Fetch inbound media from the messaging channel into the workspace.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="inspect_media",
-        description=(
-            "Probe a local media file: kind, metadata, available capabilities, "
-            "and optional text extraction (OCR/PDF). Does not transcribe audio. "
-            "Use capabilities listed to decide next tools."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "extract_text": {"type": "boolean"},
-                "max_pages": {"type": "number"},
-            },
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="describe_image",
-        description="Optional vision description of a local image.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "question": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="transcribe_audio",
-        description=(
-            "Transcribe a local audio/voice file. Returns transcript plus quality "
-            "(usable/uncertain/unusable). Do not treat uncertain/unusable as reliable user text."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "language": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="extract_video_audio",
-        description="Extract audio track from a local video to a WAV path. Then transcribe_audio if needed.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="extract_video_frames",
-        description="Extract a small number of frames from a local video (capped). Inspect/OCR/describe frames as needed.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "max_frames": {"type": "number"},
-                "fps": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="extract_subtitles",
-        description="Extract embedded subtitles from a local video when a subtitle stream exists.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="ingest_document",
-        description="Store learner-provided notes/PDF/text as retrievable knowledge for this learner only.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "text": {"type": "string"},
-                "path": {"type": "string"},
-                "kind": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
         name="inspect_memories",
         description="Inspect active memories for this learner.",
         parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
@@ -623,167 +419,6 @@ AVAILABLE_TOOLS = [
                 "goal_id": {"type": "string"},
                 "status": {"type": "string"},
             },
-        },
-    ),
-    ToolSpec(
-        name="start_activity",
-        description="Start a durable learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string"},
-                "objective": {"type": "string"},
-                "duration_seconds": {"type": "number"},
-            },
-            "required": ["kind"],
-        },
-    ),
-    ToolSpec(
-        name="complete_activity",
-        description="Complete an activity.",
-        parameters={
-            "type": "object",
-            "properties": {"activity_id": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="pause_activity",
-        description="Pause the active learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "activity_id": {"type": "string"},
-                "reason": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="resume_activity",
-        description="Resume a paused learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {"activity_id": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="create_assessment",
-        description="Create a durable assessment (not a fixed quiz mode).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "items": {"type": "array"},
-                "timed": {"type": "boolean"},
-                "duration_seconds": {"type": "number"},
-            },
-            "required": ["title", "items"],
-        },
-    ),
-    ToolSpec(
-        name="submit_assessment_answer",
-        description="Submit an answer to the current assessment item.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "attempt_id": {"type": "string"},
-                "item_id": {"type": "string"},
-                "response_text": {"type": "string"},
-            },
-            "required": ["attempt_id", "item_id"],
-        },
-    ),
-    ToolSpec(
-        name="record_assessment_timeout",
-        description="Record that a timed assessment item expired and get the next item if any.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "attempt_id": {"type": "string"},
-                "item_id": {"type": "string"},
-            },
-            "required": ["attempt_id"],
-        },
-    ),
-    ToolSpec(
-        name="update_concept_state",
-        description="Update observed mastery/confidence for a concept.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "concept_key": {"type": "string"},
-                "status": {"type": "string"},
-                "mastery": {"type": "number"},
-                "confidence": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="record_evidence",
-        description="Record evidence about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "claim_key": {"type": "string"},
-                "content": {"type": "string"},
-                "strength": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="form_hypothesis",
-        description="Form or update a hypothesis about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "claim_key": {"type": "string"},
-                "statement": {"type": "string"},
-                "confidence": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="why_we_believe",
-        description="Explain why we currently believe something about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {"claim_key": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="propose_learning_check",
-        description="Propose a light check related to an active hypothesis.",
-        parameters={
-            "type": "object",
-            "properties": {"hypothesis_id": {"type": "string"}, "hint": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="schedule_hypothesis_recheck",
-        description="Schedule a future recheck for a hypothesis.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "hypothesis_id": {"type": "string"},
-                "delay_hours": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="research_fetch",
-        description="Fetch a public http(s) URL for world knowledge. Not learner memory.",
-        parameters={
-            "type": "object",
-            "properties": {"url": {"type": "string"}},
-            "required": ["url"],
-        },
-    ),
-    ToolSpec(
-        name="research_search",
-        description="Search the web when a search provider is configured.",
-        parameters={
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"],
         },
     ),
     ToolSpec(
@@ -916,44 +551,19 @@ class TutorService:
             role = "assistant" if m["role"] == "assistant" else "user"
             llm_messages.append(ChatMessage(role=role, content=m["content"]))
         media_note = ""
-        if payload.get("media_id"):
-            media_note = (
-                f"\n\n[System: inbound media available. channel={channel} "
-                f"content_type={payload.get('content_type')} media_id={payload.get('media_id')}. "
-                f"fetch_inbound_media if not on disk, then inspect_media to see capabilities.]"
-            )
         if payload.get("local_media_path"):
             media_note += (
-                f"\n[System: media is in the agent workspace at "
-                f"{payload.get('local_media_path')}. "
-                f"Use inspect_media / transcribe_audio / terminal on this path — "
-                f"it is readable from the principal workspace.]"
+                f"\n[System: media is in the workspace at {payload.get('local_media_path')}. "
+                f"Use world_files / world_exec / Python to inspect or extract content from this file.]"
             )
-        probe = payload.get("media_probe") or {}
-        caps = payload.get("media_capabilities") or probe.get("capability_list") or []
-        if probe or caps:
+        elif payload.get("media_id"):
             media_note += (
-                f"\n[System: media kind={probe.get('kind', payload.get('content_type'))}; "
-                f"capabilities={caps}. "
-                f"Compose tools as needed (inspect_media, transcribe_audio, extract_video_audio, "
-                f"extract_video_frames, describe_image, ingest_document). "
-                f"Do not claim you processed media unless a tool succeeded.]"
+                f"\n[System: inbound media available: channel={channel} "
+                f"content_type={payload.get('content_type')} media_id={payload.get('media_id')}.]"
             )
-        tq = payload.get("transcript_quality")
-        if payload.get("transcript") and tq == "usable":
+        if payload.get("transcript"):
             media_note += (
-                f"\n[System: usable transcript available:\n{str(payload.get('transcript'))[:4000]}]"
-            )
-        elif payload.get("transcript") and tq in ("uncertain", "unusable"):
-            media_note += (
-                f"\n[System: transcription quality={tq}. "
-                f"Do not treat as reliable user text. You may ask the learner to resend or type, "
-                f"or call transcribe_audio again if appropriate. "
-                f"Snippet: {str(payload.get('transcript'))[:500]}]"
-            )
-        elif payload.get("transcript"):
-            media_note += (
-                f"\n[System: transcript present (quality unknown):\n{str(payload.get('transcript'))[:2000]}]"
+                f"\n[System: transcript available:\n{str(payload.get('transcript'))[:4000]}]"
             )
         # Safe outage awareness — structured, no internals; tutor decides whether to acknowledge
         outage = payload.get("outage_context") if isinstance(payload.get("outage_context"), dict) else None

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -12,7 +14,7 @@ from wax.world.resources import dir_size, world_budget_defaults
 
 
 def discover(world: World, *, sections: list[str] | None = None) -> dict[str, Any]:
-    want = set(sections or ["identity", "lifecycle", "resources", "runtimes", "software", "files", "jobs"])
+    want = set(sections or ["identity", "lifecycle", "resources", "runtimes", "software", "files", "jobs", "environment"])
     out: dict[str, Any] = {"ok": True, "world_id": world.world_id, "principal_id": world.principal_id}
     if "identity" in want:
         out["identity"] = {
@@ -37,6 +39,8 @@ def discover(world: World, *, sections: list[str] | None = None) -> dict[str, An
         out["runtimes"] = _scan_runtimes(world.root)
     if "software" in want:
         out["software"] = _scan_software(world.root)
+    if "environment" in want or "binaries" in want:
+        out["environment"] = _scan_system_environment()
     if "files" in want:
         out["files"] = {
             "workspace": _list_summary(world.root / "workspace"),
@@ -47,6 +51,26 @@ def discover(world: World, *, sections: list[str] | None = None) -> dict[str, An
         out["jobs"] = _scan_jobs(world.root)
     out["discovered_at"] = time.time()
     return out
+
+
+def _scan_system_environment() -> dict[str, Any]:
+    binaries = {}
+    for b in ["python", "python3", "pip", "pip3", "node", "npm", "ffmpeg", "ffprobe", "pdftotext", "tesseract", "whisper", "git"]:
+        binaries[b] = shutil.which(b)
+
+    packages = {}
+    for pkg in ["vosk", "reportlab", "PIL", "pydantic", "sqlalchemy", "httpx", "asyncpg", "alembic", "requests"]:
+        try:
+            m = __import__(pkg)
+            packages[pkg] = getattr(m, "__version__", "installed")
+        except ImportError:
+            packages[pkg] = None
+
+    return {
+        "python_version": sys.version.split()[0],
+        "binaries": binaries,
+        "packages": packages,
+    }
 
 
 def _scan_runtimes(root: Path) -> list[dict[str, Any]]:

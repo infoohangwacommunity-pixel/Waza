@@ -83,6 +83,7 @@ def principal_workspace(principal_id: str | Any) -> Path:
         path = w.root / "workspace"
         path.mkdir(parents=True, exist_ok=True)
         (path / "media").mkdir(exist_ok=True)
+        (path / "out").mkdir(exist_ok=True)
         (path / "projects").mkdir(exist_ok=True)
         return path
     except WorldError:
