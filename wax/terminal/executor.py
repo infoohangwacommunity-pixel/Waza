@@ -133,17 +133,14 @@ class TerminalExecutor:
                 principal_id=principal_id,
             )
             if r.success and r.stdout.strip():
-                parts.append(f"pdftotext:
-{r.stdout.strip()[:4000]}")
+                parts.append("pdftotext:\n" + r.stdout.strip()[:4000])
             else:
                 parts.append("pdftotext: unavailable or empty")
         elif extract_text and suffix in (".txt", ".md", ".csv", ".json", ".py", ".html"):
             try:
                 content = p.read_text(encoding="utf-8", errors="replace")[:8000]
-                parts.append(f"text:
-{content}")
+                parts.append("text:\n" + content)
             except Exception as e:
                 parts.append(f"read_error: {e}")
-        return TerminalResult(True, "
-".join(parts), "", None, 0)
+        return TerminalResult(True, "\n".join(parts), "", None, 0)
 

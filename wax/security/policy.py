@@ -26,6 +26,7 @@ def tool_allowed(name: str, ctx: dict[str, Any] | None = None) -> tuple[bool, st
     if EXTERNAL_NETWORK in perms and not getattr(settings, "allow_external_network", True):
         return False, "external_network_disabled"
     if not getattr(settings, "terminal_enabled", True) and name in (
+        "world_exec",
         "run_python",
         "workspace_command",
     ):
