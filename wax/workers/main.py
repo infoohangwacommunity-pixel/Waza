@@ -482,7 +482,7 @@ async def process_memory_work(session, work: Work) -> None:
 
 
 async def process_media_prepare(session, work: Work) -> None:
-    """Async media download into workspace — never in webhook."""
+    """Download inbound media into World only — no STT/OCR/classification."""
     from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
 
     payload = work.input_payload or {}

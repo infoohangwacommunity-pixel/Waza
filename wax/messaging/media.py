@@ -1,11 +1,9 @@
 """
-Fetch inbound media into the AI workspace.
+Inbound channel media download — infrastructure only.
 
-WhatsApp: Graph API media URL → download → workspace/media/
-Telegram: getFile → download → workspace/media/
-
-The tutor receives a local path, not a permanent CDN dependency.
-Optional later: multimodal model only when terminal extraction is insufficient.
+Download WhatsApp/Telegram media into the student's World workspace.
+Does not transcribe, OCR, classify, or interpret content.
+The AI decides any processing inside the World.
 """
 
 from __future__ import annotations
@@ -24,49 +22,96 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 
-async def fetch_whatsapp_media(media_id: str, principal_id: Any, filename_hint: str | None = None) -> dict[str, Any]:
-    if not settings.whatsapp_access_token or not media_id:
-        return {"ok": False, "error": "whatsapp_media_unavailable"}
+def _guess_mime(name: str, file_path: str = "") -> str | None:
+    """Filename/extension hint only — not content classification for intelligence."""
+    lower = (name or "").lower()
+    path_l = (file_path or "").lower()
+    if lower.endswith((".oga", ".ogg", ".opus")) or "voice" in path_l:
+        return "audio/ogg"
+    if lower.endswith((".mp3",)):
+        return "audio/mpeg"
+    if lower.endswith((".m4a", ".aac")):
+        return "audio/mp4"
+    if lower.endswith((".wav",)):
+        return "audio/wav"
+    if lower.endswith((".mp4", ".mov", ".mkv", ".m4v")):
+        return "video/mp4"
+    if lower.endswith((".jpg", ".jpeg")):
+        return "image/jpeg"
+    if lower.endswith(".png"):
+        return "image/png"
+    if lower.endswith(".webp"):
+        return "image/webp"
+    if lower.endswith(".gif"):
+        return "image/gif"
+    if lower.endswith(".pdf"):
+        return "application/pdf"
+    if lower.endswith((".txt", ".md", ".csv")):
+        return "text/plain"
+    return None
 
-    version = getattr(settings, "whatsapp_api_version", "v21.0")
-    headers = {"Authorization": f"Bearer {settings.whatsapp_access_token}"}
-    meta_url = f"https://graph.facebook.com/{version}/{media_id}"
 
+def _ensure_suffix(name: str, file_path: str = "") -> str:
+    """Preserve a recognizable extension for audio voice notes when Telegram omits one."""
+    lower = name.lower()
+    known = (
+        ".oga", ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm",
+        ".jpg", ".jpeg", ".png", ".webp", ".gif", ".pdf",
+        ".mp4", ".mov", ".txt", ".doc", ".docx",
+    )
+    if any(lower.endswith(ext) for ext in known):
+        return name
+    if "voice" in (file_path or "").lower() or "voice" in lower:
+        return f"{name}.oga"
+    return name
+
+
+async def fetch_whatsapp_media(media_id: str, principal_id: Any) -> dict[str, Any]:
+    token = (settings.whatsapp_access_token or "").strip()
+    if not token:
+        return {"ok": False, "error": "whatsapp_token_missing"}
+    version = settings.whatsapp_api_version or "v21.0"
     async with httpx.AsyncClient(timeout=60.0) as client:
-        meta = await client.get(meta_url, headers=headers)
+        meta = await client.get(
+            f"https://graph.facebook.com/{version}/{media_id}",
+            headers={"Authorization": f"Bearer {token}"},
+        )
         if meta.status_code >= 400:
-            return {"ok": False, "error": f"meta_failed:{meta.status_code}", "body": meta.text[:200]}
+            return {"ok": False, "error": f"media_meta_failed:{meta.status_code}"}
         info = meta.json()
-        download_url = info.get("url")
-        mime = info.get("mime_type") or "application/octet-stream"
-        if not download_url:
-            return {"ok": False, "error": "no_download_url"}
-
-        data_resp = await client.get(download_url, headers=headers)
+        url = info.get("url")
+        mime = info.get("mime_type")
+        if not url:
+            return {"ok": False, "error": "no_media_url"}
+        data_resp = await client.get(url, headers={"Authorization": f"Bearer {token}"})
         if data_resp.status_code >= 400:
             return {"ok": False, "error": f"download_failed:{data_resp.status_code}"}
         data = data_resp.content
 
-    ext = _ext_from_mime(mime)
-    name = filename_hint or f"wa-{media_id[:16]}{ext}"
+    ext = _ext_from_mime(mime or "") or ""
+    name = f"wa-{media_id[:12]}{ext}"
     dest_dir = principal_workspace(principal_id) / "media"
     path = safe_write_bytes(dest_dir, name, data)
     return {
         "ok": True,
         "path": str(path),
         "size": len(data),
-        "mime": mime,
+        "mime": mime or _guess_mime(name),
         "sha256": content_hash(data),
         "channel": "whatsapp",
         "media_id": media_id,
     }
 
 
-async def fetch_telegram_media(file_id: str, principal_id: Any, filename_hint: str | None = None) -> dict[str, Any]:
-    token = settings.telegram_bot_token
-    if not token or not file_id:
-        return {"ok": False, "error": "telegram_media_unavailable"}
-
+async def fetch_telegram_media(
+    file_id: str,
+    principal_id: Any,
+    *,
+    filename_hint: str | None = None,
+) -> dict[str, Any]:
+    token = (settings.telegram_bot_token or "").strip()
+    if not token:
+        return {"ok": False, "error": "telegram_token_missing"}
     async with httpx.AsyncClient(timeout=60.0) as client:
         meta = await client.get(
             f"https://api.telegram.org/bot{token}/getFile",
@@ -80,40 +125,19 @@ async def fetch_telegram_media(file_id: str, principal_id: Any, filename_hint: s
         file_path = (payload.get("result") or {}).get("file_path")
         if not file_path:
             return {"ok": False, "error": "no_file_path"}
-
         data_resp = await client.get(f"https://api.telegram.org/file/bot{token}/{file_path}")
         if data_resp.status_code >= 400:
             return {"ok": False, "error": f"download_failed:{data_resp.status_code}"}
         data = data_resp.content
 
-    name = filename_hint or Path(file_path).name or f"tg-{uuid4().hex[:10]}"
-    # Telegram voice notes often arrive as voice/*.oga — preserve a recognizable suffix
-    # so local transcription can treat them as audio without hardcoding product modes.
-    lower = name.lower()
-    if not any(lower.endswith(ext) for ext in (".oga", ".ogg", ".opus", ".mp3", ".m4a", ".wav", ".webm")):
-        if "voice" in (file_path or "").lower() or lower.endswith(".oga"):
-            name = f"{name}.oga"
-        elif "voice" in lower:
-            name = f"{name}.oga"
+    name = _ensure_suffix(filename_hint or Path(file_path).name or f"tg-{uuid4().hex[:10]}", file_path)
     dest_dir = principal_workspace(principal_id) / "media"
     path = safe_write_bytes(dest_dir, name, data)
-    lower = str(path).lower()
-    mime = None
-    if lower.endswith((".oga", ".ogg", ".opus")):
-        mime = "audio/ogg"
-    elif lower.endswith((".mp4", ".mov", ".mkv", ".m4v")):
-        mime = "video/mp4"
-    elif lower.endswith((".jpg", ".jpeg")):
-        mime = "image/jpeg"
-    elif lower.endswith(".png"):
-        mime = "image/png"
-    elif lower.endswith(".pdf"):
-        mime = "application/pdf"
     return {
         "ok": True,
         "path": str(path),
         "size": len(data),
-        "mime": mime,
+        "mime": _guess_mime(name, file_path),
         "sha256": content_hash(data),
         "channel": "telegram",
         "file_id": file_id,

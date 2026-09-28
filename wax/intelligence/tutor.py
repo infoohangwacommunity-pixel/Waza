@@ -125,6 +125,18 @@ class TutorService:
         payload = work.input_payload or {}
         user_text = (payload.get("text") or payload.get("user_text") or "").strip()
         channel = payload.get("channel") or ""
+        # Artifact landed in World — facts only, no auto transcription/OCR/classification
+        media_path = payload.get("local_media_path") or payload.get("principal_media_path")
+        if media_path:
+            mime = payload.get("media_mime") or ""
+            size = payload.get("media_size")
+            note = f"[Inbound file in your World at {media_path}"
+            if mime:
+                note += f", type hint {mime}"
+            if size:
+                note += f", size {size} bytes"
+            note += ". Inspect or process it only if needed via a world directive.]"
+            user_text = f"{user_text}\n\n{note}".strip() if user_text else note
 
         # Conversation continuity only — no preselected memory/World content.
         history = await self._recent_messages(work, limit=20)
