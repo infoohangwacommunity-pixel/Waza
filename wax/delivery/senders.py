@@ -80,14 +80,11 @@ def _boundary_normalize(text: str, channel: str) -> str:
     if Delivery.content was somehow written without going through presentation.
     Blocks leaked tool-protocol / raw HTML documents from reaching the learner.
     """
+    # Strip accidental directive fences from student-facing text
     try:
-        from wax.intelligence.tool_protocol import (
-            content_has_tool_protocol_leak,
-            sanitize_learner_reply,
-        )
-
-        if content_has_tool_protocol_leak(text):
-            text = sanitize_learner_reply(text)
+        import re
+        text = re.sub(r"```(?:world|memory|schedule|publish|choices)\s*\n.*?```", "", text or "", flags=re.DOTALL | re.I)
+        text = text.strip()
     except Exception:
         pass
     try:

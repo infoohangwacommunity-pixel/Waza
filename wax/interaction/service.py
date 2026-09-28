@@ -233,18 +233,6 @@ class InteractionService:
             "source": "interaction",
             "reason": reason,
         }
-        # Link assessment context from activity if present (AI decides next item)
-        if interaction.activity_id:
-            try:
-                from wax.db.models import Activity
-                act = await self.session.get(Activity, interaction.activity_id)
-                if act and isinstance(act.content, dict):
-                    if act.content.get("assessment_id"):
-                        payload["assessment_id"] = str(act.content["assessment_id"])
-                    if act.content.get("attempt_id"):
-                        payload["attempt_id"] = str(act.content["attempt_id"])
-            except Exception:
-                pass
         # Prefer target from metadata if stored
         meta = interaction.metadata_ or {}
         if meta.get("target_external_id"):

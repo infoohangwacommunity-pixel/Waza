@@ -1,9 +1,8 @@
-"""Budgeted agent execution with durable checkpoints.
+"""Agent execution with durable checkpoints.
 
-Replaces a fixed "max 3 tool rounds" mindset with:
-- max tool rounds (config)
-- step log on Execution
-- checkpoint JSON for resume
+Continuation is driven by objectives and observations, not a tool-call budget.
+Infrastructure safety limits (wall time, max continuations) protect against runaway
+processes — they are not an intelligence architecture.
 """
 
 from __future__ import annotations
@@ -21,6 +20,10 @@ from wax.observability.correlation import set_execution_id
 
 logger = get_logger(__name__)
 
+# Infrastructure safety only — not an intelligence "tool budget"
+_MAX_CONTINUATIONS = 24  # hard ceiling against infinite agent loops
+_MAX_WALL_SECONDS = 180
+
 
 class AgentRuntime:
     def __init__(self, session: AsyncSession, work: Work):
@@ -28,12 +31,11 @@ class AgentRuntime:
         self.work = work
         self.execution: Execution | None = None
         self.settings = get_settings()
-        self.tool_calls = 0
-        self.max_rounds = max(1, min(int(getattr(self.settings, "agent_max_tool_rounds", 8) or 8), 20))
+        self.continuations = 0
+        self.started_at = datetime.now(timezone.utc)
 
     async def start(self) -> Execution:
         now = datetime.now(timezone.utc)
-        # Resume existing running execution if present
         meta = dict(self.work.metadata_ or {})
         exec_id = meta.get("execution_id")
         if exec_id:
@@ -43,13 +45,8 @@ class AgentRuntime:
                 if existing and existing.status == "running":
                     self.execution = existing
                     steps = list(existing.steps or [])
-                    self.tool_calls = sum(1 for s in steps if s.get("type") == "tool")
-                    logger.info(
-                        "agent_execution_resumed",
-                        work_id=str(self.work.id),
-                        execution_id=str(existing.id),
-                        tool_calls=self.tool_calls,
-                    )
+                    self.continuations = sum(1 for s in steps if s.get("type") == "continue")
+                    set_execution_id(str(existing.id))
                     return existing
             except Exception:
                 pass
@@ -59,97 +56,61 @@ class AgentRuntime:
             work_id=self.work.id,
             status="running",
             started_at=now,
-            checkpoint={"phase": "started", "at": now.isoformat()},
-            steps=[{"type": "start", "at": now.isoformat()}],
+            steps=[],
+            checkpoint={},
         )
         self.session.add(ex)
         await self.session.flush()
+        self.execution = ex
         meta["execution_id"] = str(ex.id)
         self.work.metadata_ = meta
-        await self.session.flush()
-        self.execution = ex
         set_execution_id(str(ex.id))
-        logger.info(
-            "agent_execution_started",
-            work_id=str(self.work.id),
-            execution_id=str(ex.id),
-            max_rounds=self.max_rounds,
-        )
         return ex
 
-    def can_call_tool(self) -> bool:
-        return self.tool_calls < self.max_rounds
+    def can_continue(self) -> bool:
+        """Infrastructure safety: stop runaway loops / wall time."""
+        if self.continuations >= _MAX_CONTINUATIONS:
+            return False
+        elapsed = (datetime.now(timezone.utc) - self.started_at).total_seconds()
+        if elapsed > _MAX_WALL_SECONDS:
+            return False
+        return True
 
-    async def record_tool(
-        self, name: str, args: dict[str, Any], outcome: dict[str, Any]
-    ) -> None:
+    async def record_continuation(self, kind: str, detail: dict[str, Any] | None = None) -> None:
+        self.continuations += 1
         if not self.execution:
             return
-        self.tool_calls += 1
-        now = datetime.now(timezone.utc).isoformat()
         steps = list(self.execution.steps or [])
         steps.append(
             {
-                "type": "tool",
-                "name": name,
-                "ok": bool(outcome.get("ok")),
-                "at": now,
-                "n": self.tool_calls,
-                # Safe summary only — no secrets
-                "summary": str(outcome)[:400],
+                "type": "continue",
+                "kind": kind,
+                "n": self.continuations,
+                "at": datetime.now(timezone.utc).isoformat(),
+                **(detail or {}),
             }
         )
         self.execution.steps = steps
         self.execution.checkpoint = {
-            "phase": "tool",
-            "last_tool": name,
-            "tool_calls": self.tool_calls,
-            "at": now,
+            "phase": "continue",
+            "kind": kind,
+            "continuations": self.continuations,
         }
         await self.session.flush()
-        logger.info(
-            "agent_tool_step",
-            work_id=str(self.work.id),
-            execution_id=str(self.execution.id),
-            tool=name,
-            ok=bool(outcome.get("ok")),
-            n=self.tool_calls,
-        )
 
-    async def complete(self, *, reply_preview: str | None = None) -> None:
+    async def complete(self, result: dict[str, Any] | None = None) -> None:
         if not self.execution:
             return
-        now = datetime.now(timezone.utc)
         self.execution.status = "completed"
-        self.execution.completed_at = now
-        self.execution.checkpoint = {
-            "phase": "completed",
-            "at": now.isoformat(),
-            "tool_calls": self.tool_calls,
-            "reply_preview": (reply_preview or "")[:200],
-        }
-        steps = list(self.execution.steps or [])
-        steps.append({"type": "complete", "at": now.isoformat()})
-        self.execution.steps = steps
+        self.execution.completed_at = datetime.now(timezone.utc)
+        if result:
+            self.execution.checkpoint = {**(self.execution.checkpoint or {}), "result_preview": str(result)[:500]}
         await self.session.flush()
-        logger.info(
-            "agent_execution_completed",
-            work_id=str(self.work.id),
-            execution_id=str(self.execution.id),
-            tool_calls=self.tool_calls,
-        )
 
-    async def fail(self, error: str, error_class: str = "agent_failure") -> None:
+    async def fail(self, error: str) -> None:
         if not self.execution:
             return
-        now = datetime.now(timezone.utc)
         self.execution.status = "failed"
-        self.execution.completed_at = now
-        self.execution.error = error[:2000]
-        self.execution.error_class = error_class
-        self.execution.checkpoint = {
-            "phase": "failed",
-            "at": now.isoformat(),
-            "error_class": error_class,
-        }
+        self.execution.completed_at = datetime.now(timezone.utc)
+        self.execution.checkpoint = {**(self.execution.checkpoint or {}), "error": error[:1000]}
         await self.session.flush()

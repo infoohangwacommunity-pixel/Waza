@@ -91,7 +91,6 @@ class Settings(BaseSettings):
     terminal_require_sandbox: bool = False  # overridden true when app_env=production
     terminal_use_docker: bool = False  # prefer docker run --network none
 
-    agent_max_tool_rounds: int = 8
     allow_code_execution: bool = True
     allow_external_network: bool = True
     allow_html_artifacts: bool = True

@@ -46,6 +46,16 @@ async def world_exec(
     world = get_or_create_world(str(principal_id))
     argv = args.get("argv")
     script = args.get("script")
+    command = args.get("command") or args.get("commands")
+    if not argv and not script and command:
+        # Free-form shell snippet from agent directive
+        body = str(command)
+        if body.lstrip().startswith("!") or "\n" in body or any(
+            body.lstrip().startswith(x) for x in ("cd ", "pip ", "apt ", "mkdir ", "ls ", "cat ", "echo ", "python", "node ", "npm ")
+        ):
+            argv = ["bash", "-lc", body]
+        else:
+            script = body
     if not argv and not script:
         return {"ok": False, "error": "argv_or_script_required"}
     return await _exec(

@@ -1,9 +1,9 @@
 """
-WAX Prep Tutor — the brain.
+WAX Tutor — the AI is the agent.
 
-Infrastructure provides identity, World, messaging, security, and primitives.
-The AI decides what to retrieve, remember, process, create, and say.
-No Context Intelligence. No automatic context assembler. No workflow tool menu.
+No tool registry. No ToolSpec menu. No primitive catalogue sent to the model.
+The AI reasons, writes optional directive blocks, infrastructure executes them,
+observations return, the AI continues until the objective is complete.
 """
 
 from __future__ import annotations
@@ -18,9 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.agent.runtime import AgentRuntime
 from wax.db.models import Delivery, Message, Work
 from wax.delivery.presentation import InteractiveChoice, PresentableResponse
+from wax.intelligence.directives import parse_agent_output, Directive
 from wax.intelligence.providers import ChatMessage, CompletionRequest, get_intelligence
 from wax.observability.logging import get_logger
-from wax.primitives.registry import execute_primitive, list_primitive_specs
+from wax.primitives import memory as mem
+from wax.primitives import schedule as sched
+from wax.primitives import world_ops
+from wax.primitives import publish as pub
+from wax.primitives.interaction_ops import present_choices
 
 logger = get_logger(__name__)
 
@@ -29,268 +34,331 @@ TUTOR_SYSTEM = """You are WAX — a persistent adaptive tutor by WAX Prep.
 You are the tutor. Model vendors are infrastructure only — never claim to be those products.
 
 You have a secure persistent World for this student (files, packages, terminal) and durable
-memory that you control. Infrastructure enforces security and delivery; you decide.
+memory you control. Infrastructure enforces security and delivery; you decide.
 
 How you work:
 - Meet the student where they are. Discover needs through conversation.
-- You decide when to search, create, update, supersede, or forget memory.
-- You decide whether to inspect World files, run code, install packages, or publish a page.
-- When a file is in the World, you decide how to process it (run code, install tools, etc.).
-- Materials come from the student or what you create together — not a fixed curriculum bank.
-- Keep replies readable on messaging apps. Be warm, clear, honest.
-- Never invent memories, tool results, or URLs. Only claim success when a primitive returns ok.
-- Ordinary chat needs no primitives. Use them when they help.
+- When you need to act, write a fenced directive block. Infrastructure runs it and shows you the result.
+- Ordinary chat needs no directives.
 
+Directive blocks (optional, only when action is required):
+
+```world
+# shell commands or a short script to run inside the student's World
+python3 -c "print('hello')"
+```
+
+```memory
+action: create
+content: Student prefers short examples
+memory_type: semantic
+```
+(action may be: search | create | update | supersede | forget; include memory_id when updating/forgetting)
+
+```schedule
+delay_seconds: 5
+message_hint: Follow up on the practice problem
+```
+(or delay_hours / execute_at ISO timestamp)
+
+```publish
+title: Practice page
+# HTML or path relative to World
+```
+
+```choices
+Option A
+Option B
+```
+
+After directives, wait for observations. Then continue or finish with a clear reply to the student.
+Do not invent results. Only claim what observations confirm.
 Teaching: adapt to this person. Prefer a useful next step over a lecture dump.
-Vary how you check understanding. Do not run rigid quiz scripts.
-
-Privacy: if they ask to forget something, use memory_forget and confirm from the result.
-Do not invent privacy guarantees.
+Privacy: if they ask to forget something, use a memory forget directive and confirm from the result.
 """
 
 
 class TutorService:
     def __init__(self, session: AsyncSession):
         self.session = session
-        self.intelligence = get_intelligence()
 
     async def handle_message(self, work: Work) -> dict[str, Any]:
-        payload = work.input_payload or {}
-        principal_id = work.principal_id
-        conversation_id = work.conversation_id
-        user_text = (payload.get("text") or "").strip()
-        channel = payload.get("channel") or "unknown"
-        target = payload.get("target_external_id")
-
-        # Recent conversation only — no Assembler/CI selection
-        recent: list[dict[str, str]] = []
-        if conversation_id:
-            stmt = (
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at.desc())
-                .limit(20)
-            )
-            result = await self.session.execute(stmt)
-            msgs = list(reversed(result.scalars().all()))
-            for m in msgs:
-                recent.append({"role": m.role, "content": m.content or ""})
-
-        # Preferences (data availability, not intelligence selection)
-        prefs_block = ""
-        try:
-            from wax.domain.preferences import get_preferences
-
-            if principal_id:
-                prefs = await get_preferences(self.session, principal_id)
-                interesting = [
-                    f"- {k}: {v}"
-                    for k, v in (prefs or {}).items()
-                    if v not in (None, "", False)
-                ]
-                if interesting:
-                    prefs_block = (
-                        "\n--- Durable preferences (honor unless current turn overrides) ---\n"
-                        + "\n".join(interesting)
-                        + "\n--- End preferences ---\n"
-                    )
-        except Exception:
-            logger.exception("preferences_load_failed")
-
-        identity_block = ""
-        try:
-            if principal_id:
-                from wax.domain.identity import linked_channels_state, format_linked_channels_block
-
-                state = await linked_channels_state(
-                    self.session, principal_id=principal_id, current_channel=channel
-                )
-                identity_block = format_linked_channels_block(state)
-        except Exception:
-            logger.exception("identity_block_failed")
-
-        media_note = ""
-        local_path = payload.get("local_media_path") or payload.get("principal_media_path")
-        if local_path:
-            media_note = (
-                f"\n[System: a file is available in this student's World at {local_path}. "
-                f"You decide whether to inspect or process it via world_files / world_exec / world_acquire.]\n"
-            )
-        elif payload.get("media_id"):
-            media_note = (
-                "\n[System: inbound media was referenced but not yet staged. "
-                "Ask the student to resend if needed.]\n"
-            )
-
-        system = TUTOR_SYSTEM + prefs_block + identity_block + media_note
-        llm_messages: list[ChatMessage] = [ChatMessage(role="system", content=system)]
-        for m in recent:
-            role = "assistant" if m["role"] == "assistant" else "user"
-            llm_messages.append(ChatMessage(role=role, content=m["content"]))
-        if user_text:
-            # Ensure current message is last if not already in recent
-            if not recent or recent[-1].get("content") != user_text:
-                llm_messages.append(ChatMessage(role="user", content=user_text))
-
-        primitives = list_primitive_specs()
-        tool_ctx = {
-            "principal_id": principal_id,
-            "work_id": work.id,
-            "conversation_id": conversation_id,
-            "channel": channel,
-            "target_external_id": target,
-            "local_media_path": local_path,
-        }
-
         agent = AgentRuntime(self.session, work)
         await agent.start()
-        reply_text = ""
-        tool_results: list[dict] = []
-        interactive_payload: dict | None = None
-        max_rounds = agent.max_rounds
 
-        for round_i in range(max_rounds):
-            if not agent.can_call_tool() and round_i > 0:
-                break
-            response = await self.intelligence.complete(
-                CompletionRequest(
-                    messages=llm_messages,
-                    tools=primitives if agent.can_call_tool() else None,
-                    temperature=0.7,
-                    max_tokens=2048,
-                ),
-                allow_fallback=True,
-            )
-            if response.tool_calls and agent.can_call_tool():
-                llm_messages.append(
-                    ChatMessage(
-                        role="assistant",
-                        content=response.content or "",
-                        tool_calls=response.tool_calls,
-                    )
-                )
-                for tc in response.tool_calls:
-                    if not agent.can_call_tool():
-                        break
-                    fn = tc.get("function") or {}
-                    name = fn.get("name") or "unknown"
-                    args = fn.get("arguments")
-                    tc_id = tc.get("id") or str(uuid4())
-                    outcome = await execute_primitive(self.session, name, args, tool_ctx)
-                    out_dict = outcome if isinstance(outcome, dict) else {"ok": False}
-                    await agent.record_tool(name, args if isinstance(args, dict) else {}, out_dict)
-                    tool_results.append({"name": name, "result": out_dict})
-                    if name == "present_choices" and out_dict.get("ok"):
-                        interactive_payload = out_dict
-                    llm_messages.append(
-                        ChatMessage(
-                            role="tool",
-                            content=str(out_dict)[:4000],
-                            tool_call_id=tc_id,
-                            name=name,
-                        )
-                    )
-                continue
+        principal_id = work.principal_id
+        payload = work.input_payload or {}
+        user_text = (payload.get("text") or payload.get("user_text") or "").strip()
+        channel = payload.get("channel") or ""
 
-            reply_text = (response.content or "").strip()
-            break
+        history = await self._recent_messages(work, limit=20)
+        memory_snapshot = await self._memory_snapshot(principal_id)
+        world_snapshot = await self._world_snapshot(principal_id)
+        now = datetime.now(timezone.utc).isoformat()
 
-        if not reply_text:
-            reply_text = "I'm here — try sending that again."
+        system = TUTOR_SYSTEM
+        try:
+            from wax.domain.preferences import get_preferences
+            prefs = await get_preferences(self.session, principal_id) if principal_id else {}
+            if prefs:
+                system += f"\n\nStudent preferences: {prefs}"
+        except Exception:
+            pass
 
-        await agent.complete(reply_preview=reply_text)
-
-        # Persist assistant message
-        if conversation_id and principal_id:
-            self.session.add(
-                Message(
-                    id=uuid4(),
-                    conversation_id=conversation_id,
-                    principal_id=principal_id,
-                    role="assistant",
-                    direction="outbound",
-                    content=reply_text,
-                    channel=channel,
-                    work_id=work.id,
-                )
-            )
-            await self.session.flush()
-
-        buttons: list[InteractiveChoice] = []
-        if interactive_payload:
-            for c in interactive_payload.get("choices") or []:
-                buttons.append(
-                    InteractiveChoice(
-                        id=str(c.get("id") or ""),
-                        title=str(c.get("title") or ""),
-                        description=c.get("description"),
-                    )
-                )
-
-        presentable = PresentableResponse(
-            text=reply_text,
-            interactive_type="reply_buttons" if buttons else None,
-            buttons=buttons,
-            list_button_label=(interactive_payload or {}).get("list_button_label"),
+        env_block = (
+            f"CURRENT ENVIRONMENT\n"
+            f"- time_utc: {now}\n"
+            f"- channel: {channel or 'unknown'}\n"
+            f"- world:\n{world_snapshot}\n"
+            f"- durable_memory (AI-owned; search/update via directives if needed):\n{memory_snapshot}\n"
         )
 
-        # Delivery — infrastructure sends; AI already decided content
-        if target and channel and principal_id:
-            did = uuid4()
-            delivery = Delivery(
-                id=did,
-                work_id=work.id,
-                principal_id=principal_id,
-                channel=channel,
-                target_external_id=str(target),
-                status="pending",
-                content=reply_text,
-                idempotency_key=f"work:{work.id}:{did}",
-            )
-            self.session.add(delivery)
-            await self.session.flush()
-            try:
-                from wax.delivery.senders import deliver
+        messages: list[ChatMessage] = [
+            ChatMessage(role="system", content=system),
+            ChatMessage(role="system", content=env_block),
+        ]
+        for h in history:
+            messages.append(ChatMessage(role=h["role"], content=h["content"]))
+        if user_text:
+            messages.append(ChatMessage(role="user", content=user_text))
+        elif not history:
+            messages.append(ChatMessage(role="user", content="(student opened the conversation)"))
 
-                result = await deliver(
-                    channel=channel,
-                    target=str(target),
-                    text=reply_text,
-                    interactive=interactive_payload,
-                )
-                if isinstance(result, dict) and result.get("status") == "failed":
-                    delivery.status = "failed"
-                    delivery.error = str(result.get("reason") or "send_failed")[:500]
-                else:
-                    delivery.status = "sent"
-                    delivery.delivered_at = datetime.now(timezone.utc)
-                await self.session.flush()
+        intelligence = get_intelligence()
+        observations: list[str] = []
+        final_reply = ""
+        interactive = None
+        actions_log: list[dict[str, Any]] = []
+
+        while agent.can_continue():
+            req = CompletionRequest(messages=messages, temperature=0.7, max_tokens=2000)
+            try:
+                response = await intelligence.complete(req)
             except Exception as e:
-                logger.exception("delivery_failed", work_id=str(work.id))
-                delivery.status = "failed"
-                delivery.error = str(e)[:500]
-                await self.session.flush()
+                logger.exception("tutor_completion_failed")
+                await agent.fail(str(e))
+                final_reply = "I hit a temporary issue thinking that through. Please try again in a moment."
+                break
+
+            content = (response.content or "").strip()
+            turn = parse_agent_output(content)
+            messages.append(ChatMessage(role="assistant", content=content))
+
+            if turn.reply:
+                final_reply = turn.reply
+
+            if not turn.directives:
+                await agent.record_continuation("reply", {"chars": len(final_reply)})
+                break
+
+            # Execute directives as infrastructure, not as model tool-calls
+            obs_parts: list[str] = []
+            for d in turn.directives:
+                result = await self._execute_directive(d, principal_id=principal_id, work=work)
+                actions_log.append({"kind": d.kind, "ok": result.get("ok"), "summary": str(result)[:300]})
+                obs_parts.append(f"[{d.kind}] {self._format_obs(result)}")
+                if d.kind == "choices" and result.get("ok"):
+                    interactive = result.get("interactive")
+
+            observation = "OBSERVATIONS:\n" + "\n".join(obs_parts)
+            observations.append(observation)
+            messages.append(ChatMessage(role="user", content=observation))
+            await agent.record_continuation("directive", {"n": len(turn.directives)})
+
+            # If only choices / publish with a reply, can stop
+            kinds = {d.kind for d in turn.directives}
+            if kinds <= {"choices", "publish"} and final_reply:
+                break
+
+        else:
+            # safety ceiling hit
+            if not final_reply:
+                final_reply = "I need a moment longer on that — please send a short follow-up and I'll continue."
+
+        await agent.complete({"reply_preview": final_reply[:400], "actions": len(actions_log)})
+
+        # Deliver
+        if principal_id and final_reply:
+            await self._deliver(work, final_reply, interactive=interactive, channel=channel)
 
         return {
-            "ok": True,
-            "reply": reply_text,
-            "tool_results": tool_results,
-            "interaction": interactive_payload,
-            "presentable": presentable,
+            "reply": final_reply,
+            "actions": actions_log,
+            "observations": observations,
+            "interactive": interactive,
         }
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
-        """Wake path: scheduled Work becomes a message the brain handles."""
-        payload = dict(work.input_payload or {})
-        hint = payload.get("message_hint") or payload.get("reason") or "scheduled follow-up"
-        payload["text"] = (
-            f"[System scheduled wake] {hint}\n"
-            "Continue helpfully for this student based on memory and context. "
-            "Do not mention internal scheduling machinery."
-        )
-        work.input_payload = payload
-        await self.session.flush()
+        """Wake path: same agent, message_hint as the user-facing objective."""
+        payload = work.input_payload or {}
+        hint = payload.get("message_hint") or payload.get("reason") or "Scheduled follow-up."
+        # Reuse handle_message shape
+        work.input_payload = {**(payload), "user_text": f"[Scheduled] {hint}", "text": f"[Scheduled] {hint}"}
         return await self.handle_message(work)
 
-    async def handle_surface_request(self, work: Work) -> dict[str, Any]:
-        return await self.handle_message(work)
+    async def _execute_directive(
+        self, d: Directive, *, principal_id, work: Work
+    ) -> dict[str, Any]:
+        ctx = {
+            "principal_id": principal_id,
+            "work_id": str(work.id) if work.id else None,
+            "conversation_id": work.conversation_id,
+        }
+        try:
+            if d.kind == "world":
+                body = d.parsed.get("commands") or d.body
+                return await world_ops.world_exec(
+                    self.session,
+                    {"command": body},
+                    ctx,
+                )
+            if d.kind == "memory":
+                return await self._memory_directive(d, principal_id)
+            if d.kind == "schedule":
+                return await sched.schedule_action(self.session, d.parsed, ctx)
+            if d.kind == "publish":
+                return await pub.publish_surface(
+                    self.session,
+                    {
+                        "title": d.parsed.get("title") or "WAX page",
+                        "html": d.body,
+                    },
+                    ctx,
+                )
+            if d.kind == "choices":
+                choices = d.parsed.get("choices") or []
+                return await present_choices(
+                    self.session,
+                    {"choices": choices, "prompt": d.body},
+                    ctx,
+                )
+            return {"ok": False, "error": f"unknown_directive:{d.kind}"}
+        except Exception as e:
+            logger.exception("directive_failed", kind=d.kind)
+            return {"ok": False, "error": str(e)[:500]}
+
+    async def _memory_directive(self, d: Directive, principal_id) -> dict[str, Any]:
+        action = (d.parsed.get("action") or "create").lower()
+        if action == "search":
+            return await mem.memory_search(
+                self.session,
+                principal_id,
+                query=d.parsed.get("query") or d.body,
+                limit=20,
+            )
+        if action == "create":
+            return await mem.memory_create(
+                self.session,
+                principal_id,
+                content=str(d.parsed.get("content") or d.body),
+                memory_type=str(d.parsed.get("memory_type") or d.parsed.get("type") or "semantic"),
+            )
+        if action == "update":
+            return await mem.memory_update(
+                self.session,
+                principal_id,
+                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
+                content=d.parsed.get("content"),
+            )
+        if action == "supersede":
+            return await mem.memory_supersede(
+                self.session,
+                principal_id,
+                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
+                new_content=str(d.parsed.get("content") or d.body),
+            )
+        if action in ("forget", "delete"):
+            return await mem.memory_forget(
+                self.session,
+                principal_id,
+                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
+            )
+        return {"ok": False, "error": f"unknown_memory_action:{action}"}
+
+    def _format_obs(self, result: dict[str, Any]) -> str:
+        if not result:
+            return "empty"
+        if result.get("ok") is False:
+            return f"error: {result.get('error')}"
+        # compact
+        keys = [k for k in result if k not in ("ok",)][:8]
+        parts = [f"{k}={result[k]!r}"[:120] for k in keys]
+        return "; ".join(parts)[:800]
+
+    async def _recent_messages(self, work: Work, limit: int = 20) -> list[dict[str, str]]:
+        if not work.conversation_id:
+            return []
+        q = (
+            select(Message)
+            .where(Message.conversation_id == work.conversation_id)
+            .order_by(Message.created_at.desc())
+            .limit(limit)
+        )
+        rows = (await self.session.execute(q)).scalars().all()
+        out = []
+        for m in reversed(rows):
+            role = (m.role or "").strip() or (
+                "assistant" if (m.direction or "").lower() in ("outbound", "out") else "user"
+            )
+            if role not in ("user", "assistant", "system"):
+                role = "assistant" if role in ("tutor", "bot") else "user"
+            content = (m.content or "")[:4000]
+            if content:
+                out.append({"role": role, "content": content})
+        return out
+
+    async def _memory_snapshot(self, principal_id) -> str:
+        if not principal_id:
+            return "(no principal)"
+        try:
+            result = await mem.memory_search(self.session, principal_id, query=None, limit=12)
+            items = result.get("memories") or []
+            if not items:
+                return "(none yet)"
+            lines = []
+            for it in items:
+                lines.append(f"- [{it.get('id')}] ({it.get('memory_type')}) {it.get('content')}")
+            return "\n".join(lines)[:3000]
+        except Exception:
+            return "(memory unavailable)"
+
+    async def _world_snapshot(self, principal_id) -> str:
+        if not principal_id:
+            return "(no world)"
+        try:
+            disc = await world_ops.world_discover(self.session, {}, {"principal_id": principal_id})
+            if not disc.get("ok"):
+                return f"(world: {disc.get('error') or 'unavailable'})"
+            return str(disc)[:1500]
+        except Exception:
+            return "(world unavailable)"
+
+    async def _deliver(
+        self,
+        work: Work,
+        reply: str,
+        *,
+        interactive=None,
+        channel: str = "",
+    ) -> None:
+        try:
+            from wax.delivery.senders import deliver
+            from wax.domain.identity import primary_channel_target
+
+            if not work.principal_id:
+                return
+            target = await primary_channel_target(self.session, work.principal_id)
+            if not target:
+                return
+            ch, external_id = target
+            await deliver(
+                self.session,
+                channel=ch,
+                external_id=external_id,
+                content=reply,
+                principal_id=work.principal_id,
+                work_id=work.id,
+                interactive=interactive,
+            )
+        except Exception:
+            logger.exception("tutor_deliver_failed")

@@ -85,7 +85,6 @@ async def health_detail():
             "allow_code_execution": getattr(settings, "allow_code_execution", True),
             "allow_external_network": getattr(settings, "allow_external_network", True),
             "allow_html_artifacts": getattr(settings, "allow_html_artifacts", True),
-            "agent_max_tool_rounds": getattr(settings, "agent_max_tool_rounds", 8),
         },
         "capabilities": [
             "interactions",

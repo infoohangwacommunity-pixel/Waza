@@ -3,7 +3,7 @@ WAX Prep durable primitives.
 
 No hardcoded educational modes.
 General concepts: Principal, Identity, Conversation, Message,
-Work, Execution, Memory, Goal, Activity, Artifact, Schedule.
+Work, Execution, Memory, Goal, Artifact, ScheduledAction.
 """
 
 from __future__ import annotations

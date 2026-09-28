@@ -113,16 +113,9 @@ class ChatMessage:
 
 
 @dataclass
-class ToolSpec:
-    name: str
-    description: str
-    parameters: dict[str, Any]
-
-
-@dataclass
 class CompletionRequest:
     messages: list[ChatMessage]
-    tools: list[ToolSpec] | None = None
+    tools: list | None = None  # unused — agent uses text directives, not function calling
     temperature: float | None = None
     max_tokens: int | None = None
     stop: list[str] | None = None
@@ -197,31 +190,9 @@ def _serialize_openai_messages(messages: list[ChatMessage]) -> list[dict[str, An
     return out
 
 
-def _sanitize_tool_specs_for_provider(tools: list[ToolSpec] | None) -> list[dict[str, Any]] | None:
-    """Ensure tool schemas are plain JSON-serializable objects."""
-    if not tools:
-        return None
-    import json as _json
-    out = []
-    for t in tools:
-        params = t.parameters or {"type": "object", "properties": {}}
-        # Round-trip to drop non-JSON types
-        try:
-            params = _json.loads(_json.dumps(params, default=str))
-        except Exception:
-            params = {"type": "object", "properties": {}}
-        desc = (t.description or "")[:500]
-        out.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": t.name,
-                    "description": desc,
-                    "parameters": params,
-                },
-            }
-        )
-    return out
+def _sanitize_tool_specs_for_provider(tools: list | None) -> list[dict[str, Any]] | None:
+    """Agent architecture does not use provider function-calling tools."""
+    return None
 
 
 class OpenAICompatibleProvider(IntelligenceProvider):
@@ -327,21 +298,23 @@ class OpenAICompatibleProvider(IntelligenceProvider):
         try:
             choice = data["choices"][0]
             message = choice["message"]
-            from wax.intelligence.tool_protocol import normalize_completion_payload
-
-            norm = normalize_completion_payload(
-                content=message.get("content"),
-                tool_calls=message.get("tool_calls") or [],
+            # Text-first path. Tool-call payloads are ignored by the agent runtime
+            # (directives are free-form text, not provider function calling).
+            content = message.get("content")
+            if isinstance(content, list):
+                # Some providers return content parts
+                parts = []
+                for p in content:
+                    if isinstance(p, dict) and p.get("type") == "text":
+                        parts.append(p.get("text") or "")
+                    elif isinstance(p, str):
+                        parts.append(p)
+                content = "".join(parts)
+            return CompletionResponse(
+                content=content if isinstance(content, str) else (str(content) if content else None),
+                tool_calls=[],
                 finish_reason=choice.get("finish_reason"),
                 model=data.get("model"),
-                provider=self.name,
-                raw=data,
-            )
-            return CompletionResponse(
-                content=norm.get("content"),
-                tool_calls=norm.get("tool_calls") or [],
-                finish_reason=norm.get("finish_reason"),
-                model=norm.get("model"),
                 raw=data,
                 provider=self.name,
             )

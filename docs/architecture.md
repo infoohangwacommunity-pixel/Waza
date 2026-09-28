@@ -4,55 +4,59 @@
 
 Infrastructure provides reality. AI interprets and decides.
 
+There is no tool registry, no primitive catalogue exposed to the model,
+and no second "intelligence layer" that selects context or workflows for the AI.
+
 ## Request lifecycle
 
 1. Channel webhook validates and persists inbound message + Work
 2. Worker claims Work
 3. Media (if any) is placed into the student's World — not interpreted
-4. Tutor (brain) receives principal, message, World access, primitives
-5. AI decides: memory R/W, World exec, schedule, publish, reply
-6. Infrastructure delivers and stores durable state the AI requested
+4. Tutor agent receives principal, history, memory snapshot, World snapshot
+5. AI reasons; may emit free-form directive blocks
+6. Infrastructure executes directives (World exec, memory writes, schedule, publish)
+7. Observations return to the AI; it continues or finishes
+8. Infrastructure delivers the reply
 
 ## Components
 
 | Layer | Responsibility |
 |-------|----------------|
-| Messaging | Receive/send, no tutoring logic |
+| Messaging | Receive/send |
 | Work / Worker | Durable claim, retry, recovery |
-| Tutor | Brain — decide and call primitives |
-| Primitives | memory_*, world_*, schedule, publish, present_choices |
+| Tutor agent | Brain — reason and act |
 | World | Isolated persistent files/packages/terminal |
+| Memory store | Durable state the AI owns (create/update/supersede/forget) |
+| Scheduler | Store wake times; create Work when due |
 | Security | Isolation, auth, secrets, sandbox |
 | Delivery | Channel send + retries |
-| Interaction | Server-authoritative choices/expiry |
+| Surfaces | Secure temporary web exposure of AI-authored pages |
 
 ## Explicitly absent
 
-- Context Intelligence (second brain)
-- Automatic context assembler selection
-- Specialized media intelligence pipelines
-- Educational workflow tool menus
-- Token-budget intelligence gates
+- Tool registry / ToolSpec / function-calling tool menus
+- Primitive catalogue presented to the model as tools
+- Context Intelligence / Context Assembler
+- Learner / assessment / knowledge engines
+- Automatic media interpretation pipelines
+- Artificial intelligence step budgets (only infrastructure safety ceilings)
 
-## Database baseline
+## Directives (not tools)
 
-Core tables only:
+The model may include fenced blocks in its text:
 
-- principals, interface_identities, worlds
-- conversations, messages, inbound_events
-- works, executions, tool_executions, deliveries
-- memories, memory_episodes, memory_links
-- goals, artifacts, scheduled_actions, interactions
-- channel_link_challenges
-- surfaces (+ revisions, sessions, events, ai_requests)
-- principal_workloads
+- `world` — run commands/scripts in the student World
+- `memory` — search/create/update/supersede/forget durable state
+- `schedule` — ask infrastructure to wake later
+- `publish` — create a temporary web surface
+- `choices` — present interactive choices
 
-Educational/intelligence explosion tables (assessments, concepts, evidence graphs,
-automatic observations, publications, etc.) are retired. Schema is reproducible
-from Alembic revisions 001 → 002 → 003.
+These are parsed from free text. They are not OpenAI tool schemas.
 
-## Security boundary
+## Database
 
-AI has broad capability **inside** the boundary: World isolation, quotas,
-secret protection, webhook verification, rate protection. Infrastructure
-does not interpret student meaning or invent durable facts.
+Core durable state: principals, identities, worlds, conversations, messages,
+works, executions, deliveries, memories, goals, artifacts, scheduled_actions,
+interactions, surfaces, channel_link_challenges.
+
+Educational/intelligence explosion tables are retired.

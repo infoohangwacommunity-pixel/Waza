@@ -955,21 +955,7 @@ async def recovery_loop() -> None:
                             )
                 except Exception:
                     logger.exception("interaction_expiry_error")
-                try:
-                    from wax.db.models import Activity
-                    now = datetime.now(timezone.utc)
-                    exp = await session.execute(
-                        select(Activity).where(
-                            Activity.status == "active",
-                            Activity.ends_at.is_not(None),
-                            Activity.ends_at < now,
-                        ).limit(20)
-                    )
-                    for act in exp.scalars().all():
-                        act.status = "expired"
-                    await session.flush()
-                except Exception:
-                    logger.exception("activity_expiry_error")
+                pass  # Activity model retired
                 try:
                     retried = await DeliveryRetryService(session).process_batch(limit=10)
                     if retried:
