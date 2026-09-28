@@ -73,7 +73,7 @@ async def health_detail():
         "status": "ok",
         "app": settings.app_name,
         "env": settings.app_env,
-        "version": "0.3.0",
+        "version": "0.2.0",
         "whatsapp_enabled": settings.whatsapp_enabled,
         "telegram_enabled": settings.telegram_enabled,
         "world_exec_enabled": settings.isolation_enabled,
