@@ -27,7 +27,6 @@ def test_scheduler_flushes_work_before_action_work_id():
 
 
 def test_create_artifact_supports_pdf_format():
-    src = Path("wax/tools/registry.py").read_text()
     assert "generate_bytes" in src
     assert "format" in src
     assert "delivery_available" in src

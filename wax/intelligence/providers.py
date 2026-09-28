@@ -105,17 +105,18 @@ class ProviderError(Exception):
 
 @dataclass
 class ChatMessage:
-    role: str  # system | user | assistant | tool
+    """Text-only chat turn. No tool/function-calling roles."""
+
+    role: str  # system | user | assistant
     content: str
     name: str | None = None
-    tool_call_id: str | None = None
-    tool_calls: list[dict[str, Any]] | None = None
 
 
 @dataclass
 class CompletionRequest:
+    """Text completion only — no tools catalogue is ever sent to the provider."""
+
     messages: list[ChatMessage]
-    tools: list | None = None  # unused — agent uses text directives, not function calling
     temperature: float | None = None
     max_tokens: int | None = None
     stop: list[str] | None = None
@@ -125,7 +126,6 @@ class CompletionRequest:
 @dataclass
 class CompletionResponse:
     content: str | None
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
     finish_reason: str | None = None
     model: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
@@ -140,59 +140,19 @@ class IntelligenceProvider(abc.ABC):
         ...
 
 
-
 def _serialize_openai_messages(messages: list[ChatMessage]) -> list[dict[str, Any]]:
-    """OpenAI-compatible message list; tool call arguments must be JSON strings."""
-    import json as _json
+    """OpenAI-compatible message list — text roles only."""
     out: list[dict[str, Any]] = []
     for m in messages:
-        msg: dict[str, Any] = {"role": m.role}
-        # Tool role requires content string
-        if m.role == "tool":
-            msg["content"] = m.content if m.content is not None else ""
-            if m.tool_call_id:
-                msg["tool_call_id"] = m.tool_call_id
-            if m.name:
-                msg["name"] = m.name
-            out.append(msg)
-            continue
-        if m.tool_calls:
-            ser_calls = []
-            for tc in m.tool_calls:
-                if not isinstance(tc, dict):
-                    continue
-                fn = dict(tc.get("function") or {})
-                args = fn.get("arguments")
-                if isinstance(args, dict):
-                    fn["arguments"] = _json.dumps(args, ensure_ascii=False)
-                elif args is None:
-                    fn["arguments"] = "{}"
-                elif not isinstance(args, str):
-                    fn["arguments"] = _json.dumps(args, ensure_ascii=False, default=str)
-                ser_calls.append(
-                    {
-                        "id": tc.get("id") or "call",
-                        "type": tc.get("type") or "function",
-                        "function": {
-                            "name": fn.get("name") or "unknown",
-                            "arguments": fn.get("arguments") or "{}",
-                        },
-                    }
-                )
-            msg["tool_calls"] = ser_calls
-            # Many providers require content null or "" with tool_calls
-            msg["content"] = m.content if m.content else None
-        else:
-            msg["content"] = m.content if m.content is not None else ""
-        if m.name and m.role != "tool":
+        role = m.role if m.role in ("system", "user", "assistant") else "user"
+        msg: dict[str, Any] = {
+            "role": role,
+            "content": m.content if m.content is not None else "",
+        }
+        if m.name and role == "user":
             msg["name"] = m.name
         out.append(msg)
     return out
-
-
-def _sanitize_tool_specs_for_provider(tools: list | None) -> list[dict[str, Any]] | None:
-    """Agent architecture does not use provider function-calling tools."""
-    return None
 
 
 class OpenAICompatibleProvider(IntelligenceProvider):
@@ -223,10 +183,6 @@ class OpenAICompatibleProvider(IntelligenceProvider):
             "temperature": request.temperature if request.temperature is not None else 0.7,
             "max_tokens": request.max_tokens if request.max_tokens is not None else 4096,
         }
-        tool_payload = _sanitize_tool_specs_for_provider(request.tools)
-        if tool_payload:
-            body["tools"] = tool_payload
-            body["tool_choice"] = "auto"
         # Ensure body is JSON-serializable (Upstage rejects malformed bodies)
         try:
             import json as _json
@@ -312,7 +268,6 @@ class OpenAICompatibleProvider(IntelligenceProvider):
                 content = "".join(parts)
             return CompletionResponse(
                 content=content if isinstance(content, str) else (str(content) if content else None),
-                tool_calls=[],
                 finish_reason=choice.get("finish_reason"),
                 model=data.get("model"),
                 raw=data,
@@ -349,43 +304,13 @@ class AnthropicProvider(IntelligenceProvider):
         for m in request.messages:
             if m.role == "system":
                 system = (system + "\n" + m.content) if system else m.content
-            elif m.role == "tool":
-                # Anthropic tool result
+            else:
                 messages.append(
                     {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": m.tool_call_id or "tool",
-                                "content": m.content or "",
-                            }
-                        ],
+                        "role": m.role if m.role in ("user", "assistant") else "user",
+                        "content": m.content or "",
                     }
                 )
-            elif m.role == "assistant" and m.tool_calls:
-                blocks: list[dict[str, Any]] = []
-                if m.content:
-                    blocks.append({"type": "text", "text": m.content})
-                for tc in m.tool_calls:
-                    fn = tc.get("function") or {}
-                    import json as _json
-                    raw_args = fn.get("arguments") or "{}"
-                    try:
-                        parsed = _json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    except Exception:
-                        parsed = {"raw": raw_args}
-                    blocks.append(
-                        {
-                            "type": "tool_use",
-                            "id": tc.get("id") or "tool",
-                            "name": fn.get("name") or tc.get("name") or "tool",
-                            "input": parsed if isinstance(parsed, dict) else {"value": parsed},
-                        }
-                    )
-                messages.append({"role": "assistant", "content": blocks})
-            else:
-                messages.append({"role": m.role if m.role in ("user", "assistant") else "user", "content": m.content or ""})
 
         body: dict[str, Any] = {
             "model": self.model,
@@ -395,15 +320,6 @@ class AnthropicProvider(IntelligenceProvider):
         }
         if system:
             body["system"] = system
-        if request.tools:
-            body["tools"] = [
-                {
-                    "name": t.name,
-                    "description": t.description or "",
-                    "input_schema": t.parameters or {"type": "object", "properties": {}},
-                }
-                for t in request.tools
-            ]
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -462,30 +378,15 @@ class AnthropicProvider(IntelligenceProvider):
         data = resp.json()
         try:
             content_blocks = data.get("content", [])
-            text = "".join(
+            text_out = "".join(
                 block.get("text", "") for block in content_blocks if block.get("type") == "text"
             )
-            tool_calls = []
-            for block in content_blocks:
-                if block.get("type") == "tool_use":
-                    import json as _json
-                    tool_calls.append(
-                        {
-                            "id": block.get("id"),
-                            "type": "function",
-                            "function": {
-                                "name": block.get("name"),
-                                "arguments": _json.dumps(block.get("input") or {}),
-                            },
-                        }
-                    )
             return CompletionResponse(
-                content=text or None,
+                content=text_out or None,
                 finish_reason=data.get("stop_reason"),
                 model=data.get("model"),
                 raw=data,
                 provider=self.name,
-                tool_calls=tool_calls,
             )
         except (KeyError, TypeError) as e:
             raise ProviderError(

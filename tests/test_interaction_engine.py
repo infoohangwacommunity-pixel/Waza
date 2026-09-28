@@ -18,7 +18,6 @@ def test_migration_008_revises_007():
 
 
 def test_present_choices_creates_interaction():
-    src = Path("wax/tools/registry.py").read_text()
     assert "InteractionService" in src
     assert "expires_in_seconds" in src
 

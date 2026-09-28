@@ -937,7 +937,6 @@ class SurfaceService:
         *,
         request_row_id: UUID | str,
         reply: str | None,
-        tools: list | None = None,
         error: str | None = None,
     ) -> None:
         row = await self.session.get(SurfaceAiRequest, UUID(str(request_row_id)))
@@ -950,7 +949,7 @@ class SurfaceService:
         else:
             row.status = "completed"
             row.reply_preview = (reply or "")[:4000]
-            row.result = {"tools": tools or []}
+            row.result = {"reply_preview": (reply or "")[:400]}
         if surface:
             surface.last_ai_response_at = utcnow()
             surface.last_activity_at = utcnow()

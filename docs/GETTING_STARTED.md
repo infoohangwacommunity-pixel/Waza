@@ -27,7 +27,7 @@ The tutor discovers what the person needs through conversation.
 When someone sends a photo:
 
 1. WAX downloads it into a private workspace folder
-2. The AI can OCR / probe it with local tools
+2. The AI can process it inside the student World
 3. Only if that is not enough, it can call a vision model
 
 That saves money and keeps the terminal as the AI’s workbench.

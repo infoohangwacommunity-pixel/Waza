@@ -202,8 +202,7 @@ async def process_message_response(session, work: Work) -> None:
         work.result_payload = {
             "reply_preview": (result.get("reply") or "")[:400],
             "memories_used": result.get("memories_used", 0),
-            "tools": result.get("tools") or [],
-            "interactive": result.get("interactive"),
+                        "interactive": result.get("interactive"),
         }
         await session.flush()
         logger.info(
@@ -213,20 +212,13 @@ async def process_message_response(session, work: Work) -> None:
         )
         tel = get_turn()
         if tel:
-            tel.orchestration_path = str(
-                (result or {}).get("orchestration_path")
-                or tel.orchestration_path
-                or ""
-            )
-            tel.capability_families = list(
-                (result or {}).get("capability_families") or tel.capability_families or []
-            )
-            tel.tools_called = len((result or {}).get("tools") or [])
-            end_turn(outcome="completed")
+            acts = (result or {}).get("actions") or []
+            tel.directives_run = len(acts) if isinstance(acts, list) else 0
+            end_turn()
         await _attempt_deliveries(session, work.id)
     except Exception as e:
         try:
-            end_turn(outcome="failed")
+            end_turn()
         except Exception:
             pass
         logger.exception("tutor_turn_failed", work_id=str(work.id))
@@ -379,14 +371,12 @@ async def process_surface_ai(session, work: Work) -> None:
         work.completed_at = datetime.now(timezone.utc)
         work.result_payload = {
             "reply_preview": (result.get("reply") or "")[:400],
-            "tools": result.get("tools") or [],
-        }
+                    }
         if request_id:
             await svc.apply_ai_result(
                 request_row_id=request_id,
                 reply=result.get("reply"),
-                tools=result.get("tools") or [],
-            )
+                            )
         await session.flush()
         logger.info("surface_ai_completed", work_id=str(work.id))
         # Optional channel delivery if surface work is also tied to a conversation
@@ -603,7 +593,7 @@ async def _attempt_deliveries(session, work_id) -> None:
         try:
             wrow = await session.get(Work, work_id)
             interactive = (wrow.result_payload or {}).get("interactive") if wrow else None
-            tools = (wrow.result_payload or {}).get("tools") or [] if wrow else []
+            tools = []  # tool result catalogue removed; artifacts staged via World
             inbound_mid = None
             meta = delivery.metadata_ or {}
             if isinstance(meta, dict):
