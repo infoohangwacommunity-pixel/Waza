@@ -114,7 +114,7 @@ class ChatMessage:
 
 @dataclass
 class CompletionRequest:
-    """Text completion only — no tools catalogue is ever sent to the provider."""
+    """Text completion only — no tools catalogue; max_tokens is optional resource bound, not an intelligence budget."""
 
     messages: list[ChatMessage]
     temperature: float | None = None
@@ -181,8 +181,11 @@ class OpenAICompatibleProvider(IntelligenceProvider):
             "model": self.model,
             "messages": _serialize_openai_messages(request.messages),
             "temperature": request.temperature if request.temperature is not None else 0.7,
-            "max_tokens": request.max_tokens if request.max_tokens is not None else 4096,
         }
+        # max_tokens only when the caller sets it. Default is provider/model natural limit —
+        # not an application intelligence budget. When set, treat as infrastructure resource bound.
+        if request.max_tokens is not None:
+            body["max_tokens"] = int(request.max_tokens)
         # Ensure body is JSON-serializable (Upstage rejects malformed bodies)
         try:
             import json as _json
@@ -312,10 +315,12 @@ class AnthropicProvider(IntelligenceProvider):
                     }
                 )
 
+        # Anthropic API requires max_tokens. Use caller value or a high resource safety floor
+        # (not an application intelligence budget on how much the model may think).
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages or [{"role": "user", "content": "Hello"}],
-            "max_tokens": request.max_tokens if request.max_tokens is not None else 4096,
+            "max_tokens": int(request.max_tokens) if request.max_tokens is not None else 8192,
             "temperature": request.temperature if request.temperature is not None else 0.7,
         }
         if system:

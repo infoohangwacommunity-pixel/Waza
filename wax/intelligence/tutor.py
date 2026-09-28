@@ -137,7 +137,7 @@ class TutorService:
         actions_log: list[dict[str, Any]] = []
 
         while agent.can_continue():
-            req = CompletionRequest(messages=messages, temperature=0.7, max_tokens=2000)
+            req = CompletionRequest(messages=messages, temperature=0.7)
             try:
                 response = await intelligence.complete(req)
             except Exception as e:

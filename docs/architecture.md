@@ -60,3 +60,18 @@ works, executions, deliveries, memories, goals, artifacts, scheduled_actions,
 interactions, surfaces, channel_link_challenges.
 
 Educational/intelligence explosion tables are retired.
+
+
+## Intelligence vs infrastructure safety
+
+Application code must **not** impose artificial intelligence limits such as:
+- max tool rounds / max actions as a teaching or reasoning budget
+- forced max_tokens ceilings on tutor completions
+- memory or context packages that cap what the model may know
+
+Infrastructure **may** enforce safety boundaries against:
+- runaway agent loops (continuation ceiling, wall clock)
+- resource exhaustion (process CPU/memory, output size, rate limits)
+- security violations (sandbox, principal isolation)
+
+Those safety boundaries are not conceptual limits on what the AI is allowed to understand or decide.
