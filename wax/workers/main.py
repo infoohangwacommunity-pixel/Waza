@@ -945,7 +945,6 @@ async def recovery_loop() -> None:
                             )
                 except Exception:
                     logger.exception("interaction_expiry_error")
-                pass  # Activity model retired
                 try:
                     retried = await DeliveryRetryService(session).process_batch(limit=10)
                     if retried:
@@ -980,12 +979,6 @@ async def recovery_loop() -> None:
                     except Exception:
                         logger.exception("resuscitate_rate_limited_failed")
 
-                if cycle % 10 == 0:
-                    try:
-                            pass  # research_loop retired — AI decides research via agent directives
-                            pass  # AI owns memory lifecycle
-                    except Exception:
-                        logger.exception("memory_consolidation_batch_error")
         except Exception:
             logger.exception("recovery_error")
         await asyncio.sleep(max(5.0, settings.scheduler_poll_interval_seconds))
