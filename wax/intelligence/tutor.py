@@ -118,8 +118,6 @@ prompt: Which path?
 - Try a problem
 ```
 
-Aliases still accepted: memory→state, schedule→time, choices→interact.
-
 After infrastructure observations, continue or finish with a clear reply to the student.
 Privacy: if they ask to forget something, use state forget and confirm from the result.
 """
@@ -172,7 +170,7 @@ class TutorService:
             f"- principal_id: {principal_id or 'none'}\n"
             f"- world: available — persistent isolated workspace (files, packages, terminal). "
             f"Inspect or act only via a ```world directive when needed.\n"
-            f"- durable state: available — search/get/create/update/supersede/forget via ```state (alias ```memory). "
+            f"- durable state: available — search/get/create/update/supersede/forget via ```state. "
             f"Nothing is preloaded; inspect only when needed.\n"
             f"- time / publish / interact: available via matching infrastructure channels when needed.\n"
         )
@@ -217,13 +215,13 @@ class TutorService:
                 await agent.record_continuation("reply", {"chars": len(final_reply)})
                 break
 
-            # Execute directives as infrastructure, not as model tool-calls
+            # Infrastructure executes; AI decides why
             obs_parts: list[str] = []
             for d in turn.directives:
                 result = await self._execute_directive(d, principal_id=principal_id, work=work)
-                actions_log.append({"kind": d.kind, "ok": result.get("ok"), "summary": str(result)[:300]})
-                obs_parts.append(f"[{d.kind}] {self._format_obs(result)}")
-                if getattr(d, "channel", d.kind) == "interact" and result.get("ok"):
+                actions_log.append({"channel": d.channel, "ok": result.get("ok"), "summary": str(result)[:300]})
+                obs_parts.append(f"[{d.channel}] {self._format_obs(result)}")
+                if d.channel == "interact" and result.get("ok"):
                     interactive = result.get("interactive")
 
             observation = "OBSERVATIONS:\n" + "\n".join(obs_parts)
@@ -231,9 +229,8 @@ class TutorService:
             messages.append(ChatMessage(role="user", content=observation))
             await agent.record_continuation("directive", {"n": len(turn.directives)})
 
-            # If only choices / publish with a reply, can stop
-            kinds = {getattr(d, "channel", d.kind) for d in turn.directives}
-            if kinds <= {"interact", "publish"} and final_reply:
+            channels = {d.channel for d in turn.directives}
+            if channels <= {"interact", "publish"} and final_reply:
                 break
 
         else:
@@ -273,83 +270,63 @@ class TutorService:
             "channel": payload.get("channel"),
             "target_external_id": payload.get("target_external_id") or payload.get("external_id"),
         }
+        f = d.fields
         try:
-            # Infrastructure channels only — not an application capability menu
-            ch = getattr(d, "channel", None) or d.kind
-            if ch == "world":
-                body = d.parsed.get("commands") or d.body
+            if d.channel == "world":
                 return await world_ops.world_exec(
                     self.session,
-                    {"command": body},
+                    {"command": f.get("command") or d.body},
                     ctx,
                 )
-            if ch == "state":
-                return await self._memory_directive(d, principal_id)
-            if ch == "time":
-                return await sched.handle_time_directive(self.session, d.parsed, ctx)
-            if ch == "publish":
-                args = {
-                    **d.parsed,
-                    "html": d.parsed.get("html") or d.body,
-                    "title": d.parsed.get("title") or "Surface",
-                }
-                return await pub.handle_publish_directive(self.session, args, ctx)
-            if ch == "interact":
-                choices = d.parsed.get("choices") or []
-                prompt = d.parsed.get("prompt") or d.body
+            if d.channel == "state":
+                return await self._state_directive(d, principal_id)
+            if d.channel == "time":
+                return await sched.handle_time_directive(self.session, {**f, "raw": d.body}, ctx)
+            if d.channel == "publish":
+                return await pub.handle_publish_directive(
+                    self.session,
+                    {**f, "html": f.get("html") or d.body, "title": f.get("title") or "Surface"},
+                    ctx,
+                )
+            if d.channel == "interact":
                 return await present_choices(
                     self.session,
-                    {"choices": choices, "prompt": prompt},
+                    {"choices": f.get("choices") or [], "prompt": f.get("prompt") or d.body},
                     ctx,
                 )
-            return {"ok": False, "error": f"unknown_channel:{ch}"}
+            return {"ok": False, "error": f"unknown_channel:{d.channel}"}
         except Exception as e:
-            logger.exception("directive_failed", kind=d.kind)
+            logger.exception("directive_failed", channel=d.channel)
             return {"ok": False, "error": str(e)[:500]}
 
-    async def _memory_directive(self, d: Directive, principal_id) -> dict[str, Any]:
-        action = (d.parsed.get("action") or "create").lower()
+    async def _state_directive(self, d: Directive, principal_id) -> dict[str, Any]:
+        f = d.fields
+        action = (f.get("action") or "create").lower()
+        mid = str(f.get("memory_id") or f.get("id") or "")
         if action == "search":
             return await mem.memory_search(
-                self.session,
-                principal_id,
-                query=d.parsed.get("query") or d.body,
-                limit=20,
+                self.session, principal_id, query=f.get("query") or d.body, limit=20
             )
         if action in ("get", "inspect"):
-            return await mem.memory_get(
-                self.session,
-                principal_id,
-                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
-            )
+            return await mem.memory_get(self.session, principal_id, mid)
         if action == "create":
             return await mem.memory_create(
                 self.session,
                 principal_id,
-                content=str(d.parsed.get("content") or d.body),
-                memory_type=str(d.parsed.get("memory_type") or d.parsed.get("type") or "semantic"),
+                content=str(f.get("content") or d.body),
+                memory_type=str(f.get("memory_type") or f.get("type") or "semantic"),
             )
         if action == "update":
             return await mem.memory_update(
-                self.session,
-                principal_id,
-                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
-                content=d.parsed.get("content"),
+                self.session, principal_id, mid, content=f.get("content")
             )
         if action == "supersede":
             return await mem.memory_supersede(
-                self.session,
-                principal_id,
-                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
-                new_content=str(d.parsed.get("content") or d.body),
+                self.session, principal_id, mid, new_content=str(f.get("content") or d.body)
             )
         if action in ("forget", "delete"):
-            return await mem.memory_forget(
-                self.session,
-                principal_id,
-                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
-            )
-        return {"ok": False, "error": f"unknown_memory_action:{action}"}
+            return await mem.memory_forget(self.session, principal_id, mid)
+        return {"ok": False, "error": f"unknown_state_action:{action}"}
 
     def _format_obs(self, result: dict[str, Any]) -> str:
         if not result:

@@ -20,7 +20,7 @@ Student message
 - **World** is the student's persistent workspace (files, packages, terminal).
 - **No** tool registry, **no** primitive catalogue sent to the model, **no** Context Intelligence, **no** educational workflow engines.
 
-When the AI needs to act, it writes free-form directive blocks (`world`, `memory`, `schedule`, `publish`, `choices`). Infrastructure runs them and returns observations. That is not a tool menu — the model is not choosing from application-defined function schemas.
+When the AI needs to act, it writes free-form directive blocks (`world`, `state`, `time`, `publish`, `interact`). Infrastructure runs them and returns observations. That is not a tool menu — the model is not choosing from application-defined function schemas.
 
 ## Run
 

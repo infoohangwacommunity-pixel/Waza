@@ -45,13 +45,14 @@ and no second "intelligence layer" that selects context or workflows for the AI.
 
 The model may include fenced blocks in its text:
 
-- `world` — run commands/scripts in the student World
-- `memory` — search/create/update/supersede/forget durable state
-- `schedule` — ask infrastructure to wake later
-- `publish` — create a temporary web surface
-- `choices` — present interactive choices
+- `world` — execute inside the student World
+- `state` — durable student persistence
+- `time` — schedule or inspect time
+- `publish` — secure temporary surface
+- `interact` — choices on the current channel
 
 These are parsed from free text. They are not OpenAI tool schemas.
+No aliases, capability catalogues, or function schemas.
 
 ## Database
 
@@ -90,8 +91,6 @@ Fenced blocks are a **minimal machine-readable bridge**, not a tool catalogue.
 | `time` | Delayed / scheduled wake |
 | `publish` | Secure temporary publication |
 | `interact` | Channel interaction (choices) |
-
-Aliases: `memory`→`state`, `schedule`→`time`, `choices`→`interact`.
 
 The AI decides the objective. Infrastructure validates security and executes.
 No specialized teaching actions. No application capability menu sent to the model.
