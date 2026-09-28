@@ -3,6 +3,11 @@ World filesystem layout.
 
 world_id is independent of principal_id (owner). Identifiers are never interchangeable.
 Single authority for durable workspace roots (no terminal package).
+
+Student Worlds are durable. Files under workspace/, projects/, software/, runtimes/
+survive worker restarts and deployments when WORKSPACE_ROOT is a durable volume.
+Age-based cleanup applies only to tmp/ and cache/ (see wax.world.cleanup).
+There is no workspace_ttl that destroys a World.
 """
 
 from __future__ import annotations

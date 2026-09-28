@@ -81,7 +81,10 @@ class Settings(BaseSettings):
     terminal_python: str = "python3"
     workspace_root: str = "/tmp/wax-workspaces"
     workspace_max_file_bytes: int = 25_000_000
-    workspace_ttl_hours: int = 72
+    # TTL for tmp/cache only — never expires the student's durable World
+    workspace_tmp_ttl_hours: int = 48
+    # Deprecated alias; ignored for durable paths (see cleanup)
+    workspace_ttl_hours: int = 48
     storage_backend: str = "local"  # local | s3
     s3_bucket: str = ""
     s3_endpoint: str = ""
@@ -256,6 +259,15 @@ def validate_production_settings(settings: Settings | None = None) -> None:
         # Soft-enforce: document that production implies require
         # Actual refusal is in sandbox when app_env=production
         pass
+    # Worlds must not live on ephemeral disk in production
+    root = (s.workspace_root or "").strip()
+    if root.startswith("/tmp"):
+        problems.append(
+            "WORKSPACE_ROOT must not be under /tmp in production "
+            "(use a durable volume, e.g. /data/wax-workspaces)"
+        )
+    if s.require_persistent_workspace and root.startswith("/tmp"):
+        problems.append("REQUIRE_PERSISTENT_WORKSPACE=true forbids ephemeral WORKSPACE_ROOT")
     # Surfaces share PUBLIC_BASE_URL by default (same Railway origin).
     # SURFACE_PUBLIC_ORIGIN is optional for advanced multi-host deployments only.
     main = (s.public_base_url or "").strip().rstrip("/")

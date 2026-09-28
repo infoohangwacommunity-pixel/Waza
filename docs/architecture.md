@@ -93,3 +93,17 @@ Aliases: `memory`→`state`, `schedule`→`time`, `choices`→`interact`.
 
 The AI decides the objective. Infrastructure validates security and executes.
 No specialized teaching actions. No application capability menu sent to the model.
+
+
+## World persistence
+
+Each principal has an isolated World under `WORKSPACE_ROOT/worlds/<world_id>/`.
+
+**Durable (must survive restart/deploy on a volume):**
+`workspace/`, `projects/`, `software/`, `runtimes/`, `history/`, identity/lifecycle metadata.
+
+**Temporary (may be age-cleaned):**
+`tmp/`, `cache/` only — controlled by `WORKSPACE_TMP_TTL_HOURS`.
+
+There is **no** automatic expiration of a student's World after 72 hours.
+Isolation is by distinct world roots; paths cannot escape the world root.
