@@ -33,3 +33,26 @@ Infrastructure provides reality. AI interprets and decides.
 - Specialized media intelligence pipelines
 - Educational workflow tool menus
 - Token-budget intelligence gates
+
+## Database baseline
+
+Core tables only:
+
+- principals, interface_identities, worlds
+- conversations, messages, inbound_events
+- works, executions, tool_executions, deliveries
+- memories, memory_episodes, memory_links
+- goals, artifacts, scheduled_actions, interactions
+- channel_link_challenges
+- surfaces (+ revisions, sessions, events, ai_requests)
+- principal_workloads
+
+Educational/intelligence explosion tables (assessments, concepts, evidence graphs,
+automatic observations, publications, etc.) are retired. Schema is reproducible
+from Alembic revisions 001 → 002 → 003.
+
+## Security boundary
+
+AI has broad capability **inside** the boundary: World isolation, quotas,
+secret protection, webhook verification, rate protection. Infrastructure
+does not interpret student meaning or invent durable facts.

@@ -626,25 +626,7 @@ class IntelligenceService:
             getattr(settings, "memory_base_url", None) or settings.primary_base_url,
             60.0,
         )
-        # Context Intelligence — independent role (does not inherit primary unless configured)
-        ci_provider = (getattr(settings, "context_intelligence_provider", None) or "none").strip()
-        ci_key = (getattr(settings, "context_intelligence_api_key", None) or "").strip()
-        ci_model = (getattr(settings, "context_intelligence_model", None) or "").strip()
-        ci_base = (getattr(settings, "context_intelligence_base_url", None) or "").strip()
-        ci_timeout = float(getattr(settings, "context_intelligence_timeout_seconds", 45.0) or 45.0)
-        if ci_provider in ("none", "") or not ci_key or not ci_model:
-            if getattr(settings, "context_intelligence_fallback_to_primary", False) and self.primary:
-                self.context_model = self.primary
-            else:
-                self.context_model = None
-        else:
-            self.context_model = _build_provider(
-                ci_provider,
-                ci_key,
-                ci_model,
-                ci_base,
-                ci_timeout,
-            )
+        self.context_model = None  # CI removed; AI uses primary only
 
     async def complete(
         self,
@@ -665,7 +647,7 @@ class IntelligenceService:
             if self.context_model:
                 providers.append(self.context_model)
             # Context role never silently chains to primary unless context_model IS primary
-            # via explicit context_intelligence_fallback_to_primary
+            # CI removed
         elif use_memory_model and self.memory_model:
             providers.append(self.memory_model)
             # allow_fallback=False means memory model only — no silent primary/fallback chain
@@ -684,7 +666,7 @@ class IntelligenceService:
             raise ProviderError(
                 "No intelligence providers configured for role="
                 + role
-                + ". Set the matching API key / model (or CONTEXT_INTELLIGENCE_FALLBACK_TO_PRIMARY=true).",
+                + ". Set the matching API key / model.",
                 ProviderErrorClass.AUTH_FAILURE,
                 retryable=False,
             )
@@ -692,9 +674,7 @@ class IntelligenceService:
         last_error: Exception | None = None
         for provider in providers:
             try:
-                if role == "context" and provider is self.context_model:
-                    retries = getattr(settings, "context_intelligence_max_retries", 1)
-                elif use_memory_model and provider is self.memory_model:
+                if use_memory_model and provider is self.memory_model:
                     retries = getattr(settings, "memory_max_retries", 1)
                 elif provider is self.fallback:
                     retries = getattr(settings, "fallback_max_retries", 2)

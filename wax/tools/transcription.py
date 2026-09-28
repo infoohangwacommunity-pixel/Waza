@@ -26,7 +26,24 @@ from typing import Any
 import httpx
 
 from wax.config import get_settings
-from wax.media.types import TranscriptionQuality, TranscriptionResult
+# media package retired — local minimal types
+from dataclasses import dataclass, field
+from typing import Any
+
+@dataclass
+class TranscriptionQuality:
+    confidence: float = 0.0
+    language: str | None = None
+    warnings: list[str] = field(default_factory=list)
+
+@dataclass  
+class TranscriptionResult:
+    ok: bool = False
+    text: str = ""
+    quality: TranscriptionQuality = field(default_factory=TranscriptionQuality)
+    error: str | None = None
+    meta: dict[str, Any] = field(default_factory=dict)
+
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)

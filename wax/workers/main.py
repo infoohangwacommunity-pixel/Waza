@@ -20,7 +20,6 @@ from wax.db.models import Delivery, Work
 from wax.db.session import session_scope
 from wax.intelligence.tutor import TutorService
 from wax.delivery.retry import DeliveryRetryService
-from wax.memory.consolidation import MemoryConsolidationService
 from wax.terminal.cleanup import cleanup_old_files
 from wax.observability.logging import get_logger, setup_logging, work_id_var
 
@@ -197,16 +196,6 @@ async def process_message_response(session, work: Work) -> None:
                 await send_typing(ch, str(tgt), inbound_message_id=str(inbound) if inbound else None)
         except Exception:
             logger.exception("typing_indicator_failed")
-        try:
-            from wax.media.manifest import build_manifest_from_payload
-            man = build_manifest_from_payload(work.input_payload or {})
-            if man.assets:
-                pl = dict(work.input_payload or {})
-                pl["assets"] = [a.to_dict() for a in man.assets]
-                work.input_payload = pl
-                await session.flush()
-        except Exception:
-            logger.exception("asset_manifest_persist_failed")
         result = await tutor.handle_message(work)
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
@@ -482,110 +471,24 @@ async def _mark_work_terminal(
 
 
 async def process_memory_work(session, work: Work) -> None:
-    """Post-turn memory — never blocks learner-facing reply."""
-    from wax.memory.service import MemoryService
-    from wax.memory.observations import ObservationService
-    from wax.intelligence.session_continuity import SessionContinuityService
-    from wax.memory.evidence import EvidenceService
+    """Post-turn memory work — lightweight.
 
-    # Primitives captured up-front — safe after a poisoned transaction
+    AI owns memory lifecycle via primitives during the turn.
+    Infrastructure does not auto-extract, run CI, or invent learner facts.
+    This job exists only for durable bookkeeping / future async consolidation.
+    """
+    from datetime import datetime, timezone
+
     _work_id = str(work.id)
-    payload = work.input_payload or {}
-    principal_id = work.principal_id
-    conversation_id = payload.get("conversation_id") or work.conversation_id
-    recent = list(payload.get("recent") or [])
-    user_text = payload.get("user_text") or ""
-    reply_text = payload.get("reply_text") or ""
-    recent = recent + [
-        {"role": "user", "content": user_text},
-        {"role": "assistant", "content": reply_text},
-    ]
     try:
-        if principal_id:
-            await MemoryService(session).extract_and_store(
-                principal_id=principal_id,
-                conversation_id=str(conversation_id) if conversation_id else None,
-                recent_messages=recent,
-                source_work_id=payload.get("source_work_id"),
-            )
-            try:
-                from wax.learner.correction import apply_possible_correction
-                from wax.learner.evidence import EvidencePlanner
-
-                plan = await EvidencePlanner(session).plan(user_text=user_text, purpose="reply")
-                if plan.check_corrections or plan.decision_type == "correct":
-                    await apply_possible_correction(
-                        session, principal_id=principal_id, user_text=user_text
-                    )
-            except Exception:
-                logger.exception("post_extract_correction_failed")
-            try:
-                # Event/Observation only — NEVER keyword→preference.
-                # Semantic interpretation of student meaning is done by the
-                # intelligence (memory extraction + tutor record_evidence tool
-                # + EvidencePlanner). Infrastructure does not invent learner facts.
-                await ObservationService(session).record(
-                    principal_id=principal_id,
-                    kind="tutor_turn",
-                    content=(user_text[:200] + " → " + reply_text[:200]),
-                    weight=0.4,
-                    conversation_id=conversation_id,
-                    work_id=work.id,
-                )
-            except Exception:
-                logger.exception("observation_record_failed")
-            try:
-                await SessionContinuityService(session).maybe_digest(
-                    principal_id=principal_id,
-                    conversation_id=conversation_id,
-                    every_n=20,
-                )
-            except Exception:
-                pass
-            try:
-                # Refresh dense continuity digest from structured state (no provider call)
-                from wax.learner.continuity_digest import (
-                    rebuild_digest_from_state,
-                    save_digest,
-                )
-
-                dig = await rebuild_digest_from_state(session, principal_id)
-                # Remember capability families used on the source turn when present
-                src_meta = (work.input_payload or {}).get("capability_families") or []
-                if src_meta:
-                    dig.recent_families = [str(x) for x in src_meta][:8]
-                await save_digest(session, principal_id, dig)
-                from wax.observability.events import emit
-
-                emit(
-                    "lifecycle.memory_refreshed",
-                    principal_id=str(principal_id),
-                    work_id=str(work.id),
-                    source_work_id=str((work.input_payload or {}).get("source_work_id") or ""),
-                )
-            except Exception:
-                logger.exception("continuity_digest_refresh_failed")
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
         await session.flush()
     except Exception as e:
-        err = str(e)
         logger.exception("memory_work_failed", work_id=_work_id)
-        # Rate limits should not permanently fail memory jobs — defer and retry later.
-        if "Rate limited" in err or "rate_limited" in err.lower() or "429" in err:
-            delay = min(600, 30 * max(1, int(getattr(work, "attempt", 0) or 1)))
-            await _mark_work_terminal(
-                session,
-                work,
-                status="retrying",
-                error=err,
-                error_class="provider_rate_limited",
-                next_retry_at=datetime.now(timezone.utc) + timedelta(seconds=delay),
-            )
-        else:
-            await _mark_work_terminal(
-                session, work, status="failed", error=err, error_class="memory_failure"
-            )
+        await _mark_work_terminal(
+            session, work, status="failed", error=str(e), error_class="memory_failure"
+        )
 
 
 async def process_media_prepare(session, work: Work) -> None:
@@ -1080,15 +983,6 @@ async def recovery_loop() -> None:
                     except Exception:
                         logger.exception("workspace_cleanup_error")
 
-                try:
-                    from wax.publication.service import PublicationService
-                    n_exp = await PublicationService(session).expire_due(limit=200)
-                    n_clean = await PublicationService(session).cleanup_expired(limit=50)
-                    n_rec = await PublicationService(session).recover_failed(limit=20)
-                    if n_exp or n_clean:
-                        logger.info("publication_lifecycle", expired=n_exp, cleaned=n_clean, recovered=n_rec)
-                except Exception:
-                    logger.exception("publication_lifecycle_error")
 
                 try:
                     from wax.surfaces.service import SurfaceService
@@ -1112,51 +1006,8 @@ async def recovery_loop() -> None:
 
                 if cycle % 10 == 0:
                     try:
-                        # Do not burn provider quota on background consolidation
-                        # while the hot path is rate-limited.
-                        from wax.intelligence.providers import any_provider_cooling_down
-
-                        if any_provider_cooling_down():
-                            logger.info("memory_consolidation_deferred_provider_cooldown")
-                        else:
-                            try:
-                                from wax.db.models import Principal
-                                from wax.memory.research_loop import ResearchLoopService
-
-                                svc = ResearchLoopService(session)
-                                pres = await session.execute(select(Principal.id).limit(5))
-                                for (pid,) in pres.all():
-                                    try:
-                                        suggestion = await svc.propose_next_test(pid)
-                                        if suggestion:
-                                            from wax.observability.events import emit
-
-                                            emit(
-                                                "lifecycle.research_suggestion",
-                                                principal_id=str(pid),
-                                                claim_key=str(suggestion.get("claim_key") or ""),
-                                                priority=suggestion.get("priority"),
-                                            )
-                                    except Exception:
-                                        logger.exception(
-                                            "research_loop_principal_failed",
-                                            principal_id=str(pid),
-                                        )
-                            except Exception:
-                                logger.exception("research_loop_batch_error")
-                            from wax.db.models import Principal
-
-                            result = await session.execute(select(Principal.id).limit(5))
-                            for (pid,) in result.all():
-                                try:
-                                    await MemoryConsolidationService(session).consolidate_principal(
-                                        pid
-                                    )
-                                except Exception:
-                                    logger.exception(
-                                        "memory_consolidation_failed",
-                                        principal_id=str(pid),
-                                    )
+                            pass  # research_loop retired — AI decides research via primitives
+                            pass  # automatic memory consolidation retired — AI owns memory lifecycle
                     except Exception:
                         logger.exception("memory_consolidation_batch_error")
         except Exception:

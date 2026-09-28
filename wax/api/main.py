@@ -89,22 +89,14 @@ async def health_detail():
         },
         "capabilities": [
             "interactions",
-            "schedule_series",
-            "research_fetch",
-            "learner_export",
-            "html_pages",
+            "schedule",
+            "world_exec",
+            "memory_lifecycle",
+            "html_surfaces",
             "work_leases",
-            "continuity_digest",
-            "turn_telemetry",
             "rate_limit_recovery",
         ],
         "intelligence": {
-            "continuity_digest_enabled": bool(
-                getattr(settings, "continuity_digest_enabled", True)
-            ),
-            "context_intelligence_provider": getattr(
-                settings, "context_intelligence_provider", None
-            ),
             "provider_rate_limit_max_retries": getattr(
                 settings, "provider_rate_limit_max_retries", 48
             ),
@@ -457,10 +449,7 @@ async def surface_post_event(token: str, request: Request):
 
             if getattr(_gs(), "web_feedback_enabled", True):
                 try:
-                    from wax.learner.signals import (
-                        web_feedback_to_signal,
-                        record_explicit_interaction_evidence,
-                    )
+                    raise ImportError('learner.signals retired')  # feedback still recorded as surface event above
 
                     # Never trust browser-supplied principal identity
                     payload.pop("principal_id", None)
@@ -617,49 +606,14 @@ async def surface_revision_poll(token: str, request: Request):
 
 @app.get("/p/{token}")
 async def serve_publication(token: str):
-    """Serve immutable ephemeral publication by opaque public token."""
-    from fastapi.responses import HTMLResponse, Response
-    from wax.db.session import session_scope
-    from wax.publication.service import PublicationService
-    from wax.publication.renderer import render_expired_page
+    """Legacy publication path retired — use Surfaces."""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(
+        "<h1>This page type is no longer available</h1><p>Temporary experiences now use Surfaces.</p>",
+        status_code=410,
+        headers={"Cache-Control": "no-store"},
+    )
 
-    async with session_scope() as session:
-        svc = PublicationService(session)
-        pub, deny = await svc.resolve_by_token(token)
-        if deny or not pub:
-            html = render_expired_page(reason=deny or "not_found")
-            return HTMLResponse(
-                content=html,
-                status_code=410 if deny in ("expired", "revoked") else 404,
-                headers={
-                    "Cache-Control": "no-store",
-                    "X-Robots-Tag": "noindex, nofollow",
-                    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-                    "X-Content-Type-Options": "nosniff",
-                    "Referrer-Policy": "no-referrer",
-                },
-            )
-        data = await svc.load_html(pub)
-        if not data:
-            html = render_expired_page(reason="not_found")
-            return HTMLResponse(content=html, status_code=404, headers={"Cache-Control": "no-store"})
-        try:
-            await svc.record_access(pub)
-            await session.commit()
-        except Exception:
-            pass
-        return Response(
-            content=data,
-            media_type="text/html; charset=utf-8",
-            headers={
-                "Cache-Control": "private, no-cache, must-revalidate",
-                "X-Robots-Tag": "noindex, nofollow, noarchive",
-                "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data: https:; media-src https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-                "X-Content-Type-Options": "nosniff",
-                "Referrer-Policy": "no-referrer",
-                "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-            },
-        )
 
 
 @app.get("/pages/{artifact_id}")

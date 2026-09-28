@@ -53,34 +53,6 @@ class Settings(BaseSettings):
     #   EMBEDDING_API_KEY=...
     #   EMBEDDING_BASE_URL=https://api.voyageai.com/v1
     #   EMBEDDING_MODEL=voyage-3.5-lite
-    # Context Intelligence — independent provider/model namespace (not the tutor by default)
-    context_intelligence_enabled: bool = True
-    context_intelligence_use_model: bool = True
-    # Provider name is an identifier; OpenAI-compatible APIs work with any name + BASE_URL
-    # Empty/"none" = no CI model (deterministic probe only). Does NOT auto-use primary.
-    context_intelligence_provider: str = "none"
-    context_intelligence_api_key: str = ""
-    context_intelligence_base_url: str = ""
-    context_intelligence_model: str = ""
-    context_intelligence_timeout_seconds: float = 45.0
-    context_intelligence_max_retries: int = 1
-    context_intelligence_max_tool_calls: int = 6
-    context_intelligence_max_tokens: int = 900
-    context_intelligence_temperature: float = 0.2
-    # If true, intentional fallback: when CI provider unset, reuse primary credentials
-    context_intelligence_fallback_to_primary: bool = False
-    # investigate | unified (CI may answer via direct_reply when model returns one)
-    context_intelligence_mode: str = "investigate"
-    # When True, full gather_evidence only if brief.needs_evidence_gather is True
-    context_intelligence_controls_evidence: bool = True
-    # Dense learner self-model: more personalization, fewer retrieval/model calls
-    continuity_digest_enabled: bool = True
-    continuity_digest_max_age_hours: float = 72.0
-    continuity_digest_max_chars: int = 1400
-    # When digest is fresh+rich, skip CI model call and broad evidence gather
-    # Deprecated: digest is CI-owned; short-circuit no longer used by resolver
-    continuity_digest_short_circuit: bool = False
-
     embedding_provider: str = "none"
     embedding_api_key: str = ""
     embedding_base_url: str = ""
