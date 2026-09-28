@@ -13,22 +13,49 @@ from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
 
+HEAD = "001_reality"
 
+# Durable-reality tables only (must match wax/db/models.py)
 REQUIRED_TABLES = (
-    "works",
-    "inbound_events",
     "principals",
+    "interface_identities",
+    "worlds",
     "conversations",
     "messages",
+    "inbound_events",
+    "works",
     "executions",
     "deliveries",
     "memories",
+    "artifacts",
     "scheduled_actions",
-    "alembic_version",
-    "publications",
-    "principal_workloads",
-    "learning_events",
+    "interactions",
+    "channel_link_challenges",
     "surfaces",
+    "surface_revisions",
+    "surface_sessions",
+    "surface_events",
+    "surface_ai_requests",
+    "principal_workloads",
+    "alembic_version",
+)
+
+# Must not exist (deleted architecture)
+FORBIDDEN_TABLES = (
+    "goals",
+    "memory_episodes",
+    "memory_links",
+    "tool_executions",
+    "activities",
+    "assessments",
+    "assessment_items",
+    "assessment_attempts",
+    "assessment_responses",
+    "publications",
+    "learning_events",
+    "concepts",
+    "evidence",
+    "hypotheses",
 )
 
 
@@ -73,61 +100,74 @@ async def main() -> int:
             print(f"verify_schema_alembic_revisions={revs!r}")
             if len(revs) > 1:
                 print(
-                    "verify_schema_FAILED multiple alembic_version rows "
-                    f"(overlap risk): {revs!r}",
+                    f"verify_schema_FAILED multiple alembic_version rows: {revs!r}",
                     file=sys.stderr,
                 )
                 return 1
             rev = revs[0] if revs else None
             print(f"verify_schema_alembic_revision={rev}")
-            if rev and rev != "001_waza_baseline":
+            if rev != HEAD:
                 print(
-                    f"verify_schema_WARN expected 001_waza_baseline got {rev!r}",
-                    file=sys.stderr,
-                )
-            if not rev:
-                print(
-                    "verify_schema_FAILED alembic_version empty or missing",
+                    f"verify_schema_FAILED expected {HEAD!r} got {rev!r}",
                     file=sys.stderr,
                 )
                 return 1
-
-            schema = await conn.scalar(text("SELECT current_schema()"))
-            print(f"verify_schema_current_schema={schema}")
 
             rows = await conn.execute(
                 text(
                     "SELECT table_name FROM information_schema.tables "
-                    "WHERE table_schema = 'public' ORDER BY table_name"
+                    "WHERE table_schema='public' AND table_type='BASE TABLE'"
                 )
             )
-            tables = [r[0] for r in rows]
-            print(
-                f"verify_schema_public_tables count={len(tables)} names={tables}"
-            )
-
-            works = await conn.scalar(text("SELECT to_regclass('public.works')"))
-            inbound = await conn.scalar(
-                text("SELECT to_regclass('public.inbound_events')")
-            )
-            print(f"verify_schema_works={works}")
-            print(f"verify_schema_inbound_events={inbound}")
-
-            missing = [t for t in REQUIRED_TABLES if t not in tables]
+            existing = {r[0] for r in rows.fetchall()}
+            missing = [t for t in REQUIRED_TABLES if t not in existing]
             if missing:
-                print(f"verify_schema_FAILED missing={missing}", file=sys.stderr)
+                print(f"verify_schema_FAILED missing_tables={missing}", file=sys.stderr)
                 return 1
-            if works is None or inbound is None:
+            forbidden = [t for t in FORBIDDEN_TABLES if t in existing]
+            if forbidden:
                 print(
-                    "verify_schema_FAILED to_regclass null for works or inbound_events",
+                    f"verify_schema_FAILED forbidden_legacy_tables={forbidden}",
                     file=sys.stderr,
                 )
                 return 1
 
-            print("verify_schema_OK")
+            # Ownership: principal-owned tables must CASCADE on principal delete
+            fk_rows = await conn.execute(
+                text(
+                    """
+                    SELECT tc.table_name, kcu.column_name, ccu.table_name AS foreign_table,
+                           rc.delete_rule
+                    FROM information_schema.table_constraints AS tc
+                    JOIN information_schema.key_column_usage AS kcu
+                      ON tc.constraint_name = kcu.constraint_name
+                     AND tc.table_schema = kcu.table_schema
+                    JOIN information_schema.constraint_column_usage AS ccu
+                      ON ccu.constraint_name = tc.constraint_name
+                    JOIN information_schema.referential_constraints AS rc
+                      ON rc.constraint_name = tc.constraint_name
+                    WHERE tc.constraint_type = 'FOREIGN KEY'
+                      AND tc.table_schema = 'public'
+                      AND ccu.table_name = 'principals'
+                      AND kcu.column_name = 'principal_id'
+                    """
+                )
+            )
+            bad_cascade = []
+            for table, col, ftable, rule in fk_rows.fetchall():
+                if rule not in ("CASCADE",):
+                    bad_cascade.append((table, col, rule))
+            if bad_cascade:
+                print(
+                    f"verify_schema_FAILED principal_id FKs must CASCADE: {bad_cascade}",
+                    file=sys.stderr,
+                )
+                return 1
+
+            print("verify_schema_ok required_tables present, no forbidden tables, principal CASCADE ok")
             return 0
     except Exception as e:
-        print(f"verify_schema_FAILED error={type(e).__name__}: {e}", file=sys.stderr)
+        print(f"verify_schema_FAILED {type(e).__name__}: {e}", file=sys.stderr)
         return 1
     finally:
         await engine.dispose()

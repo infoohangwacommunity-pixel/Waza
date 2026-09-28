@@ -36,8 +36,7 @@ class InteractionService:
         prompt: str | None = None,
         style: str = "buttons",
         work_id=None,
-        activity_id=None,
-        conversation_id=None,
+                conversation_id=None,
         expires_in_seconds: int | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Interaction:
@@ -68,7 +67,6 @@ class InteractionService:
         ix = Interaction(
             id=uuid4(),
             principal_id=principal_id,
-            activity_id=activity_id,
             work_id=work_id,
             conversation_id=conversation_id,
             channel=channel,
@@ -182,7 +180,6 @@ class InteractionService:
             "interaction_id": str(interaction.id),
             "choice_id": choice_id,
             "choices": interaction.choices,
-            "activity_id": str(interaction.activity_id) if interaction.activity_id else None,
             "work_id": str(interaction.work_id) if interaction.work_id else None,
         }
 
@@ -229,7 +226,6 @@ class InteractionService:
             "choice_id": choice_id,
             "text": text
             or (f"[interaction:{reason}:{choice_id or 'none'}]"),
-            "activity_id": str(interaction.activity_id) if interaction.activity_id else None,
             "source": "interaction",
             "reason": reason,
         }

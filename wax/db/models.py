@@ -182,7 +182,7 @@ class Work(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
 
     principal_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=True
     )
     conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
@@ -393,9 +393,6 @@ class Interaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     principal_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
-    )
-    activity_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("activities.id", ondelete="SET NULL"), nullable=True
     )
     work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True

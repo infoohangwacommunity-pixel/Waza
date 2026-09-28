@@ -1,47 +1,37 @@
-# Waza database — durable reality
+# WAX database — single baseline
 
-## Active migration chain
+## Active migration graph
 
 ```
-001_waza_baseline
-002_memory_graph          (historical; episodes later dropped)
-003_retire_educational_tables
-004_drop_tool_executions
-005_drop_goals
-006_drop_memory_graph
-007_domain_reality_cleanup   ← head
+001_reality  (down_revision = None)  ← sole head
 ```
 
-## What belongs in the schema
+Schema is created from `wax/db/models.py` via `Base.metadata.create_all`.
+No historical educational / graph / tool-execution archaeology.
 
-| Area | Tables |
-|------|--------|
-| Identity & channels | `principals`, `interface_identities`, `channel_link_challenges` |
-| Conversation | `conversations`, `messages`, `inbound_events` |
-| World | `worlds` |
-| Durable memory | `memories` (AI-owned; **goals** are rows with a goal-like `memory_type`, not a Goal engine) |
-| Files | `artifacts` |
-| Time | `scheduled_actions` |
-| Work | `works`, `executions`, `deliveries` |
-| Chat interactions | `interactions` |
-| Temporary web workspace | `surfaces`, `surface_revisions`, `surface_sessions`, `surface_events`, `surface_ai_requests` |
-| Rate protection | `principal_workloads` |
+## From zero
 
-## What does **not** belong
+```bash
+export DATABASE_URL=postgresql+asyncpg://...
+python scripts/repair_alembic_state.py
+alembic upgrade head
+python scripts/verify_schema.py
+```
 
-- Goal / curriculum / quiz / mastery / assessment engines  
-- Memory episode graphs or embedding columns as a second brain  
-- Check-in product accounting  
-- Tool execution registries  
+## Existing Railway DB
 
-## Clean rebuild (intentional data wipe)
+Deploy runs `repair_alembic_state.py` which stamps `001_reality` when
+alembic_version still points at deleted revisions (`001_waza_baseline` … `007`).
+Then `upgrade head` is a no-op.
 
-1. Stop Worker (and Web if needed).
-2. `DROP SCHEMA public CASCADE; CREATE SCHEMA public; …`
-3. `alembic upgrade head`
-4. Confirm `alembic_version` = `007`
-5. Start services.
+Intentional wipe: DROP SCHEMA public CASCADE; CREATE SCHEMA public; redeploy.
 
-## Principals
+## Ownership
 
-`display_name` only — never `principals.name`.
+principal_id → principals.id ON DELETE CASCADE on student-owned tables.
+Goals are Memory rows, not a goals table.
+
+## Forbidden tables
+
+goals, memory_episodes, memory_links, tool_executions, activities,
+assessments*, publications, learning_events, concepts, evidence, hypotheses
