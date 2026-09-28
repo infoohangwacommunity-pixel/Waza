@@ -118,9 +118,9 @@ class TutorService:
             f"- principal_id: {principal_id or 'none'}\n"
             f"- world: available — persistent isolated workspace (files, packages, terminal). "
             f"Inspect or act only via a ```world directive when needed.\n"
-            f"- durable_memory: available — you own search/get/create/update/supersede/forget. "
-            f"No memories are preloaded; use a ```memory directive when you need them.\n"
-            f"- schedule/publish/choices: available via matching directives when needed.\n"
+            f"- durable state: available — search/get/create/update/supersede/forget via ```state (alias ```memory). "
+            f"Nothing is preloaded; inspect only when needed.\n"
+            f"- time / publish / interact: available via matching infrastructure channels when needed.\n"
         )
 
         messages: list[ChatMessage] = [
