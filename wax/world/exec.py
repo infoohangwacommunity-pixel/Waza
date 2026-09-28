@@ -1,4 +1,4 @@
-"""World execution — isolated process tree, no command allowlist."""
+"""World execution — single path into isolation; no command allowlist; no terminal package."""
 
 from __future__ import annotations
 

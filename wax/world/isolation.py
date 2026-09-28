@@ -1,12 +1,12 @@
 """
-Isolation backend — infrastructure boundary, not a command allowlist.
+World isolation backend — the only process execution path.
 
-No ALLOWED_BINARIES. Security is mounts, namespaces, caps, budgets, scrubbed env.
-Production: fail closed if no secure backend.
+Flow: AI requests execution → security validates → student's World selected
+→ isolated run (bwrap/docker/dev rlimits) → observation returns.
 
-Capability levels:
-  full     — docker (stronger cgroup) when available and requested
-  standard — bubblewrap (primary on Railway)
+No parallel terminal executor. No binary allowlist.
+Security is mounts, namespaces, capabilities, budgets, scrubbed env.
+Production: fail closed if no secure backend (bwrap/docker).
 """
 
 from __future__ import annotations

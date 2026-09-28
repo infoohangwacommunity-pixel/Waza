@@ -74,11 +74,13 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
 
-    terminal_enabled: bool = True
+    # Isolation resource bounds (legacy terminal_* names; single World execution path)
+    terminal_enabled: bool = True  # when false, world_exec refuses
     terminal_timeout_seconds: int = 45
     terminal_max_output_bytes: int = 150_000
-    terminal_workdir: str = "/tmp/wax-terminal"
     terminal_python: str = "python3"
+    # Deprecated path — Worlds use workspace_root only (no separate terminal workdir)
+    terminal_workdir: str = ""
     workspace_root: str = "/tmp/wax-workspaces"
     workspace_max_file_bytes: int = 25_000_000
     # TTL for tmp/cache only — never expires the student's durable World
