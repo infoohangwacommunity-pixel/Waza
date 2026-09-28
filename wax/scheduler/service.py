@@ -218,6 +218,55 @@ class SchedulerService:
         )
         return actions
 
+
+    async def recover_stuck_executing(self, *, older_than_seconds: float = 300, limit: int = 20) -> int:
+        """
+        After worker crash: actions left in executing without completable work
+        return to pending so they can be claimed again. Survives restart.
+        """
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(seconds=max(60.0, older_than_seconds))
+        stmt = (
+            select(ScheduledAction)
+            .where(
+                ScheduledAction.status == "executing",
+                ScheduledAction.execute_at <= cutoff,
+            )
+            .order_by(ScheduledAction.execute_at.asc())
+            .limit(limit)
+            .with_for_update(skip_locked=True)
+        )
+        try:
+            result = await self.session.execute(stmt)
+            rows = list(result.scalars().all())
+        except Exception:
+            # updated_at may be missing on some rows — fall back without time filter
+            stmt = (
+                select(ScheduledAction)
+                .where(ScheduledAction.status == "executing")
+                .limit(limit)
+                .with_for_update(skip_locked=True)
+            )
+            result = await self.session.execute(stmt)
+            rows = list(result.scalars().all())
+        n = 0
+        for action in rows:
+            # If work exists and is still active, leave it
+            if action.work_id:
+                work = await self.session.get(Work, action.work_id)
+                if work and work.status in ("queued", "running", "claimed", "retrying"):
+                    continue
+            action.status = "pending"
+            action.work_id = None
+            meta = dict(action.metadata_ or {})
+            meta["recovered_from_executing"] = datetime.now(timezone.utc).isoformat()
+            action.metadata_ = meta
+            n += 1
+        if n:
+            await self.session.flush()
+            logger.info("scheduled_actions_recovered", count=n)
+        return n
+
     async def create_work_for_action(self, action: ScheduledAction) -> Work:
         """Turn a due scheduled action into durable Work for the tutor/worker.
 
@@ -253,7 +302,16 @@ class SchedulerService:
                 "scheduled_action_id": str(action.id),
                 "action_type": action.action_type,
                 "reason": action.reason,
+                "message_hint": (action.payload or {}).get("message_hint")
+                or (action.payload or {}).get("objective")
+                or action.reason
+                or action.action_type,
+                "objective": (action.payload or {}).get("objective")
+                or (action.payload or {}).get("message_hint")
+                or action.reason,
                 "payload": action.payload or {},
+                "channel": (action.payload or {}).get("channel"),
+                "conversation_id": (action.payload or {}).get("conversation_id"),
             },
         )
         self.session.add(work)

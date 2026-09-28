@@ -916,6 +916,10 @@ async def recovery_loop() -> None:
                 try:
                     from wax.scheduler.service import SchedulerService
                     sched = SchedulerService(session)
+                    try:
+                        await sched.recover_stuck_executing(older_than_seconds=300, limit=20)
+                    except Exception:
+                        logger.exception("scheduler_recover_stuck_failed")
                     due = await sched.due_actions(limit=10)
                     for action in due:
                         await sched.mark_executing(action)

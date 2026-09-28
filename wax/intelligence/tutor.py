@@ -61,8 +61,38 @@ content: Student prefers short worked examples
 ```
 
 ```time
-delay_seconds: 3600
-reason: check-in on practice set
+action: now
+```
+
+```time
+delay_seconds: 5
+reason: continue after short pause
+```
+
+```time
+delay_minutes: 30
+reason: follow up on the problem set
+```
+
+```time
+execute_at: 2026-09-29T08:00:00+00:00
+reason: morning continuation
+```
+
+```time
+delay_hours: 24
+interval_hours: 24
+count: 7
+reason: daily check-in series
+```
+
+```time
+action: cancel
+id: <scheduled_action_id>
+```
+
+```time
+action: list
 ```
 
 ```publish
@@ -209,10 +239,13 @@ class TutorService:
     async def _execute_directive(
         self, d: Directive, *, principal_id, work: Work
     ) -> dict[str, Any]:
+        payload = work.input_payload or {}
         ctx = {
             "principal_id": principal_id,
             "work_id": str(work.id) if work.id else None,
-            "conversation_id": work.conversation_id,
+            "conversation_id": work.conversation_id or payload.get("conversation_id"),
+            "channel": payload.get("channel"),
+            "target_external_id": payload.get("target_external_id") or payload.get("external_id"),
         }
         try:
             # Infrastructure channels only — not an application capability menu
@@ -227,7 +260,7 @@ class TutorService:
             if ch == "state":
                 return await self._memory_directive(d, principal_id)
             if ch == "time":
-                return await sched.schedule_action(self.session, d.parsed, ctx)
+                return await sched.handle_time_directive(self.session, d.parsed, ctx)
             if ch == "publish":
                 return await pub.publish_surface(
                     self.session,
