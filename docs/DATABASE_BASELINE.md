@@ -1,37 +1,33 @@
-# WAX database — single baseline
+# Database baseline
 
-## Active migration graph
+## Active graph
 
 ```
 001_reality  (down_revision = None)  ← sole head
 ```
 
-Schema is created from `wax/db/models.py` via `Base.metadata.create_all`.
-No historical educational / graph / tool-execution archaeology.
-
-## From zero
-
-```bash
-export DATABASE_URL=postgresql+asyncpg://...
-python scripts/repair_alembic_state.py
-alembic upgrade head
-python scripts/verify_schema.py
-```
-
-## Existing Railway DB
-
-Deploy runs `repair_alembic_state.py` which stamps `001_reality` when
-alembic_version still points at deleted revisions (`001_waza_baseline` … `007`).
-Then `upgrade head` is a no-op.
-
-Intentional wipe: DROP SCHEMA public CASCADE; CREATE SCHEMA public; redeploy.
+Schema source of truth: `wax/db/models.py`.  
+Baseline migration: `alembic/versions/001_reality_baseline.py`.
 
 ## Ownership
 
-principal_id → principals.id ON DELETE CASCADE on student-owned tables.
-Goals are Memory rows, not a goals table.
+`principal_id → principals.id ON DELETE CASCADE` on student-owned tables.  
+Goals are Memory rows (`memory_type`), not a separate goals table.
 
 ## Forbidden tables
 
+These must not exist (retired architecture):
+
 goals, memory_episodes, memory_links, tool_executions, activities,
 assessments*, publications, learning_events, concepts, evidence, hypotheses
+
+Enforced by `scripts/verify_schema.py`.
+
+## Intentional wipe
+
+```sql
+DROP SCHEMA public CASCADE;
+CREATE SCHEMA public;
+```
+
+Then redeploy (`alembic upgrade head`).
