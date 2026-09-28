@@ -137,11 +137,16 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("rate_decision_failed")
 
-    # Optional async media fetch before tutor (still outside webhook)
+    # Media: infrastructure only places the file into the student's World.
+    # The AI decides whether/how to process it. No auto-STT. No media intelligence.
     payload = work.input_payload or {}
-    if payload.get("media_id") and not payload.get("local_media_path"):
+    if payload.get("media_id") and not payload.get("local_media_path") and work.principal_id:
         try:
+            from pathlib import Path as _Path
             from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
+            from wax.world.manager import get_or_create_world
+            from wax.world import files as world_files
+
             channel = payload.get("channel")
             if channel == "whatsapp":
                 fetched = await fetch_whatsapp_media(payload["media_id"], work.principal_id)
@@ -150,149 +155,32 @@ async def process_message_response(session, work: Work) -> None:
             else:
                 fetched = {}
             if fetched.get("ok") and fetched.get("path"):
-                from wax.terminal.workspace import stage_media_for_work
-
-                staged = stage_media_for_work(
-                    work.principal_id,
-                    fetched["path"],
-                    work_id=work.id,
-                    filename=Path(str(fetched["path"])).name,
-                )
-                local = (staged.get("work_path") or staged.get("path") or fetched.get("path"))
+                world = get_or_create_world(str(work.principal_id))
+                src = _Path(str(fetched["path"]))
+                rel = f"workspace/media/{src.name}"
+                data = src.read_bytes()
+                written = world_files.write_file(world, rel, data)
+                local = None
+                if written.get("ok"):
+                    local = str(world.root / rel)
+                else:
+                    local = str(src)
                 payload = {
                     **payload,
                     "local_media_path": local,
-                    "principal_media_path": staged.get("path") or fetched.get("path"),
+                    "principal_media_path": local,
                     "media_mime": fetched.get("mime"),
                     "media_size": fetched.get("size"),
                 }
                 work.input_payload = payload
                 await session.flush()
                 logger.info(
-                    "media_staged_for_agent",
+                    "media_placed_in_world",
                     work_id=str(work.id),
                     path=local,
-                    ok=staged.get("ok"),
                 )
         except Exception:
-            logger.exception("media_prepare_inline_failed")
-
-    # Media prepare: probe + optional compatibility auto-STT (not a permanent workflow).
-    # Long-term: fetch + probe only; intelligence calls transcribe_audio when needed.
-    # Intelligence-driven by default. Set WAX_AUTO_TRANSCRIBE=1 only for temporary compatibility.
-    import os
-    from wax.media.probe import probe_local_file
-
-    local_path = payload.get("local_media_path")
-    if local_path and work.principal_id:
-        try:
-            from wax.terminal.workspace import stage_media_for_work, path_in_principal_scope
-            from pathlib import Path as _P
-
-            staged = stage_media_for_work(
-                work.principal_id,
-                local_path,
-                work_id=work.id,
-                filename=_P(str(local_path)).name,
-            )
-            if staged.get("ok"):
-                local_path = staged.get("work_path") or staged.get("path") or local_path
-                payload = {
-                    **payload,
-                    "local_media_path": local_path,
-                    "principal_media_path": staged.get("path"),
-                }
-                work.input_payload = payload
-        except Exception:
-            logger.exception("media_restage_failed")
-    content_type = (payload.get("content_type") or "").lower()
-    if local_path and not payload.get("media_probe"):
-        try:
-            probe = probe_local_file(str(local_path))
-            payload = {
-                **payload,
-                "media_probe": probe.to_dict(),
-                "media_capabilities": probe.capabilities.as_list(),
-            }
-            try:
-                from wax.media.assets import register_asset
-
-                manifest = register_asset(
-                    work.principal_id,
-                    path=str(local_path),
-                    probe=probe,
-                    work_id=str(work.id),
-                    channel=payload.get("channel"),
-                    media_id=payload.get("media_id"),
-                )
-                payload["media_asset_id"] = manifest.get("asset_id")
-            except Exception:
-                logger.exception("media_asset_register_failed")
-            work.input_payload = payload
-            await session.flush()
-            logger.info(
-                "media_probed",
-                work_id=str(work.id),
-                kind=probe.kind,
-                capabilities=probe.capabilities.as_list(),
-                asset_id=payload.get("media_asset_id"),
-            )
-        except Exception:
-            logger.exception("media_probe_failed")
-
-    auto_stt = os.environ.get("WAX_AUTO_TRANSCRIBE", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    if (
-        auto_stt
-        and local_path
-        and not payload.get("transcript")
-        and (
-            content_type == "audio"
-            or (payload.get("media_probe") or {}).get("kind") == "audio"
-            or str(local_path).lower().endswith((".ogg", ".oga", ".mp3", ".m4a", ".wav", ".opus"))
-        )
-    ):
-        try:
-            from wax.tools.transcription import transcribe_local_audio
-
-            tr = await transcribe_local_audio(
-                str(local_path), work_id=str(work.id)
-            )
-            quality = (tr.get("quality") or {}).get("status") or "unknown"
-            payload = {
-                **payload,
-                "transcription": tr,
-                "transcript_quality": quality,
-            }
-            if tr.get("ok") and tr.get("transcript") and quality == "usable":
-                # Only treat as user text when quality is usable
-                payload["transcript"] = tr["transcript"]
-                payload["text"] = tr["transcript"]
-                logger.info(
-                    "audio_auto_transcribed",
-                    work_id=str(work.id),
-                    quality=quality,
-                    chars=len(tr["transcript"]),
-                    mean_conf=(tr.get("quality") or {}).get("mean_word_conf"),
-                )
-            else:
-                # Do not substitute garbage as user text
-                if tr.get("transcript"):
-                    payload["transcript"] = tr["transcript"]
-                logger.info(
-                    "audio_auto_transcribe_not_usable",
-                    work_id=str(work.id),
-                    quality=quality,
-                    error=tr.get("error"),
-                )
-            work.input_payload = payload
-            await session.flush()
-        except Exception:
-            logger.exception("audio_auto_transcribe_failed")
+            logger.exception("media_world_stage_failed")
 
     tutor = TutorService(session)
     try:
@@ -1281,7 +1169,6 @@ def _log_provider_config() -> None:
     key = (settings.primary_api_key or "").strip()
     placeholder = key in ("", "REPLACE_WITH_YOUR_LLM_API_KEY", "change-me")
     base = (settings.primary_base_url or "").strip() or "(default)"
-    ci_key = (getattr(settings, "context_intelligence_api_key", None) or "").strip()
     logger.info(
         "provider_config",
         provider_selected=settings.primary_provider,
@@ -1291,13 +1178,6 @@ def _log_provider_config() -> None:
         provider_model=settings.primary_model,
         fallback_provider=settings.fallback_provider,
         fallback_api_key_configured=bool((settings.fallback_api_key or "").strip()),
-        context_intelligence_provider=getattr(settings, "context_intelligence_provider", None),
-        context_intelligence_model=getattr(settings, "context_intelligence_model", None),
-        context_intelligence_mode=getattr(settings, "context_intelligence_mode", None),
-        context_intelligence_api_key_configured=bool(ci_key),
-        context_intelligence_fallback_to_primary=bool(
-            getattr(settings, "context_intelligence_fallback_to_primary", False)
-        ),
     )
 
 

@@ -1,36 +1,35 @@
 # WAX Prep Architecture
 
-## Philosophy
+## Core rule
 
-Software provides durable mechanisms. Intelligence interprets and decides.
-No hardcoded educational modes, subjects, exams, or curricula as application logic.
+Infrastructure provides reality. AI interprets and decides.
 
-## Channels
+## Request lifecycle
 
-WhatsApp and Telegram only for messaging. Channel adapters never own tutoring logic.
+1. Channel webhook validates and persists inbound message + Work
+2. Worker claims Work
+3. Media (if any) is placed into the student's World — not interpreted
+4. Tutor (brain) receives principal, message, World access, primitives
+5. AI decides: memory R/W, World exec, schedule, publish, reply
+6. Infrastructure delivers and stores durable state the AI requested
 
-## Core loop
+## Components
 
-Inbound webhook → accept + idempotent persist → Work queued → Worker claims →
-Context assembly → Tutor intelligence (+ tools) → Delivery → Memory extract
-
-## Memory
-
-Multi-level, confidence, provenance, expiry, consolidation, hybrid retrieval.
-Failure is isolated from the learner-facing response.
-
-## Tools (general)
-
-schedule_followup, create_artifact, run_python, present_choices, inspect_memories, manage_goal
-
-## Reliability
-
-Durable work, delivery retries, orphan recovery, scheduled action wakeups,
-provider fallback, webhook signature verification.
+| Layer | Responsibility |
+|-------|----------------|
+| Messaging | Receive/send, no tutoring logic |
+| Work / Worker | Durable claim, retry, recovery |
+| Tutor | Brain — decide and call primitives |
+| Primitives | memory_*, world_*, schedule, publish, present_choices |
+| World | Isolated persistent files/packages/terminal |
+| Security | Isolation, auth, secrets, sandbox |
+| Delivery | Channel send + retries |
+| Interaction | Server-authoritative choices/expiry |
 
 ## Explicitly absent
 
-- Cost/token budgets that refuse learners
-- Subject/Exam/Quiz mode engines
-- Fixed reminder clock rules as product logic
-- Web channel (messaging focus: WhatsApp + Telegram)
+- Context Intelligence (second brain)
+- Automatic context assembler selection
+- Specialized media intelligence pipelines
+- Educational workflow tool menus
+- Token-budget intelligence gates

@@ -7,3 +7,5 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+*.legacy_bak
+wax/intelligence/tutor.py.legacy_bak

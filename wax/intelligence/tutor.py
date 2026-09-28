@@ -1,8 +1,9 @@
 """
-WAX Prep Tutor Intelligence.
+WAX Prep Tutor — the brain.
 
-Context assembly → AI (every learner message) → tools → delivery → memory.
-No hardcoded subjects, exams, or modes.
+Infrastructure provides identity, World, messaging, security, and primitives.
+The AI decides what to retrieve, remember, process, create, and say.
+No Context Intelligence. No automatic context assembler. No workflow tool menu.
 """
 
 from __future__ import annotations
@@ -14,1104 +15,153 @@ from uuid import uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from wax.db.models import Conversation, Delivery, Message, Work
-from wax.intelligence.providers import (
-    ChatMessage,
-    CompletionRequest,
-    ToolSpec,
-    get_intelligence,
-)
-from wax.memory.service import MemoryService
-from wax.intelligence.session_continuity import SessionContinuityService
-from wax.memory.observations import ObservationService
-from wax.observability.logging import get_logger
-from wax.tools.registry import execute_tool
 from wax.agent.runtime import AgentRuntime
+from wax.db.models import Delivery, Message, Work
 from wax.delivery.presentation import InteractiveChoice, PresentableResponse
-from wax.intelligence.context import ContextAssembler
+from wax.intelligence.providers import ChatMessage, CompletionRequest, get_intelligence
+from wax.observability.logging import get_logger
+from wax.primitives.registry import execute_primitive, list_primitive_specs
 
 logger = get_logger(__name__)
 
+TUTOR_SYSTEM = """You are WAX — a persistent adaptive tutor by WAX Prep.
 
-TUTOR_SYSTEM = """You are WAX — a persistent adaptive tutor created by WAX Prep.
+You are the tutor. Model vendors are infrastructure only — never claim to be those products.
 
-WAX Prep is the product/company. You are WAX, the tutor. Underlying models and providers
-(Upstage, Solar, Gemini, OpenAI, Groq, etc.) are infrastructure only — never say you *are*
-those products or companies. If asked what powers you, you may say you run on models
-configured by WAX Prep without treating the vendor as your identity.
-
-Talk naturally. You are not a form, a menu, or a rigid course system.
+You have a secure persistent World for this student (files, packages, terminal) and durable
+memory that you control. Infrastructure enforces security and delivery; you decide.
 
 How you work:
-- Meet them where they are. Discover goals and needs through conversation.
-- Use what you genuinely remember about them when it helps.
-- If you are unsure what you remember, say so. Do not invent history.
-- Adapt explanations, pace, and style to this person from evidence, not from labels.
-- Use tools only when they clearly help (files, schedule, memory, workspace). Ordinary chat needs no tools.
-- Learning materials come from the learner (what they say, send, or upload) or from what you create together in the moment — not from a fixed curriculum bank in the product.
-- Keep replies readable on messaging apps. Be warm, clear, and honest.
+- Meet the student where they are. Discover needs through conversation.
+- You decide when to search, create, update, supersede, or forget memory.
+- You decide whether to inspect World files, run code, install packages, or publish a page.
+- When a file is in the World, you decide how to process it (run code, install tools, etc.).
+- Materials come from the student or what you create together — not a fixed curriculum bank.
+- Keep replies readable on messaging apps. Be warm, clear, honest.
+- Never invent memories, tool results, or URLs. Only claim success when a primitive returns ok.
+- Ordinary chat needs no primitives. Use them when they help.
 
-You are not controlled by subject lists, exam modes, or preset lesson scripts.
-Respond as a real tutor who is actually paying attention to this person.
+Teaching: adapt to this person. Prefer a useful next step over a lecture dump.
+Vary how you check understanding. Do not run rigid quiz scripts.
 
-Teaching judgment (principles, not a script):
-- Your job is to decide what evidence you need about their understanding and what action helps most right now.
-- Prefer a small useful next step over a long lesson dump.
-- Do not default to "Question 1 / Question 2 / Correct!" quiz rhythm. Vary how you check understanding.
-- When they forget something they recently showed, try a retrieval cue or hint before revealing the answer.
-- When an answer is wrong, distinguish misconception vs slip vs missing prerequisite vs language issue when you can — and respond accordingly.
-- If you detect a possible misconception, do not only say "wrong." Clarify the distinction, give a contrast, then check with a targeted question.
-- Assess with varied forms when useful: explain-in-own-words, apply, compare, transfer to a new situation, find the error — not only recall.
-- Use record_evidence / form_hypothesis / update_concept_state when a durable learning signal appears (not on every trivial turn).
-- Test transfer after practice when appropriate: can they use the idea in a new context?
-- You may explain, simplify, analogize, demonstrate, scaffold, increase/reduce difficulty, revisit a prerequisite, pause, or stop when continuing would not help.
-- Doing less is allowed: one clear sentence, one question, or a short pause can be the right move.
-- Never claim a tool, schedule, file, research, or transcription succeeded unless the tool result says it did.
-- Surfaces: only share a page link if create_surface/update_surface returned ok with page_url. Never invent domains or URLs. If the tool did not run, say you could not publish the page yet.
-
-Privacy and memory (truthful):
-- You retain durable memories, teaching state, and continuity to personalize learning.
-- If they ask what you store, describe categories honestly: conversation context, learner memories,
-  goals/preferences when known, materials they shared, operational logs — not secrets or passwords.
-- If they ask to forget something specific, use forget_memory / tools when available and confirm from tool results.
-- Do not promise a full account wipe or legal deletion in chat unless a dedicated export/delete flow succeeds.
-- Never invent privacy guarantees.
-
-First contact and onboarding:
-- Respond to what they actually said. Do not run an intake questionnaire.
-- Do not stack multiple onboarding questions. One natural follow-up is enough.
-- Do not re-introduce yourself or explain what WAX is unless they ask.
-- Do not say "let's get started" as a habit. Discover goals only when it fits the conversation.
-- If you already know their name, goals, or preferences from memory, use them quietly — do not dump a memory list.
-
-Durable preferences:
-- Explicit preferences (short messages, fewer emojis, language, quiet hours, learning style) are durable until the learner changes them.
-- When they state a preference, call set_preference so it persists.
-- Honor durable preferences as the default; a clear current-turn request always overrides for that turn only.
-- Do not slowly drift back to long emoji-heavy replies after they asked for short/plain messages.
-
-Attribution and evidence (critical):
-- Only record evidence about THIS learner. Third-person, quotes, and statements about friends/family/teachers are not this learner's preference or mastery.
-- A question ("Would examples help?") or a current request ("Give me an example") is not automatically a permanent preference.
-- "I don't understand" is current difficulty, not a permanent dislike of your style.
-- One positive or negative reaction is weak; accumulate before treating as durable.
-- Prefer uncertain over inventing a learner fact. Use record_evidence with appropriate weight and claim_key when justified.
-- Do not invent preferences from isolated words.
-
-Message length:
-- Honor durable preferences (e.g. they asked for short messages) as a default.
-- A clear current-turn request always wins: "explain deeply" → more detail; "just answer" → short.
-- Match length to the moment: confirmations stay brief; hard concepts may need more; messaging apps still prefer readable chunks.
-- Vary length. Not every reply should be the same size.
-
-Artifacts and files:
-- Only say a file was sent when the delivery layer confirmed it.
-- create_artifact stores the file; channel delivery is separate.
-
-Channel linking and identity:
-- Messaging identities block in context is AUTHORITATIVE. If it says Telegram is linked, it is linked. If it says not linked, it is not.
-- Never invent linked or unlinked status. Never say "Telegram is not connected" when the identities block shows it is linked.
-- WhatsApp and Telegram are doors to the SAME learner (Principal).
-- If context includes other-channel continuity snippets, use them only when relevant (e.g. learner asks to continue). Do not re-onboard or re-ask name/goals already known. Memory, evidence, preferences, and goals are shared after verified linking — do not treat channels as separate people.
-- If the learner naturally wants to continue on the other app, use request_channel_link (OTP). Guide them to open the other app, get the code, and paste it here. When they paste a 6-digit code, call confirm_channel_link.
-- Only use knowledge questions if OTP delivery failed.
-- Never claim linking succeeded without a successful confirm tool result.
-- Do not nag about linking. Offer only when relevant.
-- Web Surface is temporary and separate — not a permanent messaging identity.
-
-Mini pages:
-- create_surface publishes an AI-authored temporary web experience (you supply HTML/CSS/JS). Use when a richer interactive surface helps. Prefer update_surface for edits to the same experience (URL stays stable). list_surfaces to find existing ones. revoke_surface to withdraw access. Do not use the legacy publication system; Surfaces are the only web experience path.
-
-Activities and assessments:
-- Long-running or timed work should use durable activity/assessment tools, not only chat text.
-- Timed interactions are server-authoritative: create them with real expiration; do not only write "⏱️ 3 seconds" in text.
-- Interactive buttons must be real present_choices interactions — never tell the learner to tap options that were not delivered.
-
-Research and currency:
-- When freshness matters (news, prices, current policy, recent events), use research tools rather than pretending model knowledge is current.
-- Distinguish model knowledge from retrieved sources; do not present research as if it were private memory.
-
-Honesty:
-- Do not invent memories, tool results, or past sessions.
-- If memory is missing, say so briefly and continue helpfully.
-- End or pause when more teaching would not help right now.
+Privacy: if they ask to forget something, use memory_forget and confirm from the result.
+Do not invent privacy guarantees.
 """
-
-
-AVAILABLE_TOOLS = [
-    ToolSpec(
-        name="schedule_followup",
-        description="Schedule a future follow-up when a later check-in would help this person.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
-                "delay_hours": {"type": "number"},
-                "message_hint": {"type": "string"},
-            },
-            "required": ["reason", "delay_hours"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_at",
-        description="Schedule a follow-up at an absolute datetime (ISO 8601). Optional IANA timezone.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "execute_at": {"type": "string"},
-                "timezone": {"type": "string"},
-                "reason": {"type": "string"},
-                "message_hint": {"type": "string"},
-                "action_type": {"type": "string"},
-            },
-            "required": ["execute_at", "reason"],
-        },
-    ),
-    ToolSpec(
-        name="resolve_natural_time",
-        description="Resolve 'tomorrow at 10am' etc. to absolute time using learner timezone and authoritative clock. Prefer this over guessing.",
-        parameters={
-            "type": "object",
-            "properties": {"text": {"type": "string"}, "timezone": {"type": "string"}},
-            "required": ["text"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_intent",
-        description="Schedule a learner intention (reminder/review/followup). Stores intent to reassess at wake time — not fixed wording. Prefer when_text for natural language times.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "purpose": {"type": "string"},
-                "target": {"type": "string"},
-                "when_text": {"type": "string"},
-                "execute_at": {"type": "string"},
-                "timezone": {"type": "string"},
-                "flexibility": {"type": "string"},
-                "completion_condition": {"type": "string"},
-                "concept_key": {"type": "string"},
-            },
-            "required": ["target"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_continuous",
-        description="Schedule several future follow-ups. Use only when the person wants ongoing support.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "reason": {"type": "string"},
-                "message_hint": {"type": "string"},
-                "hours_from_now": {"type": "array", "items": {"type": "number"}},
-            },
-            "required": ["reason", "hours_from_now"],
-        },
-    ),
-    ToolSpec(
-        name="schedule_series",
-        description="Schedule a finite series of follow-ups (max 30) at a fixed interval.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "interval_hours": {"type": "number"},
-                "count": {"type": "number"},
-                "delay_hours": {"type": "number"},
-                "first_at": {"type": "string"},
-                "reason": {"type": "string"},
-                "message_hint": {"type": "string"},
-            },
-            "required": ["interval_hours", "reason"],
-        },
-    ),
-    ToolSpec(
-        name="cancel_schedule",
-        description="Cancel a pending scheduled action by id.",
-        parameters={
-            "type": "object",
-            "properties": {"scheduled_action_id": {"type": "string"}},
-            "required": ["scheduled_action_id"],
-        },
-    ),
-    ToolSpec(
-        name="get_current_time",
-        description="Get authoritative current UTC and optional learner timezone.",
-        parameters={
-            "type": "object",
-            "properties": {"timezone": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="get_learner_state",
-        description="Read current goals, activities, pending choices, and upcoming schedule.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="check_quiet_hours",
-        description="Check whether the learner is currently in quiet hours.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="set_preference",
-        description="Store an explicit learner preference (message_length, timezone, language, etc.).",
-        parameters={
-            "type": "object",
-            "properties": {"key": {"type": "string"}, "value": {}},
-            "required": ["key", "value"],
-        },
-    ),
-    ToolSpec(
-        name="present_choices",
-        description="Show interactive choices when helpful. Optional expires_in_seconds for timed choices.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "style": {"type": "string"},
-                "prompt": {"type": "string"},
-                "list_button_label": {"type": "string"},
-                "choices": {"type": "array"},
-                "expires_in_seconds": {"type": "number"},
-            },
-            "required": ["choices"],
-        },
-    ),
-    ToolSpec(
-        name="create_artifact",
-        description="Create a durable document (notes, study sheet, PDF). format=txt or pdf.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string"},
-                "title": {"type": "string"},
-                "content": {"type": "string"},
-                "format": {"type": "string"},
-            },
-            "required": ["kind", "title", "content"],
-        },
-    ),
-    
-    
-    ToolSpec(
-        name="create_surface",
-        description=(
-            "Create a temporary AI-authored web surface. YOU write the HTML (and optional CSS/JS) experience. "
-            "WAX hosts it securely at a stable URL. Prefer this for interactive/visual experiences. "
-            "Do not create a new surface for ordinary edits — use update_surface. "
-            "Not a chat replacement. Local UI interactions need not call AI."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "html": {"type": "string", "description": "Full HTML document or body fragment"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "lifecycle_intent": {"type": "string", "description": "temporary|workspace|session|experiment"},
-                "preferred_lifetime_hours": {"type": "number"},
-                "initial_state": {"type": "object"},
-                "parent_surface_id": {"type": "string"},
-            },
-            "required": ["html"],
-        },
-    ),
-    ToolSpec(
-        name="update_surface",
-        description="Update an existing surface in place (same URL): title, HTML revision, or state merge.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "surface_id": {"type": "string"},
-                "html": {"type": "string"},
-                "title": {"type": "string"},
-                "description": {"type": "string"},
-                "merge_state": {"type": "object"},
-                "extend_hours": {"type": "number"},
-            },
-            "required": ["surface_id"],
-        },
-    ),
-    ToolSpec(
-        name="list_surfaces",
-        description="List this learner's surfaces to continue or reference an existing one.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "limit": {"type": "number"},
-                "active_only": {"type": "boolean"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="revoke_surface",
-        description="Revoke access to a surface. Does not delete durable Work or Artifacts.",
-        parameters={
-            "type": "object",
-            "properties": {"surface_id": {"type": "string"}},
-            "required": ["surface_id"],
-        },
-    ),
-
-
-    ToolSpec(
-        name="inspect_surface",
-        description="Inspect one of this learner's surfaces (title, status, revision, activity).",
-        parameters={
-            "type": "object",
-            "properties": {"surface_id": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="retain_surface",
-        description="Mark a surface as important / keep it. Use when the learner asks not to delete it.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "surface_id": {"type": "string"},
-                "keep": {"type": "boolean"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="list_artifacts",
-        description="List artifacts saved for this person.",
-        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
-    ),
-    ToolSpec(
-        name="read_artifact",
-        description="Read a saved artifact by id.",
-        parameters={
-            "type": "object",
-            "properties": {"artifact_id": {"type": "string"}},
-            "required": ["artifact_id"],
-        },
-    ),
-    ToolSpec(
-        name="redeliver_artifact",
-        description="Re-send an existing artifact without regenerating content.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "artifact_id": {"type": "string"},
-                "channel": {"type": "string"},
-                "target_external_id": {"type": "string"},
-            },
-            "required": ["artifact_id"],
-        },
-    ),
-    ToolSpec(
-        name="run_python",
-        description="Run Python in the learner World (isolated). Prefer world_exec for general commands.",
-        parameters={
-            "type": "object",
-            "properties": {"code": {"type": "string"}},
-            "required": ["code"],
-        },
-    ),
-    ToolSpec(
-        name="write_workspace_file",
-        description="Write a file in the workspace for multi-step work.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
-            "required": ["path", "content"],
-        },
-    ),
-    ToolSpec(
-        name="read_workspace_file",
-        description="Read a workspace file.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="list_workspace",
-        description="List files in the learner workspace.",
-        parameters={"type": "object", "properties": {"path": {"type": "string"}}},
-    ),
-    ToolSpec(
-        name="workspace_command",
-        description="Deprecated alias for world_exec — runs a shell command line in the World (isolated).",
-        parameters={
-            "type": "object",
-            "properties": {"command": {"type": "string"}},
-            "required": ["command"],
-        },
-    ),
-    ToolSpec(
-        name="world_discover",
-        description=(
-            "Inspect the learner's personal computing World: lifecycle, disk, "
-            "runtimes, installed software (observed), files, jobs. Prefer this "
-            "before assuming software is missing or present."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {"sections": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="world_exec",
-        description=(
-            "Run a command (argv list) or Python script inside the learner World "
-            "under isolation. No developer command allowlist — infrastructure "
-            "enforces mounts, resources, and network mode (none|pkg)."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "argv": {"type": "array", "items": {"type": "string"}},
-                "script": {"type": "string"},
-                "cwd": {"type": "string"},
-                "network_mode": {"type": "string"},
-                "budget_class": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="world_acquire",
-        description=(
-            "Install software into the World. kind=python_package uses pip into "
-            "the world's private venv (never the WAX app). Always verified by import."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string"},
-                "name": {"type": "string"},
-                "version_spec": {"type": "string"},
-            },
-            "required": ["name"],
-        },
-    ),
-    ToolSpec(
-        name="world_jobs",
-        description="List recent World executions/jobs and lifecycle for this learner.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="world_files",
-        description="List/read/write/delete files inside the learner World workspace.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string"},
-                "path": {"type": "string"},
-                "content": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="workspace_env",
-        description="Get or update workspace environment manifest (packages/tools).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string"},
-                "name": {"type": "string"},
-                "version": {"type": "string"},
-                "source": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="fetch_inbound_media",
-        description="Fetch inbound media from the messaging channel into the workspace.",
-        parameters={"type": "object", "properties": {}},
-    ),
-    ToolSpec(
-        name="inspect_media",
-        description=(
-            "Probe a local media file: kind, metadata, available capabilities, "
-            "and optional text extraction (OCR/PDF). Does not transcribe audio. "
-            "Use capabilities listed to decide next tools."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "extract_text": {"type": "boolean"},
-                "max_pages": {"type": "number"},
-            },
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="describe_image",
-        description="Optional vision description of a local image.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}, "question": {"type": "string"}},
-            "required": ["path"],
-        },
-    ),
-    ToolSpec(
-        name="transcribe_audio",
-        description=(
-            "Transcribe a local audio/voice file. Returns transcript plus quality "
-            "(usable/uncertain/unusable). Do not treat uncertain/unusable as reliable user text."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "language": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="extract_video_audio",
-        description="Extract audio track from a local video to a WAV path. Then transcribe_audio if needed.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="extract_video_frames",
-        description="Extract a small number of frames from a local video (capped). Inspect/OCR/describe frames as needed.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "max_frames": {"type": "number"},
-                "fps": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="extract_subtitles",
-        description="Extract embedded subtitles from a local video when a subtitle stream exists.",
-        parameters={
-            "type": "object",
-            "properties": {"path": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="ingest_document",
-        description="Store learner-provided notes/PDF/text as retrievable knowledge for this learner only.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "text": {"type": "string"},
-                "path": {"type": "string"},
-                "kind": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="inspect_memories",
-        description="Inspect active memories for this learner.",
-        parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
-    ),
-    ToolSpec(
-        name="forget_memory",
-        description="Forget something when the learner asks.",
-        parameters={
-            "type": "object",
-            "properties": {"memory_id": {"type": "string"}, "query": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="manage_goal",
-        description="Create or update a learning goal.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "action": {"type": "string"},
-                "title": {"type": "string"},
-                "goal_id": {"type": "string"},
-                "status": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="start_activity",
-        description="Start a durable learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string"},
-                "objective": {"type": "string"},
-                "duration_seconds": {"type": "number"},
-            },
-            "required": ["kind"],
-        },
-    ),
-    ToolSpec(
-        name="complete_activity",
-        description="Complete an activity.",
-        parameters={
-            "type": "object",
-            "properties": {"activity_id": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="pause_activity",
-        description="Pause the active learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "activity_id": {"type": "string"},
-                "reason": {"type": "string"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="resume_activity",
-        description="Resume a paused learning activity.",
-        parameters={
-            "type": "object",
-            "properties": {"activity_id": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="create_assessment",
-        description="Create a durable assessment (not a fixed quiz mode).",
-        parameters={
-            "type": "object",
-            "properties": {
-                "title": {"type": "string"},
-                "items": {"type": "array"},
-                "timed": {"type": "boolean"},
-                "duration_seconds": {"type": "number"},
-            },
-            "required": ["title", "items"],
-        },
-    ),
-    ToolSpec(
-        name="submit_assessment_answer",
-        description="Submit an answer to the current assessment item.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "attempt_id": {"type": "string"},
-                "item_id": {"type": "string"},
-                "response_text": {"type": "string"},
-            },
-            "required": ["attempt_id", "item_id"],
-        },
-    ),
-    ToolSpec(
-        name="record_assessment_timeout",
-        description="Record that a timed assessment item expired and get the next item if any.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "attempt_id": {"type": "string"},
-                "item_id": {"type": "string"},
-            },
-            "required": ["attempt_id"],
-        },
-    ),
-    ToolSpec(
-        name="update_concept_state",
-        description="Update observed mastery/confidence for a concept.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "concept_key": {"type": "string"},
-                "status": {"type": "string"},
-                "mastery": {"type": "number"},
-                "confidence": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="record_evidence",
-        description="Record evidence about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "claim_key": {"type": "string"},
-                "content": {"type": "string"},
-                "strength": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="form_hypothesis",
-        description="Form or update a hypothesis about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "claim_key": {"type": "string"},
-                "statement": {"type": "string"},
-                "confidence": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="why_we_believe",
-        description="Explain why we currently believe something about the learner.",
-        parameters={
-            "type": "object",
-            "properties": {"claim_key": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="propose_learning_check",
-        description="Propose a light check related to an active hypothesis.",
-        parameters={
-            "type": "object",
-            "properties": {"hypothesis_id": {"type": "string"}, "hint": {"type": "string"}},
-        },
-    ),
-    ToolSpec(
-        name="schedule_hypothesis_recheck",
-        description="Schedule a future recheck for a hypothesis.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "hypothesis_id": {"type": "string"},
-                "delay_hours": {"type": "number"},
-            },
-        },
-    ),
-    ToolSpec(
-        name="research_fetch",
-        description="Fetch a public http(s) URL for world knowledge. Not learner memory.",
-        parameters={
-            "type": "object",
-            "properties": {"url": {"type": "string"}},
-            "required": ["url"],
-        },
-    ),
-    ToolSpec(
-        name="research_search",
-        description="Search the web when a search provider is configured.",
-        parameters={
-            "type": "object",
-            "properties": {"query": {"type": "string"}},
-            "required": ["query"],
-        },
-    ),
-    ToolSpec(
-        name="request_channel_link",
-        description=(
-            "Start linking another channel (WhatsApp/Telegram). Prefer OTP: sends a 6-digit code "
-            "to that number/chat. method=knowledge only if OTP cannot be delivered."
-        ),
-        parameters={
-            "type": "object",
-            "properties": {
-                "target_channel": {"type": "string"},
-                "target_external_id": {"type": "string"},
-                "method": {"type": "string"},
-                "questions": {"type": "array"},
-            },
-            "required": ["target_channel", "target_external_id"],
-        },
-    ),
-    ToolSpec(
-        name="confirm_channel_link",
-        description="Confirm channel link when the learner pastes the OTP or knowledge answers.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "code": {"type": "string"},
-                "challenge_id": {"type": "string"},
-                "answers": {"type": "array", "items": {"type": "string"}},
-            },
-        },
-    ),
-    ToolSpec(
-        name="link_channel_identity",
-        description="Directly attach a channel identity (admin/system). Prefer request_channel_link for learners.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "channel": {"type": "string"},
-                "external_id": {"type": "string"},
-                "display_name": {"type": "string"},
-                "make_primary": {"type": "boolean"},
-            },
-            "required": ["channel", "external_id"],
-        },
-    ),
-    ToolSpec(
-        name="export_learner_data",
-        description="Export this learner's data package (memories, messages, goals, artifacts).",
-        parameters={
-            "type": "object",
-            "properties": {"message_limit": {"type": "number"}},
-        },
-    ),
-]
 
 
 class TutorService:
     def __init__(self, session: AsyncSession):
         self.session = session
         self.intelligence = get_intelligence()
-        self.memory = MemoryService(session)
 
     async def handle_message(self, work: Work) -> dict[str, Any]:
         payload = work.input_payload or {}
         principal_id = work.principal_id
         conversation_id = work.conversation_id
-        user_text = payload.get("text", "") or ""
-        # Voice notes: prefer transcript over placeholder labels
-        if payload.get("transcript") and (
-            not user_text.strip()
-            or user_text.strip().startswith("[audio")
-            or user_text.strip() in ("[voice note]", "[audio received]")
-        ):
-            user_text = str(payload.get("transcript"))
-        channel = payload.get("channel", "unknown")
+        user_text = (payload.get("text") or "").strip()
+        channel = payload.get("channel") or "unknown"
         target = payload.get("target_external_id")
 
+        # Recent conversation only — no Assembler/CI selection
         recent: list[dict[str, str]] = []
         if conversation_id:
             stmt = (
                 select(Message)
                 .where(Message.conversation_id == conversation_id)
                 .order_by(Message.created_at.desc())
-                .limit(16)
+                .limit(20)
             )
             result = await self.session.execute(stmt)
             msgs = list(reversed(result.scalars().all()))
             for m in msgs:
-                recent.append({"role": m.role, "content": m.content})
+                recent.append({"role": m.role, "content": m.content or ""})
 
-        assembler = ContextAssembler(self.session)
-        from wax.intelligence.system_state import (
-            build_runtime_system_state,
-            render_system_state_for_model,
-        )
-        from wax.media.manifest import build_manifest_from_payload
-
-        asset_manifest = build_manifest_from_payload(payload)
+        # Preferences (data availability, not intelligence selection)
+        prefs_block = ""
         try:
-            from wax.observability.events import emit as _emit_asset
-            if asset_manifest.assets:
-                _emit_asset(
-                    "asset.manifest_ready",
-                    work_id=str(work.id),
-                    count=len(asset_manifest.assets),
-                    kinds=asset_manifest.kinds(),
-                )
+            from wax.domain.preferences import get_preferences
+
+            if principal_id:
+                prefs = await get_preferences(self.session, principal_id)
+                interesting = [
+                    f"- {k}: {v}"
+                    for k, v in (prefs or {}).items()
+                    if v not in (None, "", False)
+                ]
+                if interesting:
+                    prefs_block = (
+                        "\n--- Durable preferences (honor unless current turn overrides) ---\n"
+                        + "\n".join(interesting)
+                        + "\n--- End preferences ---\n"
+                    )
         except Exception:
-            pass
-        ctx = await assembler.assemble(
-            principal_id=principal_id,
-            conversation_id=conversation_id,
-            channel=channel,
-            user_text=user_text,
-            tutor_system=TUTOR_SYSTEM,
-            asset_manifest=asset_manifest,
-        )
-        # Unified intelligence mode: CI produced the final reply (optional)
-        _unified_done = bool((getattr(ctx, "unified_direct_reply", None) or "").strip())
-        relevant_memories = []
-        system = (
-            ctx.system_prefix
-            + ctx.memory_block
-            + ctx.learning_block
-            + ctx.goals_block
-        )
-        recent = ctx.recent_messages
+            logger.exception("preferences_load_failed")
+
+        identity_block = ""
+        try:
+            if principal_id:
+                from wax.domain.identity import linked_channels_state, format_linked_channels_block
+
+                state = await linked_channels_state(
+                    self.session, principal_id=principal_id, current_channel=channel
+                )
+                identity_block = format_linked_channels_block(state)
+        except Exception:
+            logger.exception("identity_block_failed")
+
+        media_note = ""
+        local_path = payload.get("local_media_path") or payload.get("principal_media_path")
+        if local_path:
+            media_note = (
+                f"\n[System: a file is available in this student's World at {local_path}. "
+                f"You decide whether to inspect or process it via world_files / world_exec / world_acquire.]\n"
+            )
+        elif payload.get("media_id"):
+            media_note = (
+                "\n[System: inbound media was referenced but not yet staged. "
+                "Ask the student to resend if needed.]\n"
+            )
+
+        system = TUTOR_SYSTEM + prefs_block + identity_block + media_note
         llm_messages: list[ChatMessage] = [ChatMessage(role="system", content=system)]
         for m in recent:
             role = "assistant" if m["role"] == "assistant" else "user"
             llm_messages.append(ChatMessage(role=role, content=m["content"]))
-        media_note = ""
-        if payload.get("media_id"):
-            media_note = (
-                f"\n\n[System: inbound media available. channel={channel} "
-                f"content_type={payload.get('content_type')} media_id={payload.get('media_id')}. "
-                f"fetch_inbound_media if not on disk, then inspect_media to see capabilities.]"
-            )
-        if payload.get("local_media_path"):
-            media_note += (
-                f"\n[System: media is in the agent workspace at "
-                f"{payload.get('local_media_path')}. "
-                f"Use inspect_media / transcribe_audio / terminal on this path — "
-                f"it is readable from the principal workspace.]"
-            )
-        probe = payload.get("media_probe") or {}
-        caps = payload.get("media_capabilities") or probe.get("capability_list") or []
-        if probe or caps:
-            media_note += (
-                f"\n[System: media kind={probe.get('kind', payload.get('content_type'))}; "
-                f"capabilities={caps}. "
-                f"Compose tools as needed (inspect_media, transcribe_audio, extract_video_audio, "
-                f"extract_video_frames, describe_image, ingest_document). "
-                f"Do not claim you processed media unless a tool succeeded.]"
-            )
-        tq = payload.get("transcript_quality")
-        if payload.get("transcript") and tq == "usable":
-            media_note += (
-                f"\n[System: usable transcript available:\n{str(payload.get('transcript'))[:4000]}]"
-            )
-        elif payload.get("transcript") and tq in ("uncertain", "unusable"):
-            media_note += (
-                f"\n[System: transcription quality={tq}. "
-                f"Do not treat as reliable user text. You may ask the learner to resend or type, "
-                f"or call transcribe_audio again if appropriate. "
-                f"Snippet: {str(payload.get('transcript'))[:500]}]"
-            )
-        elif payload.get("transcript"):
-            media_note += (
-                f"\n[System: transcript present (quality unknown):\n{str(payload.get('transcript'))[:2000]}]"
-            )
-        # Safe outage awareness — structured, no internals; tutor decides whether to acknowledge
-        outage = payload.get("outage_context") if isinstance(payload.get("outage_context"), dict) else None
-        if outage and outage.get("recovered_after_interruption"):
-            wait = outage.get("approximate_wait_seconds")
-            count = outage.get("preserved_message_count")
-            media_note += (
-                "\n[System: messages were preserved during a temporary interruption"
-                + (f" (~{wait}s)" if wait is not None else "")
-                + (f"; {count} message(s) waited" if count else "")
-                + ". Respond naturally; acknowledge the delay only if it helps the learner.]"
-            )
-        batch = payload.get("recovery_batch") or payload.get("coalesced_messages")
-        if isinstance(batch, list) and len(batch) > 1:
-            lines = []
-            for item in batch[:8]:
-                if isinstance(item, dict) and item.get("text"):
-                    lines.append(str(item["text"])[:500])
-            if lines:
-                media_note += (
-                    "\n[System: several related messages arrived together "
-                    "(delay/outage or rapid sequence). Address them as ONE turn "
-                    "in original order — do not send multiple separate replies:\n"
-                    + "\n".join(f"- {line}" for line in lines)
-                    + "\n]"
-                )
-        if payload.get("coalesced_combined"):
-            user_text = str(payload.get("coalesced_combined"))[:4000]
+        if user_text:
+            # Ensure current message is last if not already in recent
+            if not recent or recent[-1].get("content") != user_text:
+                llm_messages.append(ChatMessage(role="user", content=user_text))
 
-        user_content = user_text + media_note
-        if not recent or recent[-1].get("content") != user_text:
-            llm_messages.append(ChatMessage(role="user", content=user_content))
-        elif media_note:
-            llm_messages.append(ChatMessage(role="user", content=user_content))
-        await assembler.maybe_refresh_conversation_summary(conversation_id, recent)
-
+        primitives = list_primitive_specs()
         tool_ctx = {
             "principal_id": principal_id,
             "work_id": work.id,
             "conversation_id": conversation_id,
             "channel": channel,
-            "media_id": payload.get("media_id"),
-            "content_type": payload.get("content_type"),
-            "local_media_path": payload.get("local_media_path"),
-            "target_external_id": payload.get("target_external_id"),
-            "surface_id": payload.get("surface_id"),
+            "target_external_id": target,
+            "local_media_path": local_path,
         }
 
-        # Request-driven tools: only families CI selected for this turn
-        from wax.intelligence.capability_resolve import (
-            families_from_brief,
-            select_tool_specs,
-            instrumentation as cap_instrumentation,
-        )
-
-        brief_obj = None
-        try:
-            # Prefer families resolved onto AssembledContext (may be empty = no tools)
-            raw_fams = getattr(ctx, "capability_families", None)
-            if raw_fams is not None:
-                fams = set(raw_fams)
-            else:
-                fams = families_from_brief(None)
-            path = str(getattr(ctx, "orchestration_path", "") or "") or (
-                "minimal" if not fams else "investigate"
-            )
-        except Exception:
-            fams = set()
-            path = "investigate"
-        # Media inbound / asset manifest → ensure media family (controlled expansion)
-        if payload.get("media_id") or payload.get("local_media_path") or (
-            asset_manifest and asset_manifest.assets
-        ):
-            fams = set(fams) | {"media", "core"}
-        # Experience: interactive request without surfaces family → expand surfaces
-        try:
-            brief = getattr(ctx, "orchestration_brief", None)
-            exp = list(getattr(brief, "experience_requirements", None) or [])
-            if any(x in ("interactive", "visual") for x in exp):
-                fams = set(fams) | {"surfaces", "core"}
-        except Exception:
-            pass
-        turn_tools = select_tool_specs(AVAILABLE_TOOLS, fams)
-        try:
-            from wax.observability.logging import get_logger as _gl
-
-            _instr = cap_instrumentation(
-                families=fams,
-                tools_exposed=len(turn_tools),
-                tools_total=len(AVAILABLE_TOOLS),
-                path=path,
-            )
-            _gl(__name__).info("tutor_capability_selection", **_instr)
-            try:
-                from wax.observability.turn_telemetry import get_turn
-
-                _tel = get_turn()
-                if _tel:
-                    _tel.tools_exposed = len(turn_tools)
-                    _tel.orchestration_path = path
-                    _tel.capability_families = sorted(fams)
-            except Exception:
-                pass
-        except Exception:
-            pass
-
-        # Dynamic system-state (runtime capabilities) — not a static brochure
-        try:
-            tool_names = [getattr(x, "name", str(x)) for x in (turn_tools or [])]
-            state_block = render_system_state_for_model(
-                build_runtime_system_state(
-                    channel=channel,
-                    capability_families=sorted(fams),
-                    tools_available=tool_names,
-                )
-            )
-            if llm_messages and llm_messages[0].role == "system":
-                llm_messages[0] = ChatMessage(
-                    role="system",
-                    content=(llm_messages[0].content or "") + "\n\n" + state_block,
-                )
-        except Exception:
-            logger.exception("system_state_inject_failed")
-
-        # Tool loop: up to a few rounds so the model can act then respond
-        reply_text = ""
-        tool_notes: list[str] = []
-        tool_results: list[dict] = []
-        interactive_payload: dict | None = None
         agent = AgentRuntime(self.session, work)
         await agent.start()
+        reply_text = ""
+        tool_results: list[dict] = []
+        interactive_payload: dict | None = None
         max_rounds = agent.max_rounds
-        # Cheap path: few/no tools → at most one model round without tool spam
-        if not turn_tools:
-            max_rounds = 1
-        elif path == "minimal" or len(turn_tools) <= 4:
-            max_rounds = min(max_rounds, 2)
-        if _unified_done:
-            reply_text = (ctx.unified_direct_reply or "").strip()
-            tool_notes.append("context_intel:unified")
-        for _ in range(0 if _unified_done else max_rounds):
-            if not agent.can_call_tool() and _ > 0:
-                # Budget exhausted — force a text reply next
-                pass
+
+        for round_i in range(max_rounds):
+            if not agent.can_call_tool() and round_i > 0:
+                break
             response = await self.intelligence.complete(
                 CompletionRequest(
                     messages=llm_messages,
-                    tools=(turn_tools if (agent.can_call_tool() and turn_tools) else None),
+                    tools=primitives if agent.can_call_tool() else None,
                     temperature=0.7,
                     max_tokens=2048,
                 ),
                 allow_fallback=True,
             )
-
             if response.tool_calls and agent.can_call_tool():
-                from wax.intelligence.tool_protocol import parse_arguments
-                from wax.observability.events import emit as _emit
-
                 llm_messages.append(
                     ChatMessage(
                         role="assistant",
@@ -1126,25 +176,9 @@ class TutorService:
                     name = fn.get("name") or "unknown"
                     args = fn.get("arguments")
                     tc_id = tc.get("id") or str(uuid4())
-                    parsed_args = parse_arguments(args)
-                    _emit(
-                        "tool_call_started",
-                        tool=name,
-                        call_id=tc_id,
-                        work_id=str(work.id),
-                    )
-                    outcome = await execute_tool(self.session, name, parsed_args, tool_ctx)
+                    outcome = await execute_primitive(self.session, name, args, tool_ctx)
                     out_dict = outcome if isinstance(outcome, dict) else {"ok": False}
-                    _emit(
-                        "tool_call_completed",
-                        tool=name,
-                        call_id=tc_id,
-                        work_id=str(work.id),
-                        ok=bool(out_dict.get("ok")),
-                        error=str(out_dict.get("error") or "")[:120] or None,
-                    )
-                    await agent.record_tool(name, parsed_args, out_dict)
-                    tool_notes.append(f"{name}:{out_dict.get('ok')}")
+                    await agent.record_tool(name, args if isinstance(args, dict) else {}, out_dict)
                     tool_results.append({"name": name, "result": out_dict})
                     if name == "present_choices" and out_dict.get("ok"):
                         interactive_payload = out_dict
@@ -1158,276 +192,105 @@ class TutorService:
                     )
                 continue
 
-            from wax.intelligence.tool_protocol import (
-                sanitize_learner_reply,
-                enforce_verified_artifacts,
-            )
-
-            reply_text = sanitize_learner_reply(
-                response.content,
-                had_tool_results=bool(tool_results),
-            )
-            surfaces_exposed = any(
-                (getattr(x, "name", None) or "") == "create_surface"
-                for x in (turn_tools or [])
-            )
-            reply_text = enforce_verified_artifacts(
-                reply_text,
-                tool_results=tool_results,
-                surfaces_tools_exposed=surfaces_exposed,
-            )
+            reply_text = (response.content or "").strip()
             break
 
         if not reply_text:
-            reply_text = "I'm here with you. Could you say that again another way?"
-        else:
-            from wax.intelligence.tool_protocol import (
-                sanitize_learner_reply,
-                enforce_verified_artifacts,
-            )
+            reply_text = "I'm here — try sending that again."
 
-            reply_text = sanitize_learner_reply(
-                reply_text, had_tool_results=bool(tool_results)
-            )
-            surfaces_exposed = any(
-                (getattr(x, "name", None) or "") == "create_surface"
-                for x in (turn_tools or [])
-            )
-            reply_text = enforce_verified_artifacts(
-                reply_text,
-                tool_results=tool_results,
-                surfaces_tools_exposed=surfaces_exposed,
-            )
+        await agent.complete(reply_preview=reply_text)
 
-        out_msg_id = None
+        # Persist assistant message
         if conversation_id and principal_id:
-            out_msg = Message(
-                id=uuid4(),
-                conversation_id=conversation_id,
-                principal_id=principal_id,
-                channel=channel,
-                direction="outbound",
-                role="assistant",
-                content=reply_text,
-                work_id=work.id,
-                metadata_={"tools": tool_notes} if tool_notes else {},
+            self.session.add(
+                Message(
+                    id=uuid4(),
+                    conversation_id=conversation_id,
+                    principal_id=principal_id,
+                    role="assistant",
+                    direction="outbound",
+                    content=reply_text,
+                    channel=channel,
+                    work_id=work.id,
+                )
             )
-            self.session.add(out_msg)
             await self.session.flush()
-            out_msg_id = out_msg.id
-            conv = await self.session.get(Conversation, conversation_id)
-            if conv:
-                conv.last_message_at = datetime.now(timezone.utc)
 
-        delivery_id = None
-        if principal_id and target and reply_text:
-            # Message.content stays canonical (channel-neutral).
-            # Delivery.content is the channel-rendered form that will be sent.
-            from wax.delivery.presentation import present_for_channel
+        buttons: list[InteractiveChoice] = []
+        if interactive_payload:
+            for c in interactive_payload.get("choices") or []:
+                buttons.append(
+                    InteractiveChoice(
+                        id=str(c.get("id") or ""),
+                        title=str(c.get("title") or ""),
+                        description=c.get("description"),
+                    )
+                )
 
-            rendered = present_for_channel(reply_text, channel)
+        presentable = PresentableResponse(
+            text=reply_text,
+            interactive_type="reply_buttons" if buttons else None,
+            buttons=buttons,
+            list_button_label=(interactive_payload or {}).get("list_button_label"),
+        )
+
+        # Delivery — infrastructure sends; AI already decided content
+        if target and channel and principal_id:
+            did = uuid4()
             delivery = Delivery(
-                id=uuid4(),
+                id=did,
                 work_id=work.id,
                 principal_id=principal_id,
                 channel=channel,
                 target_external_id=str(target),
-                content=rendered,
                 status="pending",
-                idempotency_key=f"delivery:{work.id}",
-                metadata_={"canonical_preview": reply_text[:500]},
+                content=reply_text,
+                idempotency_key=f"work:{work.id}:{did}",
             )
             self.session.add(delivery)
             await self.session.flush()
-            delivery_id = delivery.id
-
-        # Memory is durable Work — never blocks learner response latency
-        if principal_id:
             try:
-                mem_work = Work(
-                    id=uuid4(),
-                    principal_id=principal_id,
-                    conversation_id=conversation_id,
-                    kind="memory_process",
-                    status="queued",
-                    priority=80,
-                    objective="Post-turn memory extraction and continuity",
-                    input_payload={
-                        "source_work_id": str(work.id),
-                        "conversation_id": str(conversation_id) if conversation_id else None,
-                        "user_text": user_text[:2000],
-                        "reply_text": reply_text[:2000],
-                        "recent": recent[-8:] if recent else [],
-                        "capability_families": list(
-                            getattr(ctx, "capability_families", None) or []
-                        ),
-                        "orchestration_path": str(
-                            getattr(ctx, "orchestration_path", "") or ""
-                        ),
-                        "tools_used": list(tool_notes or [])[:12],
-                    },
+                from wax.delivery.senders import deliver
+
+                result = await deliver(
+                    channel=channel,
+                    target=str(target),
+                    text=reply_text,
+                    interactive=interactive_payload,
                 )
-                self.session.add(mem_work)
+                if isinstance(result, dict) and result.get("status") == "failed":
+                    delivery.status = "failed"
+                    delivery.error = str(result.get("reason") or "send_failed")[:500]
+                else:
+                    delivery.status = "sent"
+                    delivery.delivered_at = datetime.now(timezone.utc)
                 await self.session.flush()
-            except Exception:
-                logger.exception("memory_work_enqueue_failed")
-            # Lightweight post-turn teaching continuity (meaningful turns only)
-            try:
-                from wax.learner.continuity import maybe_update_teaching_after_turn
+            except Exception as e:
+                logger.exception("delivery_failed", work_id=str(work.id))
+                delivery.status = "failed"
+                delivery.error = str(e)[:500]
+                await self.session.flush()
 
-                await maybe_update_teaching_after_turn(
-                    self.session,
-                    principal_id=principal_id,
-                    user_text=user_text,
-                    reply_text=reply_text,
-                    tool_notes=tool_notes,
-                )
-            except Exception:
-                logger.exception("teaching_state_post_turn_failed")
-
-        await agent.complete(reply_preview=reply_text)
         return {
+            "ok": True,
             "reply": reply_text,
-            "message_id": str(out_msg_id) if out_msg_id else None,
-            "delivery_id": str(delivery_id) if delivery_id else None,
-            "memories_used": getattr(ctx, "memories_used", 0),
-            "tools": tool_results,
-            "tool_notes": tool_notes,
-            "interactive": interactive_payload,
-            "execution_id": str(agent.execution.id) if agent.execution else None,
-            "orchestration_path": str(getattr(ctx, "orchestration_path", "") or ""),
-            "capability_families": list(getattr(ctx, "capability_families", None) or []),
+            "tool_results": tool_results,
+            "interaction": interactive_payload,
+            "presentable": presentable,
         }
-
-
-    async def handle_surface_request(self, work: Work) -> dict[str, Any]:
-        """Same intelligence as messaging — surface is another channel."""
-        payload = work.input_payload or {}
-        payload.setdefault("channel", "surface")
-        payload.setdefault("text", payload.get("user_text") or "")
-        work.input_payload = payload
-        # Enrich user text with surface context (not a second brain)
-        extra = []
-        extra.append(f"[Surface channel. Title: {payload.get('surface_title') or 'untitled'}]")
-        extra.append(f"[Surface revision: {payload.get('revision')}]")
-        st = payload.get("surface_state") or {}
-        keys = list(st.keys())[:30]
-        if keys:
-            extra.append(f"[Surface state keys: {', '.join(str(k) for k in keys)}]")
-        ctx = payload.get("context") or {}
-        if ctx:
-            extra.append(f"[Surface client context keys: {', '.join(list(ctx.keys())[:20])}]")
-        extra.append(
-            "If the learner asked to change this environment, use update_surface with this surface_id. "
-            "If they asked to keep it, use retain_surface. Prefer updating this surface over creating a new one."
-        )
-        note = "\n".join(extra)
-        text = payload.get("text") or ""
-        payload["text"] = f"{text}\n\n{note}"
-        work.input_payload = payload
-        # Inject surface_id into tool context via payload
-        payload["surface_id"] = payload.get("surface_id")
-        result = await self.handle_message(work)
-        return result
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
-        """Scheduled wake: rebuild Learner Model, reassess intent, then tutor decides."""
-        payload = work.input_payload or {}
-        principal_id = work.principal_id
-        action_type = payload.get("action_type", "tutor_followup")
-        reason = payload.get("reason") or ""
-        hint = (payload.get("payload") or {}).get("message_hint") or reason
-        inner = payload.get("payload") or {}
-
-        decision = "deliver"
-        decision_reason = "due"
-        model_summary = ""
-        if principal_id:
-            try:
-                from wax.learner.model import build_learner_model
-                from wax.learner.temporal import TemporalService
-
-                model = await build_learner_model(self.session, principal_id)
-                model_summary = (
-                    f"Goals: {[g.get('title') for g in model.goals[:3]]}\n"
-                    f"Activity: {(model.activities[0] if model.activities else None)}\n"
-                    f"Fragile: {[f.get('label') for f in model.fragile[:3]]}\n"
-                    f"Prefs: {[p.get('content')[:80] for p in model.preferences[:3]]}\n"
-                    f"Timezone: {model.timezone}\n"
-                )
-                # if this is a temporal_intent, evaluate
-                if action_type == "temporal_intent" or payload.get("action_type") == "temporal_intent":
-                    from wax.db.models import ScheduledAction, TemporalIntent
-                    from sqlalchemy import select
-
-                    intent = None
-                    sa_id = payload.get("scheduled_action_id") or work.input_payload.get("scheduled_action_id")
-                    # load by target match
-                    stmt = (
-                        select(TemporalIntent)
-                        .where(
-                            TemporalIntent.principal_id == principal_id,
-                            TemporalIntent.status.in_(["scheduled", "due", "rescheduled"]),
-                        )
-                        .order_by(TemporalIntent.execute_at.asc())
-                        .limit(5)
-                    )
-                    intents = list((await self.session.execute(stmt)).scalars().all())
-                    for it in intents:
-                        if it.target and reason and it.target[:80] in reason or (reason and reason[:80] in (it.target or "")):
-                            intent = it
-                            break
-                    if not intent and intents:
-                        intent = intents[0]
-                    if intent:
-                        ev = await TemporalService(self.session).evaluate_due_intent(
-                            intent, model.to_dict()
-                        )
-                        decision = ev.get("decision") or "deliver"
-                        decision_reason = ev.get("reason") or ""
-                        if decision in ("suppress", "fulfilled"):
-                            return {
-                                "reply": None,
-                                "action_type": action_type,
-                                "decision": decision,
-                                "reason": decision_reason,
-                                "suppressed": True,
-                            }
-            except Exception:
-                from wax.observability.logging import get_logger
-                get_logger(__name__).exception("scheduled_learner_model_failed")
-                model_summary = await self.memory.get_active_summary(principal_id)
-
-        system = (
-            TUTOR_SYSTEM
-            + "\n\nThis is a scheduled wake. You must reassess whether the intention is still useful.\n"
-            + f"Original reason: {reason}\nHint: {hint}\n"
-            + f"Evaluation decision: {decision} ({decision_reason})\n\n"
-            + "--- Learner model now ---\n"
-            + (model_summary or "Sparse history.")
-            + "\n\nIf the learner is deep in study and the reminder is non-urgent, acknowledge gently without derailing.\n"
-            + "If the intention appears already completed, say almost nothing or skip.\n"
-            + "Do not spam. Write a natural useful message only if still valuable.\n"
+        """Wake path: scheduled Work becomes a message the brain handles."""
+        payload = dict(work.input_payload or {})
+        hint = payload.get("message_hint") or payload.get("reason") or "scheduled follow-up"
+        payload["text"] = (
+            f"[System scheduled wake] {hint}\n"
+            "Continue helpfully for this student based on memory and context. "
+            "Do not mention internal scheduling machinery."
         )
+        work.input_payload = payload
+        await self.session.flush()
+        return await self.handle_message(work)
 
-        response = await self.intelligence.complete(
-            CompletionRequest(
-                messages=[
-                    ChatMessage(role="system", content=system),
-                    ChatMessage(
-                        role="user",
-                        content="Compose the follow-up message for this learner now, using current learner state.",
-                    ),
-                ],
-                temperature=0.6,
-                max_tokens=1024,
-            ),
-            allow_fallback=True,
-        )
-        reply = (response.content or "").strip()
-        return {
-            "reply": reply,
-            "action_type": action_type,
-            "decision": decision,
-            "reason": decision_reason,
-        }
+    async def handle_surface_request(self, work: Work) -> dict[str, Any]:
+        return await self.handle_message(work)

@@ -1,49 +1,49 @@
 # WAX Prep
 
-**The tutor that actually knows you.**
+**Open-world AI tutor for students** on WhatsApp and Telegram.
 
-Persistent adaptive tutoring on **WhatsApp** and **Telegram**.
+## Architecture
 
-## What this is
+```
+Student → Channel → Infrastructure (identity, security, Work, World lifecycle)
+                 → AI / Tutor (the brain)
+                 → Student World (persistent files, packages, terminal)
+                 → primitives (memory, schedule, publish, interaction)
+                 → Delivery
+```
 
-A person messages WAX. WAX learns who they are as a learner over time, remembers what matters, and helps them move forward.
-
-No subject menus. No exam modes. No built-in curriculum library.  
-Materials come from the learner (chat, photos, uploads) or are created together in conversation.
+- **Infrastructure** enforces reality: auth, isolation, persistence, messaging, retries.
+- **AI** decides: what to remember, retrieve, process, create, teach, schedule.
+- **World** is the student's isolated persistent execution environment.
+- **No** Context Intelligence gate, **no** automatic context assembler, **no** specialized educational workflow tools.
 
 ## Run
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env   # set DATABASE_URL, PRIMARY_API_KEY, WhatsApp and/or Telegram
+cp .env.example .env   # DATABASE_URL, PRIMARY_*, WhatsApp/Telegram, WORKSPACE_ROOT
 
-# schema
 python scripts/bootstrap_db.py
-# or: alembic upgrade head
-
-# terminal 1 — webhooks
+# terminal 1
 uvicorn wax.api.main:app --host 0.0.0.0 --port 8000
-
-# terminal 2 — tutor worker
+# terminal 2
 python -m wax.workers.main
 ```
 
-Point WhatsApp / Telegram webhooks at:
+Webhooks: `POST /webhooks/whatsapp`, `POST /webhooks/telegram`
 
-- `POST /webhooks/whatsapp`
-- `POST /webhooks/telegram`
+**Production:** set a durable `WAX_WORKSPACE_ROOT` (not `/tmp`) so student Worlds persist across deploys.
 
-Health: `GET /health` · `GET /ready` · `GET /health/detail`
+## Primitives available to the AI
 
-## Architecture (short)
-
-Webhook accepts fast → durable Work → worker runs tutor (memory + tools) → delivery → memory extract.
-
-See `docs/architecture.md` and `docs/BLUEPRINT_ALIGNMENT.md`.
+- Memory: search, get, create, update, supersede, forget
+- World: discover, exec, acquire, files
+- Time: now, schedule, cancel, list_scheduled
+- Interaction: present_choices
+- Publish: publish / update_surface / revoke_surface
+- Preferences: set_preference
 
 ## Philosophy
 
-Deterministic software guarantees reality (DB, queue, delivery).  
-Intelligence interprets and decides.  
-Memory is the product continuity — not a chatbot history dump.
+Infrastructure provides reality. AI provides intelligence.

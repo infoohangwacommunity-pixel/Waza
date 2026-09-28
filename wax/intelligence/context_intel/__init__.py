@@ -1,15 +1,6 @@
-"""
-Context Intelligence — model-guided investigation over existing Waza systems.
-"""
+"""REMOVED — Context Intelligence deleted. See architecture reset."""
 
-from wax.intelligence.context_intel.brief import ContextBrief, brief_to_tutor_text
-
-def investigate_context(*args, **kwargs):
-    from wax.intelligence.context_intel.agent import investigate_context as _inv
-    return _inv(*args, **kwargs)
-
-__all__ = [
-    "ContextBrief",
-    "brief_to_tutor_text",
-    "investigate_context",
-]
+raise ImportError(
+    "Context Intelligence has been removed from WAX Prep. "
+    "The main tutor decides what to retrieve via primitives."
+)
