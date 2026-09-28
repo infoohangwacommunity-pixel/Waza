@@ -114,12 +114,14 @@ class ChatMessage:
 
 @dataclass
 class CompletionRequest:
-    """Text completion only — no tools catalogue; max_tokens is optional resource bound, not an intelligence budget."""
+    """Text completion only — no tools catalogue, no application token/step budget.
+
+    Tutor path must not impose max_tokens or reasoning ceilings.
+    Provider adapters may apply API-required fields internally only.
+    """
 
     messages: list[ChatMessage]
     temperature: float | None = None
-    max_tokens: int | None = None
-    stop: list[str] | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -182,10 +184,7 @@ class OpenAICompatibleProvider(IntelligenceProvider):
             "messages": _serialize_openai_messages(request.messages),
             "temperature": request.temperature if request.temperature is not None else 0.7,
         }
-        # max_tokens only when the caller sets it. Default is provider/model natural limit —
-        # not an application intelligence budget. When set, treat as infrastructure resource bound.
-        if request.max_tokens is not None:
-            body["max_tokens"] = int(request.max_tokens)
+        # No max_tokens — leave the model at its natural output limit.
         # Ensure body is JSON-serializable (Upstage rejects malformed bodies)
         try:
             import json as _json
@@ -313,12 +312,12 @@ class AnthropicProvider(IntelligenceProvider):
                     }
                 )
 
-        # Anthropic API requires max_tokens. Use caller value or a high resource safety floor
-        # (not an application intelligence budget on how much the model may think).
+        # Anthropic Messages API requires max_tokens (cannot omit). Use a high value so
+        # this is not an application intelligence ceiling — the model may still stop earlier.
         body: dict[str, Any] = {
             "model": self.model,
             "messages": messages or [{"role": "user", "content": "Hello"}],
-            "max_tokens": int(request.max_tokens) if request.max_tokens is not None else 8192,
+            "max_tokens": 32000,
             "temperature": request.temperature if request.temperature is not None else 0.7,
         }
         if system:

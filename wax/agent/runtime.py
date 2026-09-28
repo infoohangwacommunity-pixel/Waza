@@ -21,8 +21,9 @@ from wax.observability.logging import get_logger, set_execution_id
 logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
-# Infrastructure safety boundaries (runaway / DoS / resource exhaustion)
-# NOT intelligence budgets. Raise if legitimate long objectives hit them in production.
+# Infrastructure safety only — protect the machine and other students.
+# These are NOT teaching/reasoning policy and are never sent to the model.
+# Wall-clock bounds a single Work execution; continuation count bounds runaway loops.
 # ---------------------------------------------------------------------------
 _SAFETY_MAX_CONTINUATIONS = 48
 _SAFETY_MAX_WALL_SECONDS = 300

@@ -195,6 +195,8 @@ class TutorService:
         actions_log: list[dict[str, Any]] = []
 
         while agent.can_continue():
+            # No max_tokens / step budget — model uses natural output limits.
+            # agent.can_continue() is infrastructure runaway/wall-clock safety only.
             req = CompletionRequest(messages=messages, temperature=0.7)
             try:
                 response = await intelligence.complete(req)
