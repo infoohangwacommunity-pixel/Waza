@@ -1,9 +1,10 @@
 """
 WAX Prep background worker.
 
-Claims durable Work → runs Tutor intelligence → memory → delivery.
+Claims durable Work → runs Tutor intelligence → delivery.
 Survives crashes. Every learner message goes through AI.
 Only pure infrastructure error paths skip the model.
+Durable memory is AI-driven via state directives — no post-turn memory job.
 """
 
 from __future__ import annotations
@@ -460,27 +461,6 @@ async def _mark_work_terminal(
             pass
 
 
-async def process_memory_work(session, work: Work) -> None:
-    """Post-turn memory work — lightweight.
-
-    AI owns memory lifecycle during the turn.
-    Infrastructure does not auto-extract, run CI, or invent learner facts.
-    This job exists only for durable bookkeeping / no automatic consolidation.
-    """
-    from datetime import datetime, timezone
-
-    _work_id = str(work.id)
-    try:
-        work.status = "completed"
-        work.completed_at = datetime.now(timezone.utc)
-        await session.flush()
-    except Exception as e:
-        logger.exception("memory_work_failed", work_id=_work_id)
-        await _mark_work_terminal(
-            session, work, status="failed", error=str(e), error_class="memory_failure"
-        )
-
-
 async def process_media_prepare(session, work: Work) -> None:
     """Download inbound media into World only — no STT/OCR/classification."""
     from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
@@ -878,8 +858,6 @@ async def worker_loop(worker_id: str) -> None:
                     await process_message_response(session, work)
                 elif work.kind == "surface_ai":
                     await process_surface_ai(session, work)
-                elif work.kind == "memory_process":
-                    await process_memory_work(session, work)
                 elif work.kind == "media_prepare":
                     await process_media_prepare(session, work)
                 elif work.kind == "scheduled_action":

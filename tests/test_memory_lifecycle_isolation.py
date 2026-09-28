@@ -77,6 +77,9 @@ def test_no_plan_and_retrieve_or_auto_summary_in_store():
     assert "get_active_summary" not in src
     assert "extract_and_store" not in src
     assert "consolidat" not in src
+    # No application importance ranking policy
+    assert "importance.desc" not in src
+    assert "order_by(Memory.updated_at.desc())" in src
 
 
 def test_tutor_does_not_auto_inject_memories():
@@ -85,3 +88,9 @@ def test_tutor_does_not_auto_inject_memories():
     assert "memory_search(self.session, principal_id, query=None, limit=12)" not in src
     # memory_search only via directive path is fine
     assert "No memories are preloaded" in src or "preselected" in src
+
+
+def test_no_post_turn_memory_process_job():
+    src = open("wax/workers/main.py", encoding="utf-8").read()
+    assert "memory_process" not in src
+    assert "process_memory_work" not in src

@@ -63,7 +63,11 @@ async def memory_search(
     limit: int = 20,
     include_inactive: bool = False,
 ) -> dict[str, Any]:
-    """Search this principal's durable memories only."""
+    """Search this principal's durable memories only.
+
+    Optional substring filter on content. Ordered by recency (updated_at).
+    No application importance/semantic ranking policy.
+    """
     pid = _as_uuid(principal_id)
     if not pid:
         return {"ok": False, "error": "no_principal", "memories": []}
@@ -77,7 +81,7 @@ async def memory_search(
     if query and str(query).strip():
         q = f"%{str(query).strip()[:200]}%"
         stmt = stmt.where(Memory.content.ilike(q))
-    stmt = stmt.order_by(Memory.importance.desc(), Memory.updated_at.desc()).limit(limit)
+    stmt = stmt.order_by(Memory.updated_at.desc()).limit(limit)
     result = await session.execute(stmt)
     rows = list(result.scalars().all())
 
