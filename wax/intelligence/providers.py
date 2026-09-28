@@ -1,9 +1,9 @@
 """
-Provider-agnostic intelligence abstraction.
+Single intelligence path: chat completion for the AI agent.
 
-Primary + fallback. Retries. Error classification.
-No cost accounting. No token budgets that reject learners.
-Every meaningful learner message goes through intelligence.
+Primary provider (+ optional fallback for resilience only).
+Text-only: no function-calling, no ToolSpec, no second "memory model" brain.
+Embeddings / multimodal are not separate intelligence layers here.
 """
 
 from __future__ import annotations
@@ -257,8 +257,6 @@ class OpenAICompatibleProvider(IntelligenceProvider):
         try:
             choice = data["choices"][0]
             message = choice["message"]
-            # Text-first path. Tool-call payloads are ignored by the agent runtime
-            # (directives are free-form text, not provider function calling).
             content = message.get("content")
             if isinstance(content, list):
                 # Some providers return content parts
@@ -428,7 +426,7 @@ def _build_provider(
         logger.warning(
             "provider_missing_model",
             provider=name or "(empty)",
-            hint="Set PRIMARY_MODEL / FALLBACK_MODEL / matching *_MODEL",
+            hint="Set PRIMARY_MODEL (and FALLBACK_MODEL if using fallback)",
         )
         return None
 
@@ -476,8 +474,10 @@ def _build_provider(
 
 class IntelligenceService:
     """
-    High-level intelligence with primary + fallback.
-    No cost gates. Every learner message is eligible for intelligence.
+    One decision-maker path: primary chat model, optional fallback on failure.
+
+    Fallback is resilience (same task), not a second intelligence role.
+    No memory-extraction model. No multimodal side brain.
     """
 
     def __init__(self) -> None:
@@ -486,122 +486,92 @@ class IntelligenceService:
             settings.primary_api_key,
             settings.primary_model,
             settings.primary_base_url,
-            settings.primary_timeout_seconds,
+            getattr(settings, "primary_timeout_seconds", 60.0),
         )
         self.fallback = _build_provider(
             settings.fallback_provider,
             settings.fallback_api_key,
             settings.fallback_model,
             settings.fallback_base_url,
-            settings.fallback_timeout_seconds,
+            getattr(settings, "fallback_timeout_seconds", 60.0),
         )
-        # Smaller model for memory operations
-        mem_key = settings.memory_api_key or settings.primary_api_key
-        mem_provider = settings.memory_provider if settings.memory_provider != "none" else settings.primary_provider
-        self.memory_model = _build_provider(
-            mem_provider,
-            mem_key,
-            settings.memory_model,
-            getattr(settings, "memory_base_url", None) or settings.primary_base_url,
-            60.0,
-        )
-        self.context_model = None  # CI removed; AI uses primary only
+        if not self.primary and not self.fallback:
+            logger.error("no_intelligence_provider_configured")
 
     async def complete(
         self,
         request: CompletionRequest,
         *,
         allow_fallback: bool = True,
-        use_memory_model: bool = False,
-        role: str = "primary",
+        retries: int | None = None,
     ) -> CompletionResponse:
-        """
-        role:
-          - primary: main tutor path
-          - memory: memory extraction model
-          - context: Context Intelligence only (independent config)
-        """
-        providers: list[IntelligenceProvider] = []
-        if role == "context":
-            if self.context_model:
-                providers.append(self.context_model)
-            # Context role never silently chains to primary unless context_model IS primary
-            # CI removed
-        elif use_memory_model and self.memory_model:
-            providers.append(self.memory_model)
-            # allow_fallback=False means memory model only — no silent primary/fallback chain
-            if allow_fallback:
-                if self.primary and self.primary is not self.memory_model:
-                    providers.append(self.primary)
-                if self.fallback and self.fallback not in providers:
-                    providers.append(self.fallback)
-        else:
-            if self.primary:
-                providers.append(self.primary)
-            if allow_fallback and self.fallback and self.fallback is not self.primary:
-                providers.append(self.fallback)
-
+        """Run the single intelligence completion path."""
+        providers: list = []
+        if self.primary:
+            providers.append(self.primary)
+        if allow_fallback and self.fallback and self.fallback is not self.primary:
+            providers.append(self.fallback)
         if not providers:
             raise ProviderError(
-                "No intelligence providers configured for role="
-                + role
-                + ". Set the matching API key / model.",
-                ProviderErrorClass.AUTH_FAILURE,
+                "No intelligence provider configured",
+                ProviderErrorClass.UNAVAILABLE,
                 retryable=False,
             )
 
-        last_error: Exception | None = None
-        for provider in providers:
+        last_err: Exception | None = None
+        for i, provider in enumerate(providers):
+            is_fallback = i > 0
             try:
-                if use_memory_model and provider is self.memory_model:
-                    retries = getattr(settings, "memory_max_retries", 1)
-                elif provider is self.fallback:
-                    retries = getattr(settings, "fallback_max_retries", 2)
-                else:
-                    retries = getattr(settings, "primary_max_retries", 2)
-                return await self._with_retry(provider, request, retries=retries)
-            except ProviderError as e:
-                last_error = e
-                logger.warning(
-                    "provider_failed",
-                    provider=provider.name,
-                    error_class=e.error_class.value,
-                    retryable=e.retryable,
-                    retry_after=getattr(e, "retry_after_seconds", None),
+                return await self._complete_with_retries(
+                    provider,
+                    request,
+                    retries=retries
+                    if retries is not None
+                    else (
+                        getattr(settings, "fallback_max_retries", 2)
+                        if is_fallback
+                        else getattr(settings, "primary_max_retries", 2)
+                    ),
                 )
-                # Rate limited: do not burn through the whole provider list immediately
-                if e.error_class == ProviderErrorClass.RATE_LIMITED:
-                    ra = float(getattr(e, "retry_after_seconds", None) or 15.0)
-                    base = getattr(provider, "base_url", "") or ""
-                    _arm_provider_cooldown(provider.name, getattr(provider, "model", "") or "", ra, base)
-                    # Only try a different host for fallback; same host shares budget
-                    if allow_fallback and provider is not providers[-1]:
-                        next_p = providers[providers.index(provider) + 1] if provider in providers else None
-                        next_base = getattr(next_p, "base_url", "") or "" if next_p else ""
-                        if next_p and next_base.rstrip("/") == base.rstrip("/") and base:
-                            raise  # same quota pool — fail fast to caller
-                    if not allow_fallback:
-                        raise
-                if not e.retryable and provider is providers[-1]:
+            except ProviderError as e:
+                last_err = e
+                logger.warning(
+                    "provider_complete_failed",
+                    provider=getattr(provider, "name", "?"),
+                    error_class=str(e.error_class),
+                    retryable=e.retryable,
+                    is_fallback=is_fallback,
+                )
+                # Auth / invalid: try fallback once; don't spin
+                if not e.retryable and not is_fallback and allow_fallback:
+                    continue
+                if is_fallback or not allow_fallback:
                     raise
                 continue
-        raise last_error or ProviderError(
-            "All providers failed", ProviderErrorClass.UNAVAILABLE, retryable=False
-        )
+            except Exception as e:
+                last_err = e
+                logger.exception("provider_unexpected_error", provider=getattr(provider, "name", "?"))
+                if i + 1 >= len(providers):
+                    raise ProviderError(
+                        str(e), ProviderErrorClass.UNAVAILABLE, retryable=False
+                    ) from e
+                continue
+        assert last_err is not None
+        raise last_err
 
-    async def _with_retry(
-        self, provider: IntelligenceProvider, request: CompletionRequest, retries: int | None = None
+    async def _complete_with_retries(
+        self,
+        provider: IntelligenceProvider,
+        request: CompletionRequest,
+        *,
+        retries: int,
     ) -> CompletionResponse:
         def _should_retry(exc: BaseException) -> bool:
-            # Only retry ProviderError instances that are explicitly retryable
-            # (429, 5xx, timeout). Auth / invalid request / malformed must not loop.
             return isinstance(exc, ProviderError) and bool(getattr(exc, "retryable", False))
 
         @retry(
             retry=retry_if_exception(_should_retry),
-            stop=stop_after_attempt(
-                max(1, retries if retries is not None else getattr(settings, "primary_max_retries", 2))
-            ),
+            stop=stop_after_attempt(max(1, retries if retries is not None else 2)),
             wait=wait_exponential_jitter(initial=2, max=60),
             reraise=True,
         )
@@ -609,6 +579,8 @@ class IntelligenceService:
             return await provider.complete(request)
 
         return await _inner()
+
+
 
 
 _intelligence: IntelligenceService | None = None

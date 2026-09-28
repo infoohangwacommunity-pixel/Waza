@@ -36,33 +36,13 @@ class Settings(BaseSettings):
     primary_timeout_seconds: float = 60.0
     primary_max_retries: int = 2
     fallback_max_retries: int = 2
-    memory_max_retries: int = 1
     fallback_provider: str = "none"
     fallback_api_key: str = ""
     fallback_base_url: str = ""
     fallback_model: str = "gpt-4o-mini"
     fallback_timeout_seconds: float = 60.0
-    memory_provider: str = "none"
-    memory_api_key: str = ""
-    memory_model: str = "gpt-4o-mini"
-    memory_base_url: str = ""  # defaults to primary_base_url if empty
 
-    # Embeddings are independent of the chat provider (configure via env).
-    # Example Voyage:
-    #   EMBEDDING_PROVIDER=voyage
-    #   EMBEDDING_API_KEY=...
-    #   EMBEDDING_BASE_URL=https://api.voyageai.com/v1
-    #   EMBEDDING_MODEL=voyage-3.5-lite
-    embedding_provider: str = "none"
-    embedding_api_key: str = ""
-    embedding_base_url: str = ""
-    embedding_model: str = "text-embedding-3-small"
 
-    # Optional multimodal provider (same OpenAI-compatible shape) — only used when AI asks
-    multimodal_provider: str = "none"
-    multimodal_api_key: str = ""
-    multimodal_base_url: str = ""
-    multimodal_model: str = "gpt-4o-mini"
 
     whatsapp_enabled: bool = False
     whatsapp_verify_token: str = ""
