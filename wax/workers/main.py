@@ -465,7 +465,7 @@ async def process_memory_work(session, work: Work) -> None:
 
     AI owns memory lifecycle during the turn.
     Infrastructure does not auto-extract, run CI, or invent learner facts.
-    This job exists only for durable bookkeeping / future async consolidation.
+    This job exists only for durable bookkeeping / no automatic consolidation.
     """
     from datetime import datetime, timezone
 
@@ -983,7 +983,7 @@ async def recovery_loop() -> None:
                 if cycle % 10 == 0:
                     try:
                             pass  # research_loop retired — AI decides research via agent directives
-                            pass  # automatic memory consolidation retired — AI owns memory lifecycle
+                            pass  # AI owns memory lifecycle
                     except Exception:
                         logger.exception("memory_consolidation_batch_error")
         except Exception:

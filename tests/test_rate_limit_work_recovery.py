@@ -16,5 +16,3 @@ def test_rate_ack_idempotent():
     assert "rate-ack:" in SRC
 
 
-def test_consolidation_defers_on_cooldown():
-    assert "memory_consolidation_deferred_provider_cooldown" in SRC

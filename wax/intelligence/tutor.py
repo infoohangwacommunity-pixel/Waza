@@ -114,7 +114,7 @@ class TutorService:
             f"- principal_id: {principal_id or 'none'}\n"
             f"- world: available — persistent isolated workspace (files, packages, terminal). "
             f"Inspect or act only via a ```world directive when needed.\n"
-            f"- durable_memory: available — you own search/create/update/supersede/forget. "
+            f"- durable_memory: available — you own search/get/create/update/supersede/forget. "
             f"No memories are preloaded; use a ```memory directive when you need them.\n"
             f"- schedule/publish/choices: available via matching directives when needed.\n"
         )
@@ -251,6 +251,12 @@ class TutorService:
                 principal_id,
                 query=d.parsed.get("query") or d.body,
                 limit=20,
+            )
+        if action in ("get", "inspect"):
+            return await mem.memory_get(
+                self.session,
+                principal_id,
+                str(d.parsed.get("memory_id") or d.parsed.get("id") or ""),
             )
         if action == "create":
             return await mem.memory_create(

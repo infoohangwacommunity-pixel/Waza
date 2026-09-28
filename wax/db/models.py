@@ -261,10 +261,7 @@ class Delivery(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 
 class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """
-    Multi-level memory: episodic | semantic | learning | preference | goal | behavioral.
-    Confidence, provenance, evidence, expiration, supersession.
-    """
+    """Durable student state row. AI owns lifecycle; infrastructure stores and isolates."""
 
     __tablename__ = "memories"
     __table_args__ = (
