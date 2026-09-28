@@ -46,9 +46,7 @@ for p in pathlib.Path('wax').rglob('*.py'):
   ast.parse(p.read_text())
 print('syntax ok')"
       - name: Unit tests
-        run: pytest -q tests/ --ignore=tests/integration -m "not integration"
-      - name: Surface DB integration
-        run: pytest -q tests/test_surface_integration_db.py tests/test_surface_architecture_paths.py
+        run: pytest -q tests/
       - name: Forbidden patterns
         run: |
           if rg -n "CostProtector|cost_exceeded|can_spend|estimate_llm_cost|budget_cents|JAMBMode|QuizMode|StudentMode" wax --type py; then

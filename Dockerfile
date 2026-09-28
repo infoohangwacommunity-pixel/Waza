@@ -1,5 +1,5 @@
-# Coherent production image: Python is guaranteed; media tools match sandbox allowlist.
-# Avoids Nixpacks "python: command not found" when custom nixPkgs displace the provider.
+# Authoritative production image (Railway builder = DOCKERFILE).
+# Media/sandbox tools match World isolation allowlist.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# WAX Prep container entrypoint: migrate → verify schema → start app.
+# Container entrypoint: migrate → verify schema → exec app command.
 # Fail-closed: any step failure exits non-zero and the process does not start.
+# Used by: scripts/start_web.sh (web) and Procfile worker line.
 set -euo pipefail
 
-# Railway/Nixpacks images often expose python3 but not python.
 if command -v python3 >/dev/null 2>&1; then
   PYTHON=python3
 elif command -v python >/dev/null 2>&1; then
@@ -13,7 +13,7 @@ else
   exit 127
 fi
 export PYTHON
-# Some tools still invoke "python" — provide a shim when missing
+# Dockerfile provides `python`; this shim covers local/dev images that only ship python3.
 if ! command -v python >/dev/null 2>&1; then
   mkdir -p /tmp/wax-bin
   ln -sf "$(command -v python3)" /tmp/wax-bin/python
