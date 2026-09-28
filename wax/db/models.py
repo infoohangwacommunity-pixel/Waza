@@ -1,7 +1,8 @@
 """
 WAX durable reality (not educational theory tables).
 
-Identity & channels: Principal, InterfaceIdentity, ChannelLinkChallenge
+Identity & channels: Principal, InterfaceIdentity
+  (ChannelLinkChallenge table may still exist from baseline; feature code removed)
 Conversation: Conversation, Message, InboundEvent
 World: World
 Durable state: Memory (AI-owned; goals live here as memory_type, not a Goal engine)
