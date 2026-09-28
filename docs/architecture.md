@@ -107,3 +107,14 @@ Each principal has an isolated World under `WORKSPACE_ROOT/worlds/<world_id>/`.
 
 There is **no** automatic expiration of a student's World after 72 hours.
 Isolation is by distinct world roots; paths cannot escape the world root.
+
+
+## Surface workspaces
+
+Surfaces are **temporary AI-authored web workspaces**, not a messaging channel.
+
+- AI writes HTML/CSS/JS (design, color, cartoons, lists, interaction UI).
+- AI chooses lifetime (hours / week / etc.) and may update or revoke.
+- Infrastructure: opaque tokens, CSP, principal isolation, expire/cleanup, optional state/events API for the page.
+
+No application-forced brand theme. No surface intelligence engine deciding when a student "needs a website."

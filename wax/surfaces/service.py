@@ -1,9 +1,10 @@
-"""
-Web Surface service — create/update/access/lifecycle.
+"""Surface service — secure publish, tokens, lifecycle, isolation.
 
-AI supplies the experience bundle (HTML entry + optional assets).
-Infrastructure stores, isolates, authorizes, and cleans.
+The AI authors all experience HTML/CSS/JS and chooses lifetime and interaction design.
+Infrastructure: opaque tokens, CSP host, principal isolation, expire/revoke/update.
+Not a surface intelligence engine. Not a product website template.
 """
+
 
 from __future__ import annotations
 

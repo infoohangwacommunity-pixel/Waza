@@ -125,6 +125,13 @@ def _normalize(tag: str, body: str) -> tuple[str, str, dict[str, Any]]:
         "delay_seconds",
         "reason",
         "prompt",
+        "preferred_lifetime_hours",
+        "lifetime_hours",
+        "hours",
+        "ttl_hours",
+        "extend_hours",
+        "surface_id",
+        "lifecycle_intent",
     }
     consumed = 0
     for i, line in enumerate(lines):

@@ -97,7 +97,19 @@ action: list
 
 ```publish
 title: Practice sheet
-<div>…html…</div>
+lifetime_hours: 168
+<div style="background:#c00;color:#fff">…AI-authored HTML/CSS/JS — any design…</div>
+```
+
+```publish
+action: update
+id: <surface_id>
+<html>…revised…</html>
+```
+
+```publish
+action: revoke
+id: <surface_id>
 ```
 
 ```interact
@@ -274,14 +286,12 @@ class TutorService:
             if ch == "time":
                 return await sched.handle_time_directive(self.session, d.parsed, ctx)
             if ch == "publish":
-                return await pub.publish_surface(
-                    self.session,
-                    {
-                        "title": d.parsed.get("title") or "WAX page",
-                        "html": d.body,
-                    },
-                    ctx,
-                )
+                args = {
+                    **d.parsed,
+                    "html": d.parsed.get("html") or d.body,
+                    "title": d.parsed.get("title") or "Surface",
+                }
+                return await pub.handle_publish_directive(self.session, args, ctx)
             if ch == "interact":
                 choices = d.parsed.get("choices") or []
                 prompt = d.parsed.get("prompt") or d.body

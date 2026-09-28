@@ -166,15 +166,21 @@ def wrap_ai_html(
     *,
     surface_token_placeholder: str = "{{SURFACE_TOKEN}}",
     api_base_placeholder: str = "{{SURFACE_API_BASE}}",
-    title: str = "WAX Surface",
+    title: str = "Surface",
     scopes: list[str] | None = None,
 ) -> str:
-    """Package AI-authored content into a complete HTML document with runtime bridge."""
+    """
+    Host AI-authored HTML with security bridge only.
+
+    The AI owns design (colors, layout, cartoons, lists, interaction UI).
+    Infrastructure does not inject a branded theme or teaching chrome.
+    Full documents: inject bridge before </body>.
+    Fragments: minimal document shell + bridge (no forced visual design).
+    """
     content = (ai_html or "").strip()
     bridge = inject_runtime_bridge(
         surface_token_placeholder, api_base_placeholder=api_base_placeholder
     )
-    logo = _logo_data_uri()
 
     lower = content[:500].lower()
     is_full = "<html" in lower or content.lower().startswith("<!doctype")
@@ -184,11 +190,8 @@ def wrap_ai_html(
             return re.sub(r"</body>", bridge + "</body>", content, count=1, flags=re.I)
         return content + bridge
 
-    logo_html = (
-        f'<img src="{logo}" alt="WAX Prep" width="36" height="36" style="border-radius:8px"/>'
-        if logo
-        else ""
-    )
+    # Minimal host shell — AI fragment is the entire experience body
+    safe_title = _esc(title) if title else "Surface"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -196,35 +199,10 @@ def wrap_ai_html(
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="robots" content="noindex, nofollow, noarchive"/>
 <meta name="referrer" content="no-referrer"/>
-<title>{_esc(title)} · WAX Prep</title>
-<style>
-  :root {{ --wx-navy:#0B1F3A; --wx-accent:#00c853; --wx-bg:#f4f7fb; --wx-ink:#0f172a; }}
-  * {{ box-sizing: border-box; }}
-  body {{ margin:0; font-family: system-ui, -apple-system, Segoe UI, sans-serif;
-         background: var(--wx-bg); color: var(--wx-ink); line-height:1.55; }}
-  .wx-chrome {{ display:flex; align-items:center; gap:.6rem; padding:.7rem 1rem;
-                background:#fff; border-bottom:1px solid #e2e8f0; position:sticky; top:0; z-index:5; }}
-  .wx-chrome-title {{ font-weight:700; font-size:.85rem; letter-spacing:.04em; color:var(--wx-navy); }}
-  .wx-chrome-tag {{ font-size:.72rem; color:#64748b; }}
-  .wx-body {{ max-width: 920px; margin: 0 auto; padding: 1.25rem 1rem 2.5rem; }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{ --wx-bg:#0a1220; --wx-ink:#e8eef7; }}
-    .wx-chrome {{ background:#111b2e; border-color:#1e2d45; }}
-    .wx-chrome-title {{ color:#e8eef7; }}
-  }}
-</style>
+<title>{safe_title}</title>
 </head>
 <body>
-<header class="wx-chrome">
-  {logo_html}
-  <div>
-    <div class="wx-chrome-title">WAX PREP</div>
-    <div class="wx-chrome-tag">Temporary surface</div>
-  </div>
-</header>
-<main class="wx-body">
 {content}
-</main>
 {bridge}
 </body>
 </html>
