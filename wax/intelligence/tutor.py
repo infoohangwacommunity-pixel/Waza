@@ -38,8 +38,9 @@ memory you control. Infrastructure enforces security and delivery; you decide.
 
 How you work:
 - Meet the student where they are. Discover needs through conversation.
-- When you need to act, write a fenced directive block. Infrastructure runs it and shows you the result.
-- Ordinary chat needs no directives.
+- Recent conversation is provided for continuity. You decide what durable memory or World state to inspect.
+- When you need student memory, World files, packages, or schedules, write a fenced directive block.
+- Infrastructure runs directives and returns observations. Ordinary chat needs no directives.
 
 Directive blocks (optional, only when action is required):
 
@@ -91,9 +92,8 @@ class TutorService:
         user_text = (payload.get("text") or payload.get("user_text") or "").strip()
         channel = payload.get("channel") or ""
 
+        # Conversation continuity only — no preselected memory/World content.
         history = await self._recent_messages(work, limit=20)
-        memory_snapshot = await self._memory_snapshot(principal_id)
-        world_snapshot = await self._world_snapshot(principal_id)
         now = datetime.now(timezone.utc).isoformat()
 
         system = TUTOR_SYSTEM
@@ -101,16 +101,22 @@ class TutorService:
             from wax.domain.preferences import get_preferences
             prefs = await get_preferences(self.session, principal_id) if principal_id else {}
             if prefs:
-                system += f"\n\nStudent preferences: {prefs}"
+                # Explicit user settings, not semantic retrieval
+                system += f"\n\nStudent preferences (explicit settings): {prefs}"
         except Exception:
             pass
 
+        # Honest environment facts — not curated memories or a World file listing
         env_block = (
             f"CURRENT ENVIRONMENT\n"
             f"- time_utc: {now}\n"
             f"- channel: {channel or 'unknown'}\n"
-            f"- world:\n{world_snapshot}\n"
-            f"- durable_memory (AI-owned; search/update via directives if needed):\n{memory_snapshot}\n"
+            f"- principal_id: {principal_id or 'none'}\n"
+            f"- world: available — persistent isolated workspace (files, packages, terminal). "
+            f"Inspect or act only via a ```world directive when needed.\n"
+            f"- durable_memory: available — you own search/create/update/supersede/forget. "
+            f"No memories are preloaded; use a ```memory directive when you need them.\n"
+            f"- schedule/publish/choices: available via matching directives when needed.\n"
         )
 
         messages: list[ChatMessage] = [
@@ -307,31 +313,7 @@ class TutorService:
                 out.append({"role": role, "content": content})
         return out
 
-    async def _memory_snapshot(self, principal_id) -> str:
-        if not principal_id:
-            return "(no principal)"
-        try:
-            result = await mem.memory_search(self.session, principal_id, query=None, limit=12)
-            items = result.get("memories") or []
-            if not items:
-                return "(none yet)"
-            lines = []
-            for it in items:
-                lines.append(f"- [{it.get('id')}] ({it.get('memory_type')}) {it.get('content')}")
-            return "\n".join(lines)[:3000]
-        except Exception:
-            return "(memory unavailable)"
 
-    async def _world_snapshot(self, principal_id) -> str:
-        if not principal_id:
-            return "(no world)"
-        try:
-            disc = await world_ops.world_discover(self.session, {}, {"principal_id": principal_id})
-            if not disc.get("ok"):
-                return f"(world: {disc.get('error') or 'unavailable'})"
-            return str(disc)[:1500]
-        except Exception:
-            return "(world unavailable)"
 
     async def _deliver(
         self,
