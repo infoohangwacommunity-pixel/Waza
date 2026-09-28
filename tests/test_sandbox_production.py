@@ -39,13 +39,3 @@ def test_production_refuses_without_isolation(tmp_path):
         assert r.success is False
     except IsolationUnavailable:
         pass
-
-
-def test_sandbox_adapter_uses_world(tmp_path):
-    from wax.terminal.sandbox import run_sandboxed
-
-    (tmp_path / "identity.json").write_text("{}", encoding="utf-8")
-    (tmp_path / "workspace").mkdir()
-    r = asyncio.run(run_sandboxed(["echo", "adapter"], cwd=tmp_path / "workspace", timeout=5))
-    # Either isolated success or isolation unavailable — never host-secret leak
-    assert r.isolation in ("bwrap", "docker", "rlimits", "none", "world") or r.error

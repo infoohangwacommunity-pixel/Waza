@@ -66,7 +66,7 @@ async def ready() -> JSONResponse:
 
 @app.get("/health/detail")
 async def health_detail():
-    from wax.terminal.workspace import workspace_root
+    from wax.world.layout import workspace_root
 
     root = workspace_root()
     return {

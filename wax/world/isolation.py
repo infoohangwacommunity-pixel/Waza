@@ -375,3 +375,35 @@ async def _exec(
             isolation_level=level,
             backend=backend,
         )
+
+
+async def run_in_world(
+    principal_id: str | None,
+    argv: list[str],
+    *,
+    cwd_rel: str = "workspace",
+    network_mode: NetworkMode = "none",
+    timeout_sec: float = 90.0,
+    memory_bytes: int = 512 * 1024 * 1024,
+    world_root: Path | None = None,
+) -> IsolationResult:
+    """Run argv inside a principal's World isolation boundary."""
+    if world_root is None:
+        if not principal_id:
+            return IsolationResult(
+                False, "", "", None, 0, error="no_principal_for_world_exec"
+            )
+        from wax.world.manager import get_or_create_world
+
+        world = get_or_create_world(str(principal_id))
+        world_root = world.root
+    return await run_isolated(
+        IsolationRequest(
+            argv=argv,
+            world_root=Path(world_root),
+            cwd_rel=cwd_rel,
+            network_mode=network_mode,
+            timeout_sec=timeout_sec,
+            memory_bytes=memory_bytes,
+        )
+    )

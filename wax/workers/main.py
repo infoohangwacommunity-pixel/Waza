@@ -20,7 +20,7 @@ from wax.db.models import Delivery, Work
 from wax.db.session import session_scope
 from wax.intelligence.tutor import TutorService
 from wax.delivery.retry import DeliveryRetryService
-from wax.terminal.cleanup import cleanup_old_files
+from wax.world.cleanup import cleanup_old_files
 from wax.observability.logging import get_logger, setup_logging, work_id_var
 
 setup_logging()
@@ -507,7 +507,7 @@ async def process_media_prepare(session, work: Work) -> None:
         else:
             result = {"ok": False, "error": "no_media"}
         if result.get("ok") and result.get("path") and principal_id:
-            from wax.terminal.workspace import stage_media_for_work
+            from wax.world.stage import stage_media_for_work
             from pathlib import Path as _P
 
             staged = stage_media_for_work(

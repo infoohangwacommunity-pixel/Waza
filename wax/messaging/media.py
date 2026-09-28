@@ -18,7 +18,7 @@ import httpx
 
 from wax.config import get_settings
 from wax.observability.logging import get_logger
-from wax.terminal.workspace import principal_workspace, safe_write_bytes, content_hash
+from wax.world.stage import principal_workspace, safe_write_bytes, content_hash
 
 logger = get_logger(__name__)
 settings = get_settings()

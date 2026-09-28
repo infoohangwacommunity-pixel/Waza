@@ -16,7 +16,7 @@ def world_env(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setenv("WAX_WORKSPACE_ROOT", str(root))
     monkeypatch.setenv("WAX_DISABLE_BINARY_ALLOWLIST", "1")
-    from wax.terminal import workspace as ws
+    from wax.world import layout as ws
     from wax.world import manager as mgr
 
     monkeypatch.setattr(ws, "workspace_root", lambda: root)

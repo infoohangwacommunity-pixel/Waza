@@ -1,8 +1,4 @@
-"""
-State-aware world cleanup — never age-delete runtimes, software, or durable artifacts.
-
-Evict order under pressure: tmp → cache → old history.
-"""
+"""State-aware world cleanup — never age-delete runtimes, software, or durable workspace."""
 
 from __future__ import annotations
 
@@ -11,30 +7,10 @@ from pathlib import Path
 
 from wax.config import get_settings
 from wax.observability.logging import get_logger
-from wax.terminal.workspace import workspace_root
+from wax.world.layout import workspace_root
 
 logger = get_logger(__name__)
 settings = get_settings()
-
-# Paths relative to a world root that must never be TTL-deleted
-PROTECTED_PREFIXES = (
-    "runtimes/",
-    "software/",
-    "bin/",
-    "artifacts/",
-    "workspace/",
-    "identity.json",
-    "policy.json",
-    "lifecycle.json",
-    "state/locks/",
-)
-
-
-def _is_protected(rel: str) -> bool:
-    rel = rel.replace("\\", "/")
-    if rel in ("identity.json", "policy.json", "lifecycle.json"):
-        return True
-    return any(rel.startswith(p) for p in PROTECTED_PREFIXES)
 
 
 def cleanup_world_tmp(world_root: Path, ttl_hours: float = 24.0) -> dict:
@@ -60,10 +36,6 @@ def cleanup_world_tmp(world_root: Path, ttl_hours: float = 24.0) -> dict:
 
 
 def cleanup_old_files(ttl_hours: int | None = None) -> dict:
-    """
-    Worker entrypoint. Class-aware: only tmp/cache under worlds/; never runtimes/artifacts/workspace.
-    Legacy principals/*/tmp still cleaned by age.
-    """
     ttl = float(ttl_hours if ttl_hours is not None else getattr(settings, "workspace_ttl_hours", 72) or 72)
     root = workspace_root()
     removed = 0
@@ -76,7 +48,6 @@ def cleanup_old_files(ttl_hours: int | None = None) -> dict:
             r = cleanup_world_tmp(wdir, ttl_hours=min(ttl, 48.0))
             removed += r["removed"]
             freed += r["bytes"]
-    # legacy tmp only
     principals = root / "principals"
     if principals.is_dir():
         cutoff = time.time() - ttl * 3600

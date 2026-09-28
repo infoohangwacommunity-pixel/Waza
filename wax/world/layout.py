@@ -1,8 +1,8 @@
 """
 World filesystem layout.
 
-world_id is independent of principal_id (owner). v1 creates one world per principal
-but the identifiers are never treated as interchangeable.
+world_id is independent of principal_id (owner). Identifiers are never interchangeable.
+Single authority for durable workspace roots (no terminal package).
 """
 
 from __future__ import annotations
@@ -21,6 +21,8 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 SCHEMA_VERSION = 1
+
+DEFAULT_ROOT = os.environ.get("WAX_WORKSPACE_ROOT", "/tmp/wax-workspaces")
 
 SUBDIRS = (
     "workspace",
@@ -41,10 +43,41 @@ SUBDIRS = (
 
 
 def workspace_root() -> Path:
-    """Volume root for all worlds (and legacy principals during migration)."""
-    from wax.terminal.workspace import workspace_root as _wr
-
-    return _wr()
+    """Durable host root for all student Worlds (Railway volume in production)."""
+    root = Path(
+        getattr(settings, "workspace_root", None)
+        or os.environ.get("WAX_WORKSPACE_ROOT")
+        or DEFAULT_ROOT
+    )
+    if settings.app_env == "production" and str(root).startswith("/tmp"):
+        logger.error(
+            "workspace_root_ephemeral",
+            path=str(root),
+            hint="Set WORKSPACE_ROOT=/data/wax-workspaces and attach a Railway Volume at /data",
+        )
+        if getattr(settings, "require_persistent_workspace", False):
+            raise RuntimeError(
+                "Production workspace must not use /tmp. "
+                "Attach a Railway Volume at /data and set WORKSPACE_ROOT=/data/wax-workspaces."
+            )
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".wax_write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as e:
+        if getattr(settings, "require_persistent_workspace", False) or (
+            settings.app_env == "production" and str(root).startswith("/data/")
+        ):
+            raise RuntimeError(
+                f"Workspace path {root} is not writable. "
+                f"Attach a Railway Volume at /data and set WORKSPACE_ROOT=/data/wax-workspaces. "
+                f"Underlying error: {e}"
+            ) from e
+        logger.warning("workspace_root_not_writable", path=str(root), error=str(e)[:200])
+        root = Path("/tmp/wax-workspaces")
+        root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def worlds_root() -> Path:
@@ -85,7 +118,6 @@ def resolve_under_world(root: Path, rel: str) -> Path:
     from wax.world.errors import PathEscape
 
     if not rel or rel.startswith("/"):
-        # absolute paths only allowed if already under root
         candidate = Path(rel).resolve() if rel.startswith("/") else (root / rel).resolve()
     else:
         candidate = (root / rel).resolve()
@@ -94,7 +126,6 @@ def resolve_under_world(root: Path, rel: str) -> Path:
         candidate.relative_to(root_res)
     except ValueError as e:
         raise PathEscape(f"path escapes world root: {rel}") from e
-    # reject symlink escape: if any parent is symlink outside, fail
     for p in [candidate, *candidate.parents]:
         if p == root_res:
             break
@@ -108,10 +139,7 @@ def resolve_under_world(root: Path, rel: str) -> Path:
 
 
 def migrate_legacy_principal(principal_id: str, world_id: str) -> dict[str, Any]:
-    """
-    Controlled copy of legacy principals/<id>/{media,out,tmp} into world workspace.
-    No permanent symlinks — copy/verify then leave legacy in place until ops purge.
-    """
+    """Controlled copy of legacy principals/<id> into world workspace."""
     legacy = workspace_root() / "principals" / str(principal_id).replace("/", "_")[:64]
     root = world_root(world_id)
     ensure_layout(root)

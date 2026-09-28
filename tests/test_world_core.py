@@ -11,8 +11,8 @@ import pytest
 @pytest.fixture
 def world_root(tmp_path, monkeypatch):
     monkeypatch.setenv("WAX_WORKSPACE_ROOT", str(tmp_path / "ws"))
-    # force settings pick up — workspace_root reads env via terminal.workspace
-    from wax.terminal import workspace as ws
+    # force settings pick up — workspace_root reads env via world.layout
+    from wax.world import layout as ws
 
     monkeypatch.setattr(ws, "DEFAULT_ROOT", str(tmp_path / "ws"))
     # clear manager cache
@@ -24,7 +24,7 @@ def world_root(tmp_path, monkeypatch):
 
 def test_world_id_independent_of_principal(world_root, monkeypatch):
     monkeypatch.setenv("WAX_WORKSPACE_ROOT", str(world_root))
-    from wax.terminal import workspace as ws
+    from wax.world import layout as ws
     from wax.config import get_settings
 
     monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
@@ -40,7 +40,7 @@ def test_world_id_independent_of_principal(world_root, monkeypatch):
 
 
 def test_two_worlds_isolated_paths(world_root, monkeypatch):
-    from wax.terminal import workspace as ws
+    from wax.world import layout as ws
     from wax.world.manager import create_world
     from wax.world.files import write_file, read_file
     from wax.world.layout import resolve_under_world
@@ -62,7 +62,7 @@ def test_two_worlds_isolated_paths(world_root, monkeypatch):
 
 
 def test_discover_structure(world_root, monkeypatch):
-    from wax.terminal import workspace as ws
+    from wax.world import layout as ws
     from wax.world.manager import create_world
     from wax.world.discover import discover
     from wax.world import manager as mgr
@@ -80,8 +80,8 @@ def test_discover_structure(world_root, monkeypatch):
 
 
 def test_cleanup_does_not_delete_runtimes(world_root, monkeypatch):
-    from wax.terminal import workspace as ws
-    from wax.terminal.cleanup import cleanup_old_files
+    from wax.world import layout as ws
+    from wax.world.cleanup import cleanup_old_files
     from wax.world.manager import create_world
     from wax.world import manager as mgr
     import time
@@ -112,13 +112,13 @@ def test_no_allowed_binaries_in_isolation_module():
 
 
 def test_sandbox_has_no_product_allowlist():
-    src = Path("wax/terminal/sandbox.py").read_text()
+    src = Path("wax/world/isolation.py").read_text()
     assert "Command not permitted" not in src
     assert "ALLOWED_BINARIES" not in src
 
 
 def test_path_escape_symlink(world_root, monkeypatch, tmp_path):
-    from wax.terminal import workspace as ws
+    from wax.world import layout as ws
     from wax.world.manager import create_world
     from wax.world.layout import resolve_under_world
     from wax.world.errors import PathEscape
@@ -140,7 +140,7 @@ def test_path_escape_symlink(world_root, monkeypatch, tmp_path):
 
 
 def test_reconcile_clears_stale_running(world_root, monkeypatch):
-    from wax.terminal import workspace as ws
+    from wax.world import layout as ws
     from wax.world.manager import create_world, set_lifecycle
     from wax.world.reconcile import reconcile_world_root
     from wax.world import manager as mgr
