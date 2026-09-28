@@ -3,7 +3,7 @@ WAX closed lifecycle — one circle.
 
 message.received → work.queued → work.claimed
   → World stage (files land; AI decides)
-  → tutor (AI + primitives)
+  → tutor (AI agent)
   → delivery (paced)
   → turn.completed
   → optional schedule → wake → continue

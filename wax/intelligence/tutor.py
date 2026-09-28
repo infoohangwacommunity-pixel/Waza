@@ -21,11 +21,11 @@ from wax.delivery.presentation import InteractiveChoice, PresentableResponse
 from wax.intelligence.directives import parse_agent_output, Directive
 from wax.intelligence.providers import ChatMessage, CompletionRequest, get_intelligence
 from wax.observability.logging import get_logger
-from wax.primitives import memory as mem
-from wax.primitives import schedule as sched
-from wax.primitives import world_ops
-from wax.primitives import publish as pub
-from wax.primitives.interaction_ops import present_choices
+from wax.memory import store as mem
+from wax.scheduler import ops as sched
+from wax.world import ops as world_ops
+from wax.surfaces import ops as pub
+from wax.interaction.ops import present_choices
 
 logger = get_logger(__name__)
 

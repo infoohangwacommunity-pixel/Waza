@@ -1,5 +1,5 @@
 """
-World primitives — AI hands inside the student's isolated persistent environment.
+World runtime ops — AI hands inside the student's isolated persistent environment.
 """
 
 from __future__ import annotations

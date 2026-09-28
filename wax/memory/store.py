@@ -1,5 +1,5 @@
 """
-Memory primitives — durable storage; AI owns relevance and lifecycle.
+Memory store — durable storage; AI owns relevance and lifecycle.
 
 Infrastructure stores and returns. The AI decides what matters,
 what to create/update/supersede/forget, and when to search.

@@ -1,5 +1,5 @@
 """
-WAX Prep durable primitives.
+WAX Prep durable state.
 
 No hardcoded educational modes.
 General concepts: Principal, Identity, Conversation, Message,
@@ -226,25 +226,7 @@ class Execution(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
     work: Mapped["Work"] = relationship(back_populates="executions")
-    tool_executions: Mapped[list["ToolExecution"]] = relationship(back_populates="execution")
 
-
-class ToolExecution(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    __tablename__ = "tool_executions"
-    __table_args__ = (Index("ix_tool_execution", "execution_id"),)
-
-    execution_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("executions.id", ondelete="CASCADE"), nullable=False
-    )
-    tool_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    input_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    output_payload: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
-    status: Mapped[str] = mapped_column(String(40), default="running")
-    error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    duration_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-    observation_summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    execution: Mapped["Execution"] = relationship(back_populates="tool_executions")
 
 
 class Delivery(Base, UUIDPrimaryKeyMixin, TimestampMixin):

@@ -473,7 +473,7 @@ async def _mark_work_terminal(
 async def process_memory_work(session, work: Work) -> None:
     """Post-turn memory work — lightweight.
 
-    AI owns memory lifecycle via primitives during the turn.
+    AI owns memory lifecycle during the turn.
     Infrastructure does not auto-extract, run CI, or invent learner facts.
     This job exists only for durable bookkeeping / future async consolidation.
     """
@@ -992,7 +992,7 @@ async def recovery_loop() -> None:
 
                 if cycle % 10 == 0:
                     try:
-                            pass  # research_loop retired — AI decides research via primitives
+                            pass  # research_loop retired — AI decides research via agent directives
                             pass  # automatic memory consolidation retired — AI owns memory lifecycle
                     except Exception:
                         logger.exception("memory_consolidation_batch_error")

@@ -1,5 +1,5 @@
 """
-Time and schedule primitives — infrastructure owns reliable wake; AI decides what/when.
+Schedule runtime ops — infrastructure owns reliable wake; AI decides what/when.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Interaction primitive — server-authoritative choices."""
+"""Interaction runtime ops — server-authoritative choices."""
 
 from __future__ import annotations
 

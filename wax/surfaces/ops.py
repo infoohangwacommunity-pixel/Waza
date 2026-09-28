@@ -1,4 +1,4 @@
-"""Publish primitive — AI builds in World; infrastructure exposes securely."""
+"""Publish runtime ops — AI builds in World; infrastructure exposes securely."""
 
 from __future__ import annotations
 
