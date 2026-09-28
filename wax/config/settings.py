@@ -110,17 +110,10 @@ class Settings(BaseSettings):
     delivery_chunk_delay_seconds: float = 0.55
 
     # --- Conversational check-in guardrails (AI decides moment; infra gates) ---
-    checkin_enabled: bool = True
     checkin_min_messages: int = 25
-    checkin_cooldown_hours: float = 72.0
     checkin_max_per_week: int = 2
-    checkin_suppress_on_active_problem: bool = True
     checkin_suppress_after_feedback_seconds: int = 300
 
-    # --- Feedback / evidence ---
-    feedback_min_confidence_for_preference: float = 0.55
-    feedback_evidence_decay_days: float = 90.0
-    web_feedback_enabled: bool = True
 
     @field_validator("database_url", mode="before")
     @classmethod

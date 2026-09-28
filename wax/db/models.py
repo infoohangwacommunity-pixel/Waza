@@ -292,20 +292,12 @@ class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     superseded_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
     )
-    embedding: Mapped[Optional[list[float]]] = mapped_column(JSONB, nullable=True)
     tags: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
     last_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     last_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     validity_status: Mapped[str] = mapped_column(
         String(40), default="active"
     )  # active | historical | uncertain | expired | superseded | contradicted
-    # Multi-layer graph membership
-    layer: Mapped[str] = mapped_column(
-        String(40), default="semantic", nullable=False
-    )  # working | episodic | semantic | procedural | goal | relationship
-    episode_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("memory_episodes.id", ondelete="SET NULL"), nullable=True
-    )
     contradiction_of_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
     )
@@ -313,81 +305,6 @@ class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     principal: Mapped["Principal"] = relationship(back_populates="memories")
 
-
-
-class MemoryEpisode(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """
-    Episodic container: a bounded stretch of learner experience.
-
-    Memories attach to episodes; links connect memories/episodes into a graph.
-    Not a chat log dump — curated continuity units.
-    """
-
-    __tablename__ = "memory_episodes"
-    __table_args__ = (
-        Index("ix_memory_episode_principal", "principal_id"),
-        Index("ix_memory_episode_status", "principal_id", "status"),
-        Index("ix_memory_episode_active", "principal_id", "last_active_at"),
-    )
-
-    principal_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
-    )
-    conversation_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="SET NULL"), nullable=True
-    )
-    work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
-    )
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    channel: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
-    importance: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    status: Mapped[str] = mapped_column(String(40), default="open", nullable=False)
-    # open | paused | closed | archived
-    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
-    started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_active_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-
-
-class MemoryLink(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """
-    Typed edge in the learner memory graph.
-
-    relation examples: supports | contradicts | elaborates | caused_by |
-    about_concept | same_thread | derived_from | member_of_episode
-    """
-
-    __tablename__ = "memory_links"
-    __table_args__ = (
-        Index("ix_memory_link_principal", "principal_id"),
-        Index("ix_memory_link_from", "from_memory_id"),
-        Index("ix_memory_link_to", "to_memory_id"),
-        Index("ix_memory_link_episode", "episode_id"),
-        Index("ix_memory_link_relation", "principal_id", "relation"),
-    )
-
-    principal_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
-    )
-    from_memory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("memories.id", ondelete="CASCADE"), nullable=True
-    )
-    to_memory_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("memories.id", ondelete="CASCADE"), nullable=True
-    )
-    episode_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("memory_episodes.id", ondelete="CASCADE"), nullable=True
-    )
-    relation: Mapped[str] = mapped_column(String(60), nullable=False)
-    strength: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    evidence: Mapped[list[Any]] = mapped_column(JSONB, default=list, server_default="[]")
-    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
 
@@ -702,8 +619,8 @@ class PrincipalWorkload(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """
     Durable per-principal workload / guardrail state.
 
-    Used for burst-tolerant rate protection and check-in accounting
-    across multiple workers. Message durability does not depend on this row.
+    Used for burst-tolerant rate protection across workers.
+    Message durability does not depend on this row.
     """
 
     __tablename__ = "principal_workloads"
