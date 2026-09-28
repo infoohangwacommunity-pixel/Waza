@@ -89,9 +89,9 @@ def _require_sandbox() -> bool:
     if getattr(settings, "app_env", "") == "production":
         return True
     try:
-        return bool(settings.effective_terminal_require_sandbox)
+        return bool(settings.effective_isolation_require_sandbox)
     except Exception:
-        return bool(getattr(settings, "terminal_require_sandbox", False))
+        return bool(getattr(settings, "isolation_require_sandbox", False))
 
 
 def _has_bwrap() -> bool:
@@ -105,7 +105,7 @@ def _has_docker() -> bool:
 def _want_docker() -> bool:
     if os.environ.get("WAX_TERMINAL_DOCKER", "").lower() in ("1", "true", "yes"):
         return True
-    return bool(getattr(settings, "terminal_use_docker", False))
+    return bool(getattr(settings, "isolation_use_docker", False))
 
 
 def _preexec_limits(memory_bytes: int, cpu_seconds: int, pids: int):

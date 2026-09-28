@@ -74,13 +74,11 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_webhook_secret: str = ""
 
-    # Isolation resource bounds (legacy terminal_* names; single World execution path)
-    terminal_enabled: bool = True  # when false, world_exec refuses
-    terminal_timeout_seconds: int = 45
-    terminal_max_output_bytes: int = 150_000
-    terminal_python: str = "python3"
-    # Deprecated path — Worlds use workspace_root only (no separate terminal workdir)
-    terminal_workdir: str = ""
+    # Isolation resource bounds for World execution (single path; no terminal package)
+    isolation_enabled: bool = True  # when false, world_exec refuses
+    isolation_timeout_seconds: int = 45
+    isolation_max_output_bytes: int = 150_000
+    isolation_python: str = "python3"
     workspace_root: str = "/tmp/wax-workspaces"
     workspace_max_file_bytes: int = 25_000_000
     # TTL for tmp/cache only — never expires the student's durable World
@@ -91,10 +89,10 @@ class Settings(BaseSettings):
     s3_bucket: str = ""
     s3_endpoint: str = ""
     s3_region: str = "auto"
-    terminal_cpu_seconds: int = 20
-    terminal_memory_bytes: int = 536870912
-    terminal_require_sandbox: bool = False  # overridden true when app_env=production
-    terminal_use_docker: bool = False  # prefer docker run --network none
+    isolation_cpu_seconds: int = 20
+    isolation_memory_bytes: int = 536870912
+    isolation_require_sandbox: bool = False  # overridden true when app_env=production
+    isolation_use_docker: bool = False  # prefer docker run --network none
 
     allow_code_execution: bool = True
     allow_external_network: bool = True
@@ -228,11 +226,11 @@ class Settings(BaseSettings):
         return explicit if explicit in ("local", "s3") else "local"
 
     @property
-    def effective_terminal_require_sandbox(self) -> bool:
+    def effective_isolation_require_sandbox(self) -> bool:
         """Production always requires real isolation (docker or bwrap)."""
         if self.app_env == "production":
             return True
-        return bool(self.terminal_require_sandbox)
+        return bool(self.isolation_require_sandbox)
 
     def is_production(self) -> bool:
         return self.app_env == "production"
@@ -257,7 +255,7 @@ def validate_production_settings(settings: Settings | None = None) -> None:
         problems.append("PRIMARY_API_KEY is required in production when a provider is configured")
     # Terminal: production must not rely on rlimits-only
     # Force require_sandbox semantics (env may still set docker)
-    if not s.terminal_require_sandbox:
+    if not s.isolation_require_sandbox:
         # Soft-enforce: document that production implies require
         # Actual refusal is in sandbox when app_env=production
         pass

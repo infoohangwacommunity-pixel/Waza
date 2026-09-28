@@ -37,6 +37,9 @@ async def world_discover(
 async def world_exec(
     session: AsyncSession, args: dict[str, Any], ctx: dict[str, Any]
 ) -> dict[str, Any]:
+    from wax.config import get_settings
+    if not getattr(get_settings(), "isolation_enabled", True):
+        return {"ok": False, "error": "world_exec_disabled"}
     principal_id = ctx.get("principal_id")
     if not principal_id:
         return {"ok": False, "error": "no_principal"}

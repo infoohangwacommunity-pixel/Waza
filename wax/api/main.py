@@ -76,7 +76,7 @@ async def health_detail():
         "version": "0.3.0",
         "whatsapp_enabled": settings.whatsapp_enabled,
         "telegram_enabled": settings.telegram_enabled,
-        "terminal_enabled": settings.terminal_enabled,
+        "world_exec_enabled": settings.isolation_enabled,
         "workspace_root": str(root),
         "primary_provider": settings.primary_provider,
         "fallback_provider": settings.fallback_provider,
@@ -537,15 +537,6 @@ async def surface_revision_poll(token: str, request: Request):
         return JSONResponse(svc.revision_status(surface), headers=headers)
 
 
-@app.get("/p/{token}")
-async def serve_publication(token: str):
-    """Legacy publication path retired — use Surfaces."""
-    from fastapi.responses import HTMLResponse
-    return HTMLResponse(
-        "<h1>This page type is no longer available</h1><p>Temporary experiences now use Surfaces.</p>",
-        status_code=410,
-        headers={"Cache-Control": "no-store"},
-    )
 
 
 

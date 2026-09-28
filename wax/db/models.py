@@ -3,7 +3,7 @@ WAX Prep durable state.
 
 No hardcoded educational modes.
 General concepts: Principal, Identity, Conversation, Message,
-Work, Execution, Memory, Goal, Artifact, ScheduledAction.
+Work, Execution, Memory, Artifact, ScheduledAction.
 """
 
 from __future__ import annotations
@@ -45,7 +45,6 @@ class Principal(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     conversations: Mapped[list["Conversation"]] = relationship(back_populates="principal")
     memories: Mapped[list["Memory"]] = relationship(back_populates="principal")
     works: Mapped[list["Work"]] = relationship(back_populates="principal")
-    goals: Mapped[list["Goal"]] = relationship(back_populates="principal")
     artifacts: Mapped[list["Artifact"]] = relationship(back_populates="principal")
     surfaces: Mapped[list["Surface"]] = relationship(back_populates="principal")
 
@@ -391,29 +390,6 @@ class MemoryLink(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
 
-
-class Goal(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Dynamic goals that emerge and evolve from interaction."""
-
-    __tablename__ = "goals"
-    __table_args__ = (
-        Index("ix_goal_principal", "principal_id"),
-        Index("ix_goal_status", "status"),
-    )
-
-    principal_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
-    )
-    title: Mapped[str] = mapped_column(String(500), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    status: Mapped[str] = mapped_column(String(40), default="active")
-    priority: Mapped[int] = mapped_column(Integer, default=50)
-    target_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
-
-    principal: Mapped["Principal"] = relationship(back_populates="goals")
 
 
 class Artifact(Base, UUIDPrimaryKeyMixin, TimestampMixin):

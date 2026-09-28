@@ -45,11 +45,11 @@ class WorkerBudget:
 
 def interactive_budget() -> ExecutionBudget:
     return ExecutionBudget(
-        wall_sec=float(getattr(settings, "terminal_timeout_seconds", 60) or 60),
-        memory_bytes=int(getattr(settings, "terminal_memory_bytes", 512 * 1024 * 1024)),
-        cpu_seconds=int(getattr(settings, "terminal_cpu_seconds", 30) or 30),
+        wall_sec=float(getattr(settings, "isolation_timeout_seconds", 60) or 60),
+        memory_bytes=int(getattr(settings, "isolation_memory_bytes", 512 * 1024 * 1024)),
+        cpu_seconds=int(getattr(settings, "isolation_cpu_seconds", 30) or 30),
         pids=64,
-        max_output=int(getattr(settings, "terminal_max_output_bytes", 150_000)),
+        max_output=int(getattr(settings, "isolation_max_output_bytes", 150_000)),
         network_mode="none",
     )
 

@@ -15,6 +15,22 @@ correlation_id: ContextVar[str | None] = ContextVar("correlation_id", default=No
 principal_id_var: ContextVar[str | None] = ContextVar("principal_id", default=None)
 work_id_var: ContextVar[str | None] = ContextVar("work_id", default=None)
 
+execution_id_var: ContextVar[str | None] = ContextVar("execution_id", default=None)
+
+
+def set_execution_id(eid: str | None) -> None:
+    """Bind execution id for structured logs (agent runtime)."""
+    execution_id_var.set(eid)
+
+
+def set_work_id(wid: str | None) -> None:
+    work_id_var.set(wid)
+
+
+def set_principal_id(pid: str | None) -> None:
+    principal_id_var.set(pid)
+
+
 
 def add_correlation(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
     if cid := correlation_id.get():
@@ -23,6 +39,8 @@ def add_correlation(_, __, event_dict: dict[str, Any]) -> dict[str, Any]:
         event_dict["principal_id"] = pid
     if wid := work_id_var.get():
         event_dict["work_id"] = wid
+    if eid := execution_id_var.get():
+        event_dict["execution_id"] = eid
     return event_dict
 
 

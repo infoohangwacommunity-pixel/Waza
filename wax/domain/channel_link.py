@@ -222,7 +222,7 @@ async def confirm_otp_link(
             "channel": ch.target_channel,
             "external_id": ch.target_external_id,
             "identity_id": str(identity.id),
-            "note": "Channels are now linked. Memory and goals are shared for this person.",
+            "note": "Channels are now linked. Memory and World are shared for this person.",
         }
 
     await session.flush()
