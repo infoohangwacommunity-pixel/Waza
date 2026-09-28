@@ -1,9 +1,16 @@
 """
-WAX Prep durable state.
+WAX durable reality (not educational theory tables).
 
-No hardcoded educational modes.
-General concepts: Principal, Identity, Conversation, Message,
-Work, Execution, Memory, Artifact, ScheduledAction.
+Identity & channels: Principal, InterfaceIdentity, ChannelLinkChallenge
+Conversation: Conversation, Message, InboundEvent
+World: World
+Durable state: Memory (AI-owned; goals live here as memory_type, not a Goal engine)
+Files: Artifact
+Time: ScheduledAction
+Work: Work, Execution, Delivery
+Interactive chat: Interaction
+Temporary web workspace: Surface + revision/session/event/ai_request
+Security/rate: PrincipalWorkload
 """
 
 from __future__ import annotations
@@ -286,7 +293,6 @@ class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     source_work_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("works.id", ondelete="SET NULL"), nullable=True
     )
-    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     superseded_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
@@ -337,7 +343,7 @@ class Artifact(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 
 class ScheduledAction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Database-backed future actions decided by the tutor."""
+    """Future wake decided by the AI; infrastructure stores and fires Work."""
 
     __tablename__ = "scheduled_actions"
     __table_args__ = (
@@ -416,7 +422,7 @@ class Interaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 
 class ChannelLinkChallenge(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """OTP / knowledge challenge to link another channel identity to a principal."""
+    """Challenge to authorize linking another channel identity to a principal."""
 
     __tablename__ = "channel_link_challenges"
     __table_args__ = (
@@ -453,7 +459,7 @@ class Surface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     AI-authored temporary web environment.
 
     Identity is stable across renames and revisions.
-    Public access is via opaque token only — never expose internal IDs in learner UI.
+    Public access is via opaque token only — never expose internal IDs in the browser URL.
     """
 
     __tablename__ = "surfaces"
@@ -474,7 +480,7 @@ class Surface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     # Opaque public capability (hashed)
     token_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     # AI-controlled human title (rename does not change URL)
-    title: Mapped[str] = mapped_column(String(500), nullable=False, default="WAX Surface")
+    title: Mapped[str] = mapped_column(String(500), nullable=False, default="Surface")
     description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     # Lifecycle
     status: Mapped[str] = mapped_column(String(40), default="creating", nullable=False)
@@ -483,7 +489,7 @@ class Surface(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     cleaned_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_activity_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_opened_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    last_learner_interaction_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_user_interaction_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_ai_request_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_ai_response_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     last_revision_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -637,7 +643,4 @@ class PrincipalWorkload(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     window_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
     window_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     cooldown_until: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_checkin_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    checkin_week_start: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    checkin_week_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")

@@ -577,7 +577,7 @@ class SurfaceService:
         now = utcnow()
         surface.last_activity_at = now
         if event_type in ("interaction", "learner_interaction", "state_changed", "save_requested"):
-            surface.last_learner_interaction_at = now
+            surface.last_user_interaction_at = now
         await self.session.flush()
 
     async def list_for_principal(
@@ -758,9 +758,9 @@ class SurfaceService:
             "related_surface_ids": list(surface.related_surface_ids or []),
             "last_activity_at": surface.last_activity_at.isoformat() if surface.last_activity_at else None,
             "last_opened_at": surface.last_opened_at.isoformat() if surface.last_opened_at else None,
-            "last_learner_interaction_at": (
-                surface.last_learner_interaction_at.isoformat()
-                if surface.last_learner_interaction_at
+            "last_user_interaction_at": (
+                surface.last_user_interaction_at.isoformat()
+                if surface.last_user_interaction_at
                 else None
             ),
             "last_ai_request_at": surface.last_ai_request_at.isoformat() if surface.last_ai_request_at else None,

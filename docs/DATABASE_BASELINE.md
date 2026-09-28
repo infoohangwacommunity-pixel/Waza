@@ -1,49 +1,47 @@
-# Waza database baseline
+# Waza database — durable reality
 
-## Active migration graph
+## Active migration chain
 
 ```
-001_waza_baseline  (down_revision = None)  ← sole head
+001_waza_baseline
+002_memory_graph          (historical; episodes later dropped)
+003_retire_educational_tables
+004_drop_tool_executions
+005_drop_goals
+006_drop_memory_graph
+007_domain_reality_cleanup   ← head
 ```
 
-Historical files live in `alembic/versions_archive_pre_baseline/` and are **not** loaded by Alembic.
+## What belongs in the schema
+
+| Area | Tables |
+|------|--------|
+| Identity & channels | `principals`, `interface_identities`, `channel_link_challenges` |
+| Conversation | `conversations`, `messages`, `inbound_events` |
+| World | `worlds` |
+| Durable memory | `memories` (AI-owned; **goals** are rows with a goal-like `memory_type`, not a Goal engine) |
+| Files | `artifacts` |
+| Time | `scheduled_actions` |
+| Work | `works`, `executions`, `deliveries` |
+| Chat interactions | `interactions` |
+| Temporary web workspace | `surfaces`, `surface_revisions`, `surface_sessions`, `surface_events`, `surface_ai_requests` |
+| Rate protection | `principal_workloads` |
+
+## What does **not** belong
+
+- Goal / curriculum / quiz / mastery / assessment engines  
+- Memory episode graphs or embedding columns as a second brain  
+- Check-in product accounting  
+- Tool execution registries  
 
 ## Clean rebuild (intentional data wipe)
 
-Keep the Railway Postgres **service** and **volume**. Only reset schema/data:
-
-1. Stop Worker (and pause Web if needed).
-2. Connect to the **correct** Railway Postgres (`DATABASE_URL`).
-3. Run:
-
-```sql
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public;
-GRANT ALL ON SCHEMA public TO public;
-GRANT ALL ON SCHEMA public TO CURRENT_USER;
-```
-
-4. Deploy Web (runs `scripts/startup.sh` → `alembic upgrade head`).
-5. Confirm:
-
-```sql
-SELECT version_num FROM alembic_version;
--- 001_waza_baseline
-
-SELECT count(*) FROM information_schema.tables
-WHERE table_schema = 'public' AND table_type = 'BASE TABLE';
-```
-
-6. Start Worker.
+1. Stop Worker (and Web if needed).
+2. `DROP SCHEMA public CASCADE; CREATE SCHEMA public; …`
+3. `alembic upgrade head`
+4. Confirm `alembic_version` = `007`
+5. Start services.
 
 ## Principals
 
-Current model uses `display_name`, **not** `name`. Application code must not query `principals.name`.
-
-## Future migrations
-
-```text
-alembic revision -m "some_change"
-# down_revision = "001_waza_baseline"
-alembic upgrade head
-```
+`display_name` only — never `principals.name`.
