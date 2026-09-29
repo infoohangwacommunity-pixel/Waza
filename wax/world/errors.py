@@ -30,21 +30,6 @@ class WorldRecoveryRequired(WorldError):
     code = "WORLD_RECOVERY_REQUIRED"
 
 
-class CapabilityMissing(WorldError):
-    code = "CAPABILITY_MISSING"
-
-
-class AcquisitionUnavailable(WorldError):
-    code = "ACQUISITION_UNAVAILABLE"
-
-
-class AcquisitionFailed(WorldError):
-    code = "ACQUISITION_FAILED"
-
-
-class VerificationFailed(WorldError):
-    code = "VERIFICATION_FAILED"
-
 
 class ResourceDenied(WorldError):
     code = "RESOURCE_DENIED"

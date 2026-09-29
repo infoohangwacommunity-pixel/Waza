@@ -1,4 +1,4 @@
-"""World core: identity, layout, discover, isolation boundary, cleanup safety."""
+"""World core: identity, layout, isolation boundary, cleanup safety."""
 
 from __future__ import annotations
 
@@ -60,23 +60,6 @@ def test_two_worlds_isolated_paths(world_root, monkeypatch):
     with pytest.raises(PathEscape):
         resolve_under_world(da.root, str((ka.root / "workspace" / "secret.txt").resolve()))
 
-
-def test_discover_structure(world_root, monkeypatch):
-    from wax.world import layout as ws
-    from wax.world.manager import create_world
-    from wax.world.discover import discover
-    from wax.world import manager as mgr
-
-    monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
-    mgr._cache.clear()
-    w = create_world("p1", migrate_legacy=False)
-    snap = discover(w)
-    assert snap["ok"] is True
-    assert snap["world_id"] == w.world_id
-    assert "lifecycle" in snap
-    assert "resources" in snap
-    assert "runtimes" in snap
-    assert "software" in snap
 
 
 def test_cleanup_does_not_delete_runtimes(world_root, monkeypatch):
@@ -152,7 +135,7 @@ def test_reconcile_clears_stale_running(world_root, monkeypatch):
     set_lifecycle(w, "BUSY", "exec")
     rec = {"execution_id": "old", "status": "running", "started_at": 1}
     (w.root / "state" / "exec" / "old.json").write_text(json.dumps(rec), encoding="utf-8")
-    lock = w.root / "state" / "locks" / "acquire-python_package-x.lock"
+    lock = w.root / "state" / "locks" / "stale-exec.lock"
     lock.write_text("1")
     import os
     os.utime(lock, (1, 1))

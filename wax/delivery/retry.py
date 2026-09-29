@@ -17,7 +17,12 @@ from wax.db.models import Delivery
 from wax.delivery.senders import deliver
 from wax.observability.logging import get_logger
 
-from wax.delivery.backoff import retry_backoff_seconds
+
+def retry_backoff_seconds(attempt: int, *, base: int = 10, cap: int = 600) -> int:
+    """Exponential backoff for delivery retries (pure, testable)."""
+    a = max(1, int(attempt or 1))
+    return min(cap, (2**a) * base)
+
 
 logger = get_logger(__name__)
 settings = get_settings()

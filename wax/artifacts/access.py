@@ -39,12 +39,7 @@ def verify_download_token(artifact_id: str, principal_id: str, token: str) -> bo
 
 def public_base_url() -> str:
     s = get_settings()
-    return (
-        os.environ.get("PUBLIC_BASE_URL")
-        or os.environ.get("WAX_PUBLIC_BASE_URL")
-        or getattr(s, "public_base_url", None)
-        or ""
-    ).rstrip("/")
+    return (getattr(s, "public_base_url", None) or "").rstrip("/")
 
 
 def public_download_url(artifact_id: str, token: str) -> str | None:
