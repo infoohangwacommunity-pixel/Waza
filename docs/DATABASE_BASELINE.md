@@ -1,34 +1,15 @@
 # Database baseline
 
-## Active graph
+Source of truth: `wax/db/models.py`  
+Migration: `alembic/versions/001_reality_baseline.py` (sole head)
 
-```
-001_reality  (down_revision = None)  ← sole head
-```
+## Tables
 
-Schema source of truth: `wax/db/models.py`.  
-Baseline migration: `alembic/versions/001_reality_baseline.py`.
+principals, interface_identities, conversations, messages, inbound_events,
+worlds, memories, artifacts, scheduled_actions, works, executions, deliveries,
+interactions, surfaces (and revision / session / event / ai_request),
+principal_workloads
 
-## Ownership
+All student-owned rows use `principal_id → principals.id ON DELETE CASCADE`.
 
-`principal_id → principals.id ON DELETE CASCADE` on student-owned tables.  
-Goals are Memory rows (`memory_type`), not a separate goals table.
-
-## Forbidden tables
-
-These must not exist (retired architecture):
-
-goals, memory_episodes, memory_links, tool_executions, activities,
-assessments*, publications, learning_events, concepts, evidence, hypotheses,
-channel_link_challenges, check-in / mastery / quiz product tables
-
-Enforced by `scripts/verify_schema.py`.
-
-## Intentional wipe
-
-```sql
-DROP SCHEMA public CASCADE;
-CREATE SCHEMA public;
-```
-
-Then redeploy (`alembic upgrade head`).
+See [MIGRATIONS.md](MIGRATIONS.md) for upgrade and reset steps.

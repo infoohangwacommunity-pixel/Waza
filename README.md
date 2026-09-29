@@ -1,44 +1,45 @@
 # WAX Prep
 
-**Open-world AI tutor for students** on WhatsApp and Telegram.
+Open-world AI tutor for students on WhatsApp and Telegram.
 
-## Architecture
+## How it works
+
+Infrastructure provides reality. AI provides intelligence.
+
+A student message becomes durable Work. The AI receives the objective and recent conversation, decides what to do, and may act through the student’s World (files, packages, terminal), durable state, schedules, temporary web surfaces, or channel interactions. Infrastructure executes those requests safely, returns observations, and delivers the final reply.
 
 ```
-Student message
-  → Infrastructure (identity, security, Work queue, World lifecycle)
-  → AI agent (the brain) reasons about the objective
-  → Acts inside the student's secure World and durable state
-  → Infrastructure executes, persists, schedules, delivers
-  → Observations return to the AI
-  → AI continues until the objective is complete
-  → Student receives the result
+Messaging → identity → Work → AI → World / state / schedule / surface
+         → observation → AI → delivery
 ```
 
-- **Infrastructure** provides reality: auth, isolation, persistence, messaging, safe execution, retries.
-- **AI** is the agent: it decides what to do, how to teach, what to remember, when to schedule.
-- **World** is the student's persistent workspace (files, packages, terminal).
-- **No** tool registry, **no** primitive catalogue sent to the model, **no** Context Intelligence, **no** educational workflow engines.
+| Piece | Role |
+|-------|------|
+| **Infrastructure** | Identity, security, isolation, persistence, Work, retries, delivery |
+| **AI** | Interpretation, teaching, memory decisions, planning |
+| **World** | Persistent per-student workspace |
+| **Memory** | Durable AI-owned state (search, create, update, supersede, forget) |
+| **Work** | Durable execution unit for each turn |
+| **Scheduler** | Stores time; wakes Work when due |
+| **Messaging** | WhatsApp / Telegram in and out |
 
-When the AI needs to act, it writes free-form directive blocks (`world`, `state`, `time`, `publish`, `interact`). Infrastructure runs them and returns observations. That is not a tool menu — the model is not choosing from application-defined function schemas.
+When the AI needs infrastructure to act, it writes a short fenced block (`world`, `state`, `time`, `publish`, `interact`). That is a thin bridge to reality — not an application menu of tools.
 
-## Run
+## Run locally
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env   # set DATABASE_URL, PRIMARY_API_KEY, …
 
 python scripts/bootstrap_db.py
 uvicorn wax.api.main:app --host 0.0.0.0 --port 8000
+# other terminal:
 python -m wax.workers.main
 ```
 
-Webhooks: `POST /webhooks/whatsapp`, `POST /webhooks/telegram`
+Webhooks: `POST /webhooks/whatsapp`, `POST /webhooks/telegram`.
 
-**Production:** set a durable `WAX_WORKSPACE_ROOT` (not `/tmp`) so student Worlds survive deploys.
+Production: use the Dockerfile, a durable `WORKSPACE_ROOT` (not `/tmp`), and settings from `.env.example`.
 
-## Philosophy
-
-Infrastructure provides reality. AI provides intelligence.
-The World is the AI's hands. There is no tool registry between them.
+See [docs/architecture.md](docs/architecture.md) and [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).

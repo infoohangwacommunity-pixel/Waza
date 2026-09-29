@@ -1,41 +1,50 @@
-# Getting started (non-expert friendly)
+# Getting started
 
-WAX Prep is software that talks to people on WhatsApp and Telegram and tutors them over time.
+## Requirements
 
-## Pieces you run
+- Python 3.12+
+- PostgreSQL
+- An OpenAI-compatible API key (or another provider via `PRIMARY_*` settings)
 
-1. **Database** (PostgreSQL) — remembers people, messages, work, memory
-2. **API process** — receives WhatsApp/Telegram webhooks
-3. **Worker process** — thinks (AI), replies, updates memory
+## Setup
 
-## What you must configure
+```bash
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
 
-- `DATABASE_URL`
-- `PRIMARY_API_KEY` (OpenAI, Grok/xAI, OpenRouter, etc.)
-- WhatsApp tokens **or** Telegram bot token (or both)
+Edit `.env`:
 
-## What you do not need to invent
+- `DATABASE_URL` — async Postgres URL (`postgresql+asyncpg://…`)
+- `PRIMARY_API_KEY` / `PRIMARY_MODEL` — intelligence path
+- `PUBLIC_BASE_URL` — public origin of this service (webhooks + surfaces)
+- Channel tokens as needed (`WHATSAPP_*`, `TELEGRAM_*`)
 
-- Subject menus
-- Exam modes
-- Quiz engines
+## Database
 
-The tutor discovers what the person needs through conversation.
+```bash
+python scripts/bootstrap_db.py
+# or: alembic upgrade head && python scripts/verify_schema.py
+```
 
-## Media (photos, audio, video)
+## Run
 
-When someone sends a photo:
+```bash
+uvicorn wax.api.main:app --host 0.0.0.0 --port 8000
+python -m wax.workers.main
+```
 
-1. WAX downloads it into a private workspace folder
-2. The AI can process it inside the student World
-3. Only if that is not enough, it can call a vision model
+Point WhatsApp or Telegram webhooks at:
 
-That saves money and keeps the terminal as the AI’s workbench.
+- `{PUBLIC_BASE_URL}/webhooks/whatsapp`
+- `{PUBLIC_BASE_URL}/webhooks/telegram`
 
-## First real test
+Send a message. You should get a natural reply from the tutor.
 
-1. Start API + worker
-2. Point WhatsApp or Telegram webhook at your API
-3. Message: `Hi`
-4. You should get a natural reply
-5. Message again later — it should remember useful things
+## Production
+
+- Build with the repository `Dockerfile` (Railway: `builder = DOCKERFILE`).
+- Mount a durable volume for `WORKSPACE_ROOT` (for example `/data/wax-workspaces`).
+- Set `APP_ENV=production` and a strong `SECRET_KEY`.
+- Full variable list: `.env.example`.
