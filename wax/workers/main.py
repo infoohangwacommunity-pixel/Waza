@@ -58,7 +58,7 @@ async def process_message_response(session, work: Work) -> None:
     payload = work.input_payload or {}
     payload = attach_outage_to_payload(payload, work=work)
 
-    # Intelligent coalesce: related queued/retrying works for same conversation → one turn
+    # Operational coalesce: related queued/retrying works for same conversation → one turn
     try:
         if work.principal_id and work.conversation_id:
             siblings = await find_coalescable_works(session, anchor_work=work)
@@ -520,7 +520,6 @@ async def _attempt_deliveries(session, work_id) -> None:
         try:
             wrow = await session.get(Work, work_id)
             interactive = (wrow.result_payload or {}).get("interactive") if wrow else None
-            tools = []  # tool result catalogue removed; artifacts staged via World
             inbound_mid = None
             meta = delivery.metadata_ or {}
             if isinstance(meta, dict):
