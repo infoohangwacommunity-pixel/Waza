@@ -27,7 +27,7 @@ def test_file_persistence_across_manager_reload(tmp_path, monkeypatch):
     root.mkdir()
     monkeypatch.setattr(ws, "workspace_root", lambda: root)
     mgr._cache.clear()
-    w1 = create_world("student-persist", migrate_legacy=False)
+    w1 = create_world("student-persist", import_prior=False)
     write_file(w1, "workspace/notes.txt", "survives restart")
     wid = w1.world_id
     mgr._cache.clear()

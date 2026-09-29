@@ -40,8 +40,8 @@ def test_principal_b_cannot_read_principal_a_file(world_env):
     from wax.world.files import write_file
     from wax.world.layout import resolve_under_world
 
-    a = create_world("principal_a", migrate_legacy=False)
-    b = create_world("principal_b", migrate_legacy=False)
+    a = create_world("principal_a", import_prior=False)
+    b = create_world("principal_b", import_prior=False)
     write_file(a, "workspace/secret.txt", b"only-a")
     assert a.root != b.root
     path_b = resolve_under_world(b.root, "workspace/secret.txt")
@@ -56,7 +56,7 @@ def test_world_survives_cache_clear(world_env):
     from wax.world import manager as mgr
     from wax.world.files import write_file, read_file
 
-    w = create_world("principal_persist", migrate_legacy=False)
+    w = create_world("principal_persist", import_prior=False)
     write_file(w, "workspace/keep.txt", b"durable")
     mgr._cache.clear()
     w2 = get_or_create_world("principal_persist")

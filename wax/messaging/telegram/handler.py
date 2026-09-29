@@ -377,7 +377,7 @@ async def _handle_telegram_callback(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 async def _resolve_identity(session, chat_id: str, from_user: dict):
-    """Canonical path: existing InterfaceIdentity → same Principal (no second learner)."""
+    """Canonical path: existing InterfaceIdentity → same Principal (no second student)."""
     from wax.domain.identity import resolve_or_create_messaging_identity
 
     name = from_user.get("first_name") or from_user.get("username")

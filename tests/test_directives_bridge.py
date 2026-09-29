@@ -1,4 +1,4 @@
-"""Minimal AI→infrastructure bridge — no aliases, no tool catalogue."""
+"""Minimal AI→infrastructure bridge — canonical channels only."""
 
 from wax.intelligence.directives import parse_agent_output, CHANNELS, Directive
 

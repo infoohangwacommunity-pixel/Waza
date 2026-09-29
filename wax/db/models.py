@@ -5,7 +5,7 @@ principals, interface_identities, conversations, messages, inbound_events,
 worlds, memories, artifacts, scheduled_actions, works, executions, deliveries,
 interactions, surfaces (+ revision/session/event/ai_request), principal_workloads.
 
-No educational engines. Memory is AI-owned durable state, not a knowledge graph.
+Memory is AI-owned durable state.
 """
 
 from __future__ import annotations
@@ -487,7 +487,7 @@ class SurfaceRevision(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     checksum: Mapped[Optional[str]] = mapped_column(String(128), nullable=True)
     # Manifest: assets, required capabilities, runtime policy
     manifest: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    # Optional source note from AI (not shown to learner unless intended)
+    # Optional source note from AI (not shown to the student unless intended)
     source_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 

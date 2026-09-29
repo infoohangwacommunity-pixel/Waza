@@ -65,7 +65,7 @@ def test_no_memory_service_shim():
     from pathlib import Path
 
     service = Path("wax/memory/service.py")
-    assert not service.exists(), "MemoryService compatibility shim must stay deleted"
+    assert not service.exists(), "wax/memory/service.py must not exist"
     assert importlib.util.find_spec("wax.memory.service") is None
 
 

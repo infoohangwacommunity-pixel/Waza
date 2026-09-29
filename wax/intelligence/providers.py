@@ -176,7 +176,7 @@ class OpenAICompatibleProvider(IntelligenceProvider):
             "messages": _serialize_openai_messages(request.messages),
             "temperature": request.temperature if request.temperature is not None else 0.7,
         }
-        # No max_tokens — leave the model at its natural output limit.
+        # Omit application token ceiling; provider may set API-required fields only.
         # Ensure body is JSON-serializable (Upstage rejects malformed bodies)
         try:
             import json as _json

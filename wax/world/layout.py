@@ -7,7 +7,7 @@ Single authority for durable workspace roots (no terminal package).
 Student Worlds are durable. Files under workspace/, projects/, software/, runtimes/
 survive worker restarts and deployments when WORKSPACE_ROOT is a durable volume.
 Age-based cleanup applies only to tmp/ and cache/ (see wax.world.cleanup).
-There is no workspace_ttl that destroys a World.
+Worlds are durable; only tmp/ and cache/ are age-scavenged.
 """
 
 from __future__ import annotations
@@ -143,14 +143,14 @@ def resolve_under_world(root: Path, rel: str) -> Path:
     return candidate
 
 
-def migrate_legacy_principal(principal_id: str, world_id: str) -> dict[str, Any]:
-    """Controlled copy of legacy principals/<id> into world workspace."""
-    legacy = workspace_root() / "principals" / str(principal_id).replace("/", "_")[:64]
+def import_prior_principal_tree(principal_id: str, world_id: str) -> dict[str, Any]:
+    """If an older principals/<id> tree exists on disk, copy media/files into the World."""
+    prior = workspace_root() / "principals" / str(principal_id).replace("/", "_")[:64]
     root = world_root(world_id)
     ensure_layout(root)
-    report: dict[str, Any] = {"legacy": str(legacy), "copied": [], "skipped": []}
-    if not legacy.is_dir():
-        report["status"] = "no_legacy"
+    report: dict[str, Any] = {"prior": str(prior), "copied": [], "skipped": []}
+    if not prior.is_dir():
+        report["status"] = "none"
         return report
     mapping = {
         "media": root / "workspace" / "media",
@@ -158,7 +158,7 @@ def migrate_legacy_principal(principal_id: str, world_id: str) -> dict[str, Any]
         "tmp": root / "tmp",
     }
     for name, dest in mapping.items():
-        src = legacy / name
+        src = prior / name
         if not src.is_dir():
             report["skipped"].append(name)
             continue
@@ -177,7 +177,7 @@ def migrate_legacy_principal(principal_id: str, world_id: str) -> dict[str, Any]
             except Exception as e:
                 report.setdefault("errors", []).append(f"{item}: {e}")
     report["status"] = "ok"
-    logger.info("world_legacy_migrated", world_id=world_id, copied=len(report["copied"]))
+    logger.info("world_prior_tree_imported", world_id=world_id, copied=len(report["copied"]))
     return report
 
 

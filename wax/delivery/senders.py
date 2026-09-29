@@ -78,7 +78,7 @@ def _boundary_normalize(text: str, channel: str) -> str:
     Thin delivery-boundary safety net only.
     Does not re-parse or re-render. Catches residual HTML / MD tables / headings
     if Delivery.content was somehow written without going through presentation.
-    Blocks leaked tool-protocol / raw HTML documents from reaching the learner.
+    Blocks leaked protocol markup / raw HTML documents from reaching the student.
     """
     # Strip accidental directive fences from student-facing text
     try:

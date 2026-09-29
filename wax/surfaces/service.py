@@ -74,7 +74,7 @@ class SurfaceService:
         return True
 
     def require_origin_isolation(self) -> Optional[str]:
-        """Legacy hook: same-origin Surfaces are allowed.
+        """Same-origin Surfaces are allowed.
 
         Returns an error only when production has no public origin at all
         (cannot issue Surface URLs). Distinct SURFACE_PUBLIC_ORIGIN is optional.

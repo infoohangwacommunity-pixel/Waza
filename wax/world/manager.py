@@ -73,7 +73,7 @@ def _default_policy() -> dict[str, Any]:
     }
 
 
-def create_world(principal_id: str, *, world_id: str | None = None, migrate_legacy: bool = True) -> World:
+def create_world(principal_id: str, *, world_id: str | None = None, import_prior: bool = True) -> World:
     """Create a new world with independent world_id; principal_id is owner only."""
     wid = world_id or layout.new_world_id()
     root = layout.world_root(wid)
@@ -91,11 +91,11 @@ def create_world(principal_id: str, *, world_id: str | None = None, migrate_lega
         {"state": "READY", "reason": "", "updated_at": now},
     )
     layout.write_json(root / "policy.json", _default_policy())
-    if migrate_legacy:
+    if import_prior:
         try:
-            layout.migrate_legacy_principal(str(principal_id), wid)
+            layout.import_prior_principal_tree(str(principal_id), wid)
         except Exception:
-            logger.exception("world_legacy_migrate_failed", principal_id=str(principal_id))
+            logger.exception("world_prior_tree_import_failed", principal_id=str(principal_id))
     # index by principal for v1 lookup
     index = layout.worlds_root() / ".principal_index"
     index.mkdir(exist_ok=True)

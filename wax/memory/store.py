@@ -3,7 +3,7 @@ Durable student memory — storage only.
 
 The AI decides when to search, create, update, supersede, or forget.
 Infrastructure enforces principal isolation and persistence.
-No automatic extraction, consolidation, injection, or hidden memory agent.
+The AI calls search/get/create/update/supersede/forget; infrastructure stores.
 """
 
 from __future__ import annotations

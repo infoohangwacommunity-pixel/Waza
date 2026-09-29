@@ -2,7 +2,7 @@
 WAX Prep background worker.
 
 Claims durable Work → runs Tutor intelligence → delivery.
-Survives crashes. Every learner message goes through AI.
+Survives crashes. Every student message goes through AI.
 Only pure infrastructure error paths skip the model.
 Durable memory is AI-driven via state directives — no post-turn memory job.
 """
@@ -37,7 +37,7 @@ def _handle_signal(*_):
 
 
 async def process_message_response(session, work: Work) -> None:
-    """Full AI tutor path — every learner message passes through intelligence."""
+    """Full AI tutor path — every student message passes through intelligence."""
     from wax.observability.turn_telemetry import begin_turn, end_turn, get_turn
 
     payload0 = work.input_payload or {}

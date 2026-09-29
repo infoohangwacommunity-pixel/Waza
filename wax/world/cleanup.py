@@ -92,7 +92,7 @@ def cleanup_old_files(ttl_hours: int | None = None) -> dict:
             removed += r["removed"]
             freed += r["bytes"]
 
-    # Legacy principals/ tree — tmp only
+    # Optional prior principals/ tree — tmp files only
     principals = root / "principals"
     if principals.is_dir():
         cutoff = time.time() - ttl * 3600

@@ -61,7 +61,7 @@ PROFILES: dict[str, ChannelProfile] = {
             "Bold with *text*, italic with _text_. Avoid giant walls. "
             "If a response is long, structure it so it can be split on paragraphs. "
             "You may offer up to 3 quick-reply buttons OR a list (up to 10 options) "
-            "when a clear choice would help the learner — never as a rigid menu for everything. "
+            "when a clear choice would help the student — never as a rigid menu for everything. "
             "Do not use buttons when free-form conversation is better."
         ),
     ),

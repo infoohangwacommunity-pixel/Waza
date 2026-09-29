@@ -2,7 +2,7 @@
 Durable scheduler — store time, wake Work. Nothing more.
 
 AI decides whether/when/why. This module persists and later creates Work.
-No reminder, check-in, or lesson semantics.
+Reasons and objectives are opaque strings supplied by the AI.
 """
 
 from __future__ import annotations

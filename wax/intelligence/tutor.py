@@ -8,7 +8,7 @@ Tutor — one small agent loop around the model.
 5. Repeat until the AI finishes (or safety bounds)
 6. Deliver the reply
 
-No educational workflow engine. No memory planner. No subject/modality policy.
+The model owns teaching decisions; this module only runs the loop.
 """
 
 from __future__ import annotations
@@ -106,7 +106,7 @@ class TutorService:
         user_text = (payload.get("text") or payload.get("user_text") or "").strip()
         channel = payload.get("channel") or ""
 
-        # Inbound file fact only — no auto transcription/OCR
+        # Inbound file fact only (path, size, type)
         media_path = payload.get("local_media_path") or payload.get("principal_media_path")
         if media_path:
             mime = payload.get("media_mime") or ""

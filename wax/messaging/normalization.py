@@ -2,7 +2,7 @@
 Inbound message normalization across WhatsApp and Telegram.
 
 Produces a channel-agnostic structure the rest of the system understands.
-No educational interpretation here — pure transport normalization.
+Pure transport normalization.
 """
 
 from __future__ import annotations

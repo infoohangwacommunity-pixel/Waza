@@ -30,7 +30,7 @@ def test_world_id_independent_of_principal(world_root, monkeypatch):
     monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
     from wax.world.manager import create_world
 
-    w = create_world("principal-A", migrate_legacy=False)
+    w = create_world("principal-A", import_prior=False)
     assert w.world_id != "principal-A"
     assert w.principal_id == "principal-A"
     assert w.root.exists()
@@ -50,8 +50,8 @@ def test_two_worlds_isolated_paths(world_root, monkeypatch):
     from wax.world import manager as mgr
 
     mgr._cache.clear()
-    ka = create_world("principal_a", migrate_legacy=False)
-    da = create_world("principal_b", migrate_legacy=False)
+    ka = create_world("principal_a", import_prior=False)
+    da = create_world("principal_b", import_prior=False)
     write_file(ka, "workspace/secret.txt", "principal-a-only")
     # Principal B cannot resolve Principal A paths through his world
     with pytest.raises(PathEscape):
@@ -71,7 +71,7 @@ def test_cleanup_does_not_delete_runtimes(world_root, monkeypatch):
 
     monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
     mgr._cache.clear()
-    w = create_world("p2", migrate_legacy=False)
+    w = create_world("p2", import_prior=False)
     protected = w.root / "runtimes" / "python" / "default" / "marker.txt"
     protected.parent.mkdir(parents=True, exist_ok=True)
     protected.write_text("keep")
@@ -109,7 +109,7 @@ def test_path_escape_symlink(world_root, monkeypatch, tmp_path):
 
     monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
     mgr._cache.clear()
-    w = create_world("p3", migrate_legacy=False)
+    w = create_world("p3", import_prior=False)
     outside = tmp_path / "outside.txt"
     outside.write_text("x")
     link = w.root / "workspace" / "evil"
@@ -131,7 +131,7 @@ def test_reconcile_clears_stale_running(world_root, monkeypatch):
 
     monkeypatch.setattr(ws, "workspace_root", lambda: world_root)
     mgr._cache.clear()
-    w = create_world("principal_r", migrate_legacy=False)
+    w = create_world("principal_r", import_prior=False)
     set_lifecycle(w, "BUSY", "exec")
     rec = {"execution_id": "old", "status": "running", "started_at": 1}
     (w.root / "state" / "exec" / "old.json").write_text(json.dumps(rec), encoding="utf-8")

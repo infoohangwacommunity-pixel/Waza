@@ -1,8 +1,8 @@
 """
 Resolve where to reach a person (WhatsApp / Telegram).
 
-Principal is the canonical learner. InterfaceIdentity is a channel door.
-No educational assumptions — only channel identities.
+Principal is the canonical student. InterfaceIdentity is a channel door.
+Channel identities only — no product workflow encoding.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ async def resolve_or_create_messaging_identity(
     """
     Canonical inbound resolution for permanent messaging channels.
 
-    If InterfaceIdentity exists → return its Principal (never create a second learner).
+    If InterfaceIdentity exists → return its Principal (never create a second student).
     If not → create Principal + InterfaceIdentity (genuinely new door).
     """
     from uuid import uuid4

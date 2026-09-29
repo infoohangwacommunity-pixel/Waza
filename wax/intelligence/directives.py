@@ -1,8 +1,6 @@
 """
 Minimal machine-readable bridge from model text to infrastructure.
 
-Not a tool catalogue, capability registry, or application menu.
-
 The AI reasons in free text. When it needs infrastructure to act, it may
 emit a fenced block named for a domain of reality. Infrastructure validates
 security and executes. The AI decides why.

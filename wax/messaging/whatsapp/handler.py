@@ -252,7 +252,7 @@ async def handle_whatsapp_webhook(body: bytes, headers: dict[str, str]) -> dict[
 
 
 async def _resolve_identity(session, wa_id: str | None, contact: dict | None):
-    """Canonical path: existing InterfaceIdentity → same Principal (no second learner)."""
+    """Canonical path: existing InterfaceIdentity → same Principal (no second student)."""
     if not wa_id:
         raise ValueError("missing wa_id")
     from wax.domain.identity import resolve_or_create_messaging_identity
