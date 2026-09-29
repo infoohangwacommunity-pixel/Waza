@@ -28,6 +28,24 @@ MAX_TERM_LEN = 200
 MAX_LIMIT = 100
 SEARCHABLE_FIELDS = ("content", "tags", "structured")
 
+# Sentinel: on update, an absent expires_at means "leave unchanged"; an
+# explicit None means "clear the expiry". Pure storage semantics.
+_UNSET: Any = object()
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    """Parse one ISO-8601 timestamp the AI supplied. Plain conversion only —
+    infrastructure never decides when a memory should expire."""
+    if value is None or isinstance(value, datetime):
+        return value
+    s = str(value).strip().replace("Z", "+00:00")
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s)
+    except ValueError:
+        return None
+
 
 def _as_uuid(value: Any) -> UUID | None:
     if value is None:
@@ -41,18 +59,36 @@ def _as_uuid(value: Any) -> UUID | None:
 
 
 def _row_to_dict(m: Memory) -> dict[str, Any]:
+    def _g(name: str, default: Any = None) -> Any:
+        # Plain attribute read with a storage default — never inference.
+        return getattr(m, name, default)
+
     return {
         "id": str(m.id),
         "memory_type": m.memory_type,
         "content": m.content,
         "tags": list(m.tags or []),
         "structured": dict(m.structured or {}),
+        "metadata": dict(_g("metadata_") or {}),
+        "source": _g("source", "ai"),
+        "source_message_id": str(v) if (v := _g("source_message_id")) else None,
+        "source_work_id": str(v) if (v := _g("source_work_id")) else None,
+        "expires_at": v.isoformat() if (v := _g("expires_at")) else None,
         "is_active": m.is_active,
         "validity_status": m.validity_status,
         "superseded_by_id": str(m.superseded_by_id) if m.superseded_by_id else None,
         "created_at": m.created_at.isoformat() if m.created_at else None,
         "updated_at": m.updated_at.isoformat() if getattr(m, "updated_at", None) else None,
     }
+
+
+def _clean_tags(tags: Any) -> list[str]:
+    """Normalize the AI's own tags; mechanical length/count bounds only.
+
+    Infrastructure never generates, infers, or reorders tags — it stores
+    exactly what the AI chose to attach."""
+    raw = [tags] if isinstance(tags, str) else (list(tags) if isinstance(tags, (list, tuple)) else [])
+    return [str(t).strip()[:80] for t in raw if str(t).strip()][:20]
 
 
 def _owned(m: Memory | None, principal_id: UUID) -> bool:
@@ -289,9 +325,14 @@ async def memory_create(
     memory_type: str = "semantic",
     tags: list[str] | None = None,
     structured: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    expires_at: datetime | None = None,
     work_id: Any = None,
+    message_id: Any = None,
     source: str = "ai",
 ) -> dict[str, Any]:
+    """Store one AI-chosen memory. Tags/structured/metadata are exactly what
+    the AI attached — infrastructure never generates or infers them."""
     pid = _as_uuid(principal_id)
     if not pid:
         return {"ok": False, "error": "no_principal"}
@@ -304,12 +345,15 @@ async def memory_create(
         principal_id=pid,
         memory_type=str(memory_type or "semantic")[:50],
         content=content[:8000],
-        structured=structured or {},
+        structured=dict(structured or {}),
+        metadata_=dict(metadata or {}),
         source=str(source or "ai")[:50],
         source_work_id=_as_uuid(work_id),
+        source_message_id=_as_uuid(message_id),
         is_active=True,
         validity_status="active",
-        tags=[str(t)[:80] for t in (tags or [])][:20],
+        expires_at=expires_at,
+        tags=_clean_tags(tags),
     )
     session.add(m)
     await session.flush()
@@ -323,8 +367,11 @@ async def memory_update(
     memory_id: str | None,
     *,
     content: str | None = None,
+    memory_type: str | None = None,
     tags: list[str] | None = None,
     structured: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    expires_at: Any = _UNSET,  # sentinel: absent means "unchanged"; None clears
 ) -> dict[str, Any]:
     pid = _as_uuid(principal_id)
     mid = _as_uuid(memory_id)
@@ -335,11 +382,20 @@ async def memory_update(
         return {"ok": False, "error": "not_found"}
     if content is not None:
         m.content = str(content).strip()[:8000]
+    if memory_type is not None:
+        m.memory_type = str(memory_type)[:50]
     if tags is not None:
-        m.tags = [str(t)[:80] for t in tags][:20]
+        m.tags = _clean_tags(tags)
     if structured is not None:
         m.structured = dict(structured)
+    if metadata is not None:
+        m.metadata_ = dict(metadata)
+    if expires_at is not _UNSET:
+        m.expires_at = expires_at
     await session.flush()
+    # `onupdate` refreshes updated_at in SQL; expire just that column so the
+    # read-back stays inside the async greenlet (no lazy IO surprises).
+    await session.refresh(m, ["updated_at"])
     return {"ok": True, "memory": _row_to_dict(m)}
 
 
@@ -350,12 +406,19 @@ async def memory_supersede(
     *,
     new_content: str,
     memory_type: str | None = None,
+    tags: list[str] | None = None,
+    structured: dict[str, Any] | None = None,
+    metadata: dict[str, Any] | None = None,
+    expires_at: Any = _UNSET,
     reason: str | None = None,
     work_id: Any = None,
+    message_id: Any = None,
 ) -> dict[str, Any]:
     """
     Replace an active memory: INSERT new row and flush, then mark old superseded.
-    Order matters for FK integrity.
+    Order matters for FK integrity. The AI may carry over or replace its own
+    tags/structured/metadata; if omitted, the old values are preserved as-is
+    (plain copy — no inference).
     """
     pid = _as_uuid(principal_id)
     old_id = _as_uuid(old_memory_id)
@@ -372,13 +435,19 @@ async def memory_supersede(
         pid,
         content=new_content,
         memory_type=memory_type or old.memory_type,
-        tags=list(old.tags or []),
+        tags=_clean_tags(tags) if tags is not None else list(old.tags or []),
         structured={
-            **(old.structured or {}),
+            **(structured if structured is not None else dict(old.structured or {})),
             "supersedes": str(old.id),
             "supersede_reason": (reason or "")[:500],
         },
+        metadata=(
+            dict(metadata) if metadata is not None
+            else dict(getattr(old, "metadata_", None) or {})
+        ),
+        expires_at=None if expires_at is _UNSET else expires_at,
         work_id=work_id,
+        message_id=message_id,
         source="ai_supersede",
     )
     if not created.get("ok"):

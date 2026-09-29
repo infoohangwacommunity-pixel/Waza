@@ -140,6 +140,21 @@ def get_or_create_world(principal_id: str) -> World:
     return create_world(pid)
 
 
+async def persist_world_row(session: Any, world: World) -> None:
+    """Sync the World's filesystem reality into its durable DB row.
+
+    Postgres is the durable authority for World lifecycle; this wires the
+    existing (previously unreferenced) persistence primitives into the normal
+    get-or-create path. Pure storage — no intelligence. Failures are logged,
+    never fatal to a turn."""
+    try:
+        from wax.world import persist
+
+        await persist.upsert_world(session, world)
+    except Exception:
+        logger.exception("world_row_persist_failed", world_id=world.world_id)
+
+
 def set_lifecycle(world: World, state: Lifecycle, reason: str = "") -> None:
     """Update lifecycle on the World object + recovery JSON.
 

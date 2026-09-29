@@ -22,7 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.agent.runtime import AgentRuntime
-from wax.db.models import Message, Work
+from wax.db.models import Message, Principal, Work
 from wax.intelligence.directives import parse_agent_output, Directive
 from wax.intelligence.providers import ChatMessage, CompletionRequest, get_intelligence
 from wax.observability.logging import get_logger
@@ -74,7 +74,26 @@ action: create
 content: <a durable fact you decided is worth keeping>
 memory_type: <your own type>
 tags: [<your own tags>]
+structured: {<optional json you choose>}
+metadata: {<optional json you choose>}
+expires_at: <optional ISO datetime — only if you decide it should expire>
 ```
+
+Other state actions: list, get (inspect by memory_id), update, supersede
+(replace an older memory you identified by id; old row stays as history),
+forget (by exact memory_id). Tags/structured/metadata/expiry are attached
+only when you attach them — nothing is generated for you.
+
+```state
+action: preferences
+preference_op: set
+preferences: {<json of explicit settings you and the student agreed on>}
+```
+
+State also supports `action: preferences` with preference_op read / set /
+clear (clear uses preference_keys). Preferences are durable settings storage
+on your student's identity — you decide what belongs there; infrastructure
+never infers or generates them.
 
 ```time
 delay_seconds: <number>
@@ -167,6 +186,8 @@ class TutorService:
 
             if principal_id:
                 _world = world_manager.get_or_create_world(str(principal_id))
+                # Keep the durable World DB row in sync with filesystem reality.
+                await world_manager.persist_world_row(self.session, _world)
                 world_root_note = (
                     f"- world_root: {_world.root} "
                     "(your notebook/ and history/ live under this path)\n"
@@ -295,7 +316,7 @@ class TutorService:
                     ctx,
                 )
             if d.channel == "state":
-                return await self._state(d, principal_id)
+                return await self._state(d, principal_id, work=work)
             if d.channel == "time":
                 return await sched.handle_time_directive(
                     self.session, {**f, "raw": d.body}, ctx
@@ -324,10 +345,59 @@ class TutorService:
             logger.exception("directive_failed", channel=d.channel)
             return {"ok": False, "error": str(e)[:500]}
 
-    async def _state(self, d: Directive, principal_id) -> dict[str, Any]:
+    @staticmethod
+    def _dict_field(value: Any) -> dict[str, Any] | None:
+        """Accept the AI's structured/metadata payload as a dict or JSON string.
+        Plain parsing only — infrastructure never invents fields."""
+        if value is None:
+            return None
+        if isinstance(value, dict):
+            return value
+        s = str(value).strip()
+        if not s:
+            return None
+        try:
+            parsed = json.loads(s)
+        except (ValueError, TypeError):
+            return None
+        return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _list_field(value: Any) -> list[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, (list, tuple)):
+            return [str(t) for t in value]
+        # Directive fences deliver plain strings; split on commas/whitespace.
+        # Deliberately NOT json.loads: content like "Moved to Mombasa" must
+        # survive as one literal item, never be reinterpreted.
+        if isinstance(value, str):
+            items = [t.strip() for t in value.replace(",", " ").split() if t.strip()]
+            return items or None
+        return [str(value)]
+
+    async def _state(self, d: Directive, principal_id, work=None) -> dict[str, Any]:
         f = d.fields
         action = (f.get("action") or "create").lower()
         mid = str(f.get("memory_id") or f.get("id") or "")
+        # The AI may attach tags/structured/metadata/expiry on write actions;
+        # absent means absent — nothing here generates them automatically.
+        tags = self._list_field(f.get("tags"))
+        structured = self._dict_field(f.get("structured"))
+        metadata = self._dict_field(f.get("metadata"))
+        expires_at = (
+            mem._parse_dt(f["expires_at"]) if "expires_at" in f else mem._UNSET
+        )
+        # Originating work is referenced when available (storage fact only).
+        work_ref = f.get("work_id") or (str(work.id) if work is not None and work.id else None)
+        msg_ref = f.get("message_id")
+
+        def _text_field(key: str):
+            """Directive fences deliver field values as plain strings. For the
+            AI's literal content, a string stays exactly one string — never
+            split, parsed, or reinterpreted."""
+            v = f.get(key)
+            return None if v is None else str(v)
         if action == "search":
             fields = f.get("fields")
             if isinstance(fields, str):
@@ -372,10 +442,24 @@ class TutorService:
                 principal_id,
                 content=str(f.get("content") or d.body),
                 memory_type=str(f.get("memory_type") or f.get("type") or "semantic"),
+                tags=tags,
+                structured=structured,
+                metadata=metadata,
+                expires_at=None if expires_at is mem._UNSET else expires_at,
+                work_id=work_ref,
+                message_id=msg_ref,
             )
         if action == "update":
             return await mem.memory_update(
-                self.session, principal_id, mid, content=f.get("content")
+                self.session,
+                principal_id,
+                mid,
+                content=f.get("content"),
+                memory_type=f.get("memory_type") or f.get("type"),
+                tags=tags,
+                structured=structured,
+                metadata=metadata,
+                expires_at=expires_at,
             )
         if action == "supersede":
             return await mem.memory_supersede(
@@ -383,10 +467,50 @@ class TutorService:
                 principal_id,
                 mid,
                 new_content=str(f.get("content") or d.body),
+                memory_type=f.get("memory_type") or f.get("type"),
+                tags=tags,
+                structured=structured,
+                metadata=metadata,
+                expires_at=expires_at,
+                reason=f.get("reason"),
+                work_id=work_ref,
+                message_id=msg_ref,
             )
         if action in ("forget", "delete"):
             return await mem.memory_forget(self.session, principal_id, mid)
+        if action == "preferences":
+            # Plain durable settings storage on the Principal row. The AI
+            # supplies the patch; infrastructure merges keys mechanically and
+            # never infers, classifies, or generates preference content.
+            return await self._preferences(f, principal_id)
         return {"ok": False, "error": f"unknown_state_action:{action}"}
+
+    async def _preferences(self, f: dict[str, Any], principal_id) -> dict[str, Any]:
+        from wax.domain.preferences import get_preferences
+
+        pid = mem._as_uuid(principal_id)
+        if not pid:
+            return {"ok": False, "error": "no_principal"}
+        current = await get_preferences(self.session, pid)
+        op = str(f.get("preference_op") or "read").strip().lower()
+        if op == "read":
+            return {"ok": True, "preferences": current}
+        patch = self._dict_field(f.get("preferences"))
+        if op == "set":
+            if not patch:
+                return {"ok": False, "error": "preferences_patch_required"}
+            merged = {**current, **patch}  # mechanical key merge, no inference
+        elif op == "clear":
+            drop = self._list_field(f.get("preference_keys")) or []
+            merged = {k: v for k, v in current.items() if k not in set(drop)}
+        else:
+            return {"ok": False, "error": f"unknown_preference_op:{op}"}
+        principal = await self.session.get(Principal, pid)
+        if principal is None:
+            return {"ok": False, "error": "not_found"}
+        principal.preferences = merged
+        await self.session.flush()
+        return {"ok": True, "preferences": merged}
 
     # Infrastructure safety cap only — a transport limit on how much observation
     # text may re-enter the model context. It is NOT summarization or selective

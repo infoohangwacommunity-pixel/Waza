@@ -199,15 +199,10 @@ async def process_message_response(session, work: Work) -> None:
         work.completed_at = datetime.now(timezone.utc)
         work.result_payload = {
             "reply_preview": (result.get("reply") or "")[:400],
-            "memories_used": result.get("memories_used", 0),
-                        "interactive": result.get("interactive"),
+            "interactive": result.get("interactive"),
         }
         await session.flush()
-        logger.info(
-            "work_completed",
-            work_id=str(work.id),
-            memories_used=result.get("memories_used"),
-        )
+        logger.info("work_completed", work_id=str(work.id))
         tel = get_turn()
         if tel:
             acts = (result or {}).get("actions") or []
