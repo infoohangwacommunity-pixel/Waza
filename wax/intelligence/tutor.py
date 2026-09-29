@@ -65,6 +65,16 @@ query: preferred explanation style
 ```
 
 ```state
+action: search
+terms: ["explanation style", "examples"]
+mode: any
+fields: content, structured
+tags: teaching
+limit: 20
+offset: 0
+```
+
+```state
 action: create
 content: Student prefers short worked examples
 ```
@@ -92,6 +102,27 @@ prompt: Which path?
 
 After observations, continue or finish with a clear reply to the student.
 Privacy: if they ask to forget something, use state forget and confirm from the result.
+
+Investigate before you change reality:
+Before changing code, student state, files, memory, schedules or other durable
+reality, inspect the relevant existing reality first when it is necessary.
+You are an investigator, not a guesser:
+- verify facts before claiming them; check `time list` before cancelling or
+  duplicating a schedule; read a file before editing it; search or list state
+  before creating a memory that may already exist;
+- inspect your notebook/ when relevant, history/transcript.jsonl when you want
+  to look back, and World files when the question lives there;
+- state search/list are mechanical primitives you formulate, not services that
+  decide for you. Search matches literal terms (any/all), chosen fields
+  (content/tags/structured), tags and type, newest-first with pagination —
+  no ranking, no semantic selection. If one query is not enough, run several
+  investigative queries, browse with `action: list`, page with offset, or
+  widen fields until you judge you have seen enough;
+- research externally (world + network_mode: pkg) when the question needs
+  current or uncertain knowledge;
+- always inspect tool results before deciding the next action.
+What deserves investigation is your judgment, not a fixed checklist. Nothing
+is preloaded or auto-selected for you; inspection costs you one directive.
 
 You also have a durable notebook/ folder in your World — long-term notes you
 own completely. Use your world directives (e.g. cwd "notebook", or absolute
@@ -299,8 +330,36 @@ class TutorService:
         action = (f.get("action") or "create").lower()
         mid = str(f.get("memory_id") or f.get("id") or "")
         if action == "search":
+            fields = f.get("fields")
+            if isinstance(fields, str):
+                fields = [p for p in fields.replace(",", " ").split() if p]
+            tags = f.get("tags")
+            if isinstance(tags, str):
+                tags = [t.strip() for t in tags.split(",") if t.strip()]
+            terms = f.get("terms")
+            if isinstance(terms, str):
+                terms = [terms]
             return await mem.memory_search(
-                self.session, principal_id, query=f.get("query") or d.body, limit=20
+                self.session,
+                principal_id,
+                query=f.get("query"),
+                terms=terms if terms is not None else ([d.body] if d.body.strip() else None),
+                mode=str(f.get("mode") or "any"),
+                fields=fields,
+                tags=tags,
+                memory_type=f.get("memory_type") or f.get("type"),
+                limit=int(f.get("limit") or 20),
+                offset=int(f.get("offset") or 0),
+                include_inactive=bool(f.get("include_inactive")),
+            )
+        if action == "list":
+            return await mem.memory_list(
+                self.session,
+                principal_id,
+                memory_type=f.get("memory_type") or f.get("type"),
+                limit=int(f.get("limit") or 50),
+                offset=int(f.get("offset") or 0),
+                include_inactive=bool(f.get("include_inactive")),
             )
         if action in ("get", "inspect"):
             return await mem.memory_get(self.session, principal_id, mid)
