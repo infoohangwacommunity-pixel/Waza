@@ -1,9 +1,12 @@
-"""Preferences are schema-free mechanical storage; quiet-hours policy is gone.
+"""Preferences storage is mechanical key/value; the AI-facing surface is retired.
 
-The old DEFAULT_PREFERENCES template (language/message_length/tone/emoji/
-quiet_hours) and is_in_quiet_hours helper encoded application-defined
-personalization policy — teaching style and engagement decisions belong to
-the AI, not infrastructure. These tests lock that removal in.
+History: an old DEFAULT_PREFERENCES template (language/tone/emoji/message_length/
+quiet_hours) and is_in_quiet_hours gate encoded application-defined
+personalization policy — deleted. Then `state action: preferences` was also
+retired so notebook/memory form a SINGLE personalization authority instead of
+two competing stores. The Principal.preferences column remains as durable
+storage only (no schema, no defaults); nothing in wax/ reads or writes it on
+the runtime path. These tests lock all of that in.
 """
 
 import pathlib
@@ -26,6 +29,22 @@ def test_no_quiet_hours_gate_exists():
         if "is_in_quiet_hours" in text or re.search(r"\bquiet_hours\b", text):
             offenders.append(str(p))
     assert offenders == []
+
+
+def test_ai_facing_preferences_surface_is_retired():
+    """No tutor code may read/write Principal.preferences via a directive —
+    one personalization authority (notebook + memory). profile.py must not
+    surface the retired column either."""
+    tutor = pathlib.Path("wax/intelligence/tutor.py").read_text()
+    assert "_preferences" not in tutor
+    assert "preference_op" not in tutor
+    # The state directive answers with a clear retirement notice instead.
+    assert "preferences_retired" in tutor
+    profile = pathlib.Path("wax/domain/profile.py").read_text()
+    # Only inside a comment explaining the retirement, never as data flow.
+    for line in profile.splitlines():
+        if "preferences" in line:
+            assert line.strip().startswith("#"), f"profile.py uses preferences: {line}"
 
 
 def test_get_preferences_returns_only_stored_values():

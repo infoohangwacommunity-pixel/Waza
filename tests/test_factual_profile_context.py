@@ -49,13 +49,13 @@ async def _seed_two(session):
 @pytest.mark.asyncio
 async def test_factual_context_reports_only_facts(session):
     alice, _, _ = await _seed_two(session)
-    alice.preferences = {"timezone": "UTC+1"}
-    await session.flush()
 
     ctx = await factual_context(session, alice.id)
     assert ctx["found"] is True
     assert ctx["display_name"] == "Alice"
-    assert ctx["preferences"] == {"timezone": "UTC+1"}
+    # Retired preferences column is NOT surfaced: notebook/memory are the
+    # single personalization authority (see test_preferences_surface_retired).
+    assert "preferences" not in ctx
     assert ctx["first_message_at"]  # first-contact fact from real rows
     assert ctx["created_at"]
     chans = {i["channel"]: i["external_id"] for i in ctx["linked_channel_identities"]}
@@ -112,10 +112,11 @@ def test_profile_module_has_no_intelligence_primitives():
 
 
 def test_single_personalization_authority_in_prompt():
-    """Tutor prompt must point judgment-bearing notes to notebook/memory,
-    keeping preferences as explicit-settings storage only — one system."""
+    """Tutor prompt must point judgment-bearing notes to notebook/memory and
+    teach ONE personalization authority — no separate preferences store."""
     from wax.intelligence.tutor import TUTOR_SYSTEM
 
     t = TUTOR_SYSTEM
-    assert "belong in your notebook/memory" in t
-    assert "FACTUAL context" in t or "factual" in t.lower()
+    assert "notebook/" in t and "memory" in t
+    assert "no separate preferences store" in t
+    assert "preference_op" not in t  # retired surface stays out of the prompt

@@ -60,10 +60,10 @@ async def factual_context(session: AsyncSession, principal_id) -> dict[str, Any]
         "found": True,
         "principal_id": str(p.id),
         "display_name": p.display_name,
-        # Explicit durable settings the AI itself stored via state preferences.
-        "preferences": dict(p.preferences or {}),
         # Basic account facts — presence flags only; content stays private to
-        # the AI's own stores (memory/notebook/transcript).
+        # the AI's own stores (memory/notebook/transcript). The retired
+        # Principal.preferences column is deliberately NOT surfaced: notebook/
+        # and memory are the single personalization authority.
         "has_world": bool((p.metadata_ or {}).get("world_root"))
         or any(bool((i.metadata_ or {}).get("world_root")) for i in identities),
         "is_active": p.is_active,

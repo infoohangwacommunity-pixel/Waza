@@ -80,6 +80,37 @@ def reconcile_world_root(root: Path) -> dict[str, Any]:
         report["lifecycle"] = "READY"
     elif world.lifecycle == "BUSY" and running:
         report["lifecycle"] = "BUSY"
+    # Durable authority sync: the DB World row mirrors lifecycle reality after
+    # recovery. Pure storage — no intelligence. Best-effort: disk reconciliation
+    # already succeeded, so a missing/unreachable database must never make
+    # startup fail or hang. Skipped entirely when no event loop is running
+    # (sync reconcile callers); production worker_loop provides one.
+    try:
+        import asyncio
+
+        from wax.db.session import get_session_factory
+        from wax.world.persist import apply_lifecycle as _pg_apply
+
+        async def _sync_row() -> None:
+            try:
+                sm = get_session_factory()
+                async with sm() as s:
+                    await _pg_apply(
+                        s,
+                        world.world_id,
+                        world.lifecycle,
+                        world.lifecycle_reason or "",
+                    )
+                    await s.commit()
+            except Exception:
+                logger.exception("world_lifecycle_pg_sync_failed", world_id=world.world_id)
+
+        try:
+            asyncio.get_running_loop().create_task(_sync_row())
+        except RuntimeError:
+            pass  # no loop available — lifecycle.json on disk remains correct
+    except Exception:
+        logger.debug("world_lifecycle_pg_sync_skipped", world_id=world.world_id)
     report["status"] = "ok"
     logger.info("world_reconciled", world_id=world.world_id, **{k: v for k, v in report.items() if k != "root"})
     return report

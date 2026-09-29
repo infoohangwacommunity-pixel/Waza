@@ -82,6 +82,11 @@ async def apply_lifecycle(
 
 
 async def load_lifecycle(session: AsyncSession, principal_id: str) -> dict[str, Any] | None:
+    """Deprecated recovery helper — lifecycle is synced from disk at reconcile.
+
+    Kept for external recovery scripts only; the runtime never reads lifecycle
+    from Postgres (the World's lifecycle.json on disk is what reconcile uses).
+    """
     try:
         pid = _as_uuid(principal_id)
     except Exception:

@@ -84,20 +84,12 @@ Other state actions: list, get (inspect by memory_id), update, supersede
 forget (by exact memory_id). Tags/structured/metadata/expiry are attached
 only when you attach them — nothing is generated for you.
 
-```state
-action: preferences
-preference_op: set
-preferences: {<json of explicit settings you and the student agreed on>}
-```
-
-State also supports `action: preferences` with preference_op read / set /
-clear (clear uses preference_keys). Preferences are durable settings storage
-on your student's identity — you decide what belongs there; infrastructure
-never infers or generates them. Judgment-bearing notes about the student
-(goals, style, ability, plans) belong in your notebook/memory, not here.
+There is no separate preferences store. Explicit agreements and durable
+settings about the student live where you keep everything else you own:
+your notebook/ files and memory (state create/update/supersede/forget).
 
 `action: profile` returns read-only FACTUAL context only: display name,
-linked channel identities, first contact, explicit stored settings. What
+linked channel identities, first contact, account facts. What
 those facts mean and how they change your approach is your decision.
 
 ```time
@@ -214,11 +206,6 @@ class TutorService:
                 if ctx.get("found"):
                     if ctx.get("display_name"):
                         display_name_note = f"- display_name: {ctx['display_name']}\n"
-                    if ctx.get("preferences"):
-                        system += (
-                            "\n\nExplicit durable settings the student/AI agreed to store: "
-                            f"{ctx['preferences']}"
-                        )
         except Exception:
             pass
 
@@ -304,6 +291,12 @@ class TutorService:
             "user_text": f"[Scheduled] {hint}",
             "text": f"[Scheduled] {hint}",
         }
+        # Transcript continuity: the wake-up trigger is infrastructure-authored,
+        # so it is recorded as a clearly-marked system Message (never posed as
+        # a student message). Idempotent per Work; safe across retries.
+        await self._record_system_message(
+            work, f"[system] scheduled action fired: {hint}"
+        )
         return await self.handle_message(work)
 
     async def handle_surface_request(self, work: Work) -> dict[str, Any]:
@@ -496,13 +489,20 @@ class TutorService:
         if action in ("forget", "delete"):
             return await mem.memory_forget(self.session, principal_id, mid)
         if action == "preferences":
-            # Plain durable settings storage on the Principal row. The AI
-            # supplies the patch; infrastructure merges keys mechanically and
-            # never infers, classifies, or generates preference content.
-            return await self._preferences(f, principal_id)
+            # Retired surface: there is no separate preferences store. The AI's
+            # durable judgment-bearing state lives in notebook/ and memory.
+            return {
+                "ok": False,
+                "error": "preferences_retired",
+                "note": (
+                    "Preferences are no longer a separate store — one personalization "
+                    "authority only. Keep agreements/settings you own in your notebook/ "
+                    "files or as memory (state create/update/supersede/forget)."
+                ),
+            }
         if action == "profile":
             # Read-only factual identity context (name, linked channels, first
-            # contact, explicit stored settings). Interpretation is the AI's.
+            # contact, account facts). Interpretation is the AI's.
             from wax.domain.profile import factual_context
 
             pid = mem._as_uuid(principal_id)
@@ -511,33 +511,6 @@ class TutorService:
             ctx = await factual_context(self.session, pid)
             return {"ok": True, "profile": ctx}
         return {"ok": False, "error": f"unknown_state_action:{action}"}
-
-    async def _preferences(self, f: dict[str, Any], principal_id) -> dict[str, Any]:
-        from wax.domain.preferences import get_preferences
-
-        pid = mem._as_uuid(principal_id)
-        if not pid:
-            return {"ok": False, "error": "no_principal"}
-        current = await get_preferences(self.session, pid)
-        op = str(f.get("preference_op") or "read").strip().lower()
-        if op == "read":
-            return {"ok": True, "preferences": current}
-        patch = self._dict_field(f.get("preferences"))
-        if op == "set":
-            if not patch:
-                return {"ok": False, "error": "preferences_patch_required"}
-            merged = {**current, **patch}  # mechanical key merge, no inference
-        elif op == "clear":
-            drop = self._list_field(f.get("preference_keys")) or []
-            merged = {k: v for k, v in current.items() if k not in set(drop)}
-        else:
-            return {"ok": False, "error": f"unknown_preference_op:{op}"}
-        principal = await self.session.get(Principal, pid)
-        if principal is None:
-            return {"ok": False, "error": "not_found"}
-        principal.preferences = merged
-        await self.session.flush()
-        return {"ok": True, "preferences": merged}
 
     # Infrastructure safety cap only — a transport limit on how much observation
     # text may re-enter the model context. It is NOT summarization or selective
@@ -578,6 +551,48 @@ class TutorService:
             if content:
                 out.append({"role": role, "content": content})
         return out
+
+    async def _record_system_message(self, work: Work, content: str) -> None:
+        """Persist an infrastructure-originated system line (e.g. the wake-up
+        hint of a scheduled action) as a clearly-marked Message row.
+
+        This keeps transcript continuity honest: every assistant reply has
+        its real trigger recorded beside it. Idempotent per Work via unique
+        (channel, external_id='system:{work_id}'). Infrastructure records
+        the fact; interpreting it is the AI's job.
+        """
+        if not work.conversation_id or not work.principal_id or not work.id:
+            return
+        ext = f"system:{work.id}"
+        channel = (work.input_payload or {}).get("channel") or "whatsapp"
+        exists = await self.session.execute(
+            select(Message.id).where(
+                Message.channel == channel, Message.external_id == ext
+            )
+        )
+        if exists.scalar_one_or_none():
+            return
+        try:
+            async with self.session.begin_nested():
+                message = Message(
+                    id=uuid.uuid4(),
+                    conversation_id=work.conversation_id,
+                    principal_id=work.principal_id,
+                    channel=channel,
+                    direction="inbound",
+                    role="system",
+                    content=content,
+                    external_id=ext,
+                    work_id=work.id,
+                    metadata_={"source": "infrastructure"},
+                )
+                self.session.add(message)
+                await self.session.flush()
+            from wax.world.transcript import archive_message
+
+            await archive_message(self.session, message)
+        except IntegrityError:
+            logger.info("system_message_already_recorded", work_id=str(work.id))
 
     async def _record_outbound_message(self, work: Work, reply: str) -> None:
         """Persist the assistant's reply into durable chat history.
