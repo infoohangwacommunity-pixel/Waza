@@ -362,21 +362,24 @@ class TutorService:
             return
         try:
             async with self.session.begin_nested():
-                self.session.add(
-                    Message(
-                        id=uuid.uuid4(),
-                        conversation_id=work.conversation_id,
-                        principal_id=work.principal_id,
-                        channel=channel,
-                        direction="outbound",
-                        role="assistant",
-                        content=reply,
-                        external_id=ext,
-                        work_id=work.id,
-                        metadata_={"source": "tutor_reply"},
-                    )
+                message = Message(
+                    id=uuid.uuid4(),
+                    conversation_id=work.conversation_id,
+                    principal_id=work.principal_id,
+                    channel=channel,
+                    direction="outbound",
+                    role="assistant",
+                    content=reply,
+                    external_id=ext,
+                    work_id=work.id,
+                    metadata_={"source": "tutor_reply"},
                 )
+                self.session.add(message)
                 await self.session.flush()
+            # Durable long-term archive inside the student's own World.
+            from wax.world.transcript import archive_message
+
+            await archive_message(self.session, message)
         except IntegrityError:
             # Another attempt already recorded this turn — the savepoint
             # rollback discarded only this insert; never duplicate transcript rows.

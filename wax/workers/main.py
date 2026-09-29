@@ -187,6 +187,14 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("typing_indicator_failed")
         result = await tutor.handle_message(work)
+        # Durable World transcript archive (idempotent, restart-safe): the DB
+        # rows are already flushed; mirror them into the student's World.
+        try:
+            from wax.world.transcript import archive_turn
+
+            await archive_turn(session, work)
+        except Exception:
+            logger.exception("world_transcript_archive_turn_failed", work_id=str(work.id))
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
         work.result_payload = {
