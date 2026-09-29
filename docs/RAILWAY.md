@@ -19,18 +19,31 @@ Railway injects `PORT` for the web process. Do **not** put a literal `$PORT` in 
 
 Share the **same variables** and the **same volume** across web and worker.
 
-## Volume (student Worlds)
+Railway Volumes are attached to one service at one mount path. A volume is **not**
+automatically shared between services. If Web and Worker need the same student
+World files, they must use the same physical Volume **and** the same canonical
+mount path, or they must share the same underlying store that both services can
+reach. Separate Railway Volumes mounted at the same local path on different
+services do **not** provide a shared filesystem.
 
-1. Create a Railway Volume.
-2. Mount it at **`/data`** on **both** web and worker.
-3. Set:
+The simplest correct setup for a single durable World is:
+
+1. Create **one** Railway Volume for student Worlds.
+2. Attach that **same** volume to the service(s) that need World access.
+3. Mount it at the same path on every attached service, e.g. `/data`.
+4. Set:
 
 ```text
 WORKSPACE_ROOT=/data/wax-workspaces
 REQUIRE_PERSISTENT_WORKSPACE=true
 ```
 
-Production **rejects** a workspace under `/tmp`. Student Worlds are durable; they must not live on ephemeral container disk.
+Production **rejects** a workspace under `/tmp`. Student Worlds are durable; they
+must not live on ephemeral container disk.
+
+If you instead run Web and Worker as separate services with separate volumes,
+that does **not** give them a shared World. The application does not treat two
+separate volumes as one World.
 
 Optional artifact files on the same volume:
 
@@ -38,6 +51,11 @@ Optional artifact files on the same volume:
 WAX_ARTIFACT_ROOT=/data/wax-artifacts
 STORAGE_BACKEND=local
 ```
+
+Artifacts may also use an S3-compatible backend if you want durable object
+storage separate from the World volume. Object storage is **not** a POSIX
+filesystem replacement for the World tree itself (worlds, transcript, history,
+notebook, projects, runtimes, state). It is only an artifact backend.
 
 ## Database (Railway Postgres)
 
@@ -116,10 +134,14 @@ Do not use those values on Railway.
 
 1. Dockerfile build succeeds  
 2. Postgres plugin → `DATABASE_URL`  
-3. Volume mounted at `/data` on web **and** worker  
-4. `WORKSPACE_ROOT=/data/wax-workspaces`  
+3. One World volume attached to the service(s) that need student World access,
+   mounted at the same path on each attached service, e.g. `/data`  
+4. `WORKSPACE_ROOT=/data/wax-workspaces` on every service that touches the World  
 5. `PUBLIC_BASE_URL` = public web URL  
 6. `PRIMARY_API_KEY` + model  
 7. Web start: `bash scripts/start_web.sh`  
 8. Worker start: `bash scripts/startup.sh python3 -m wax.workers.main`  
 9. Point WhatsApp/Telegram webhooks at `PUBLIC_BASE_URL`  
+10. Verify Web and Worker see the same World: create a World on one service and
+    read its `identity.json`, transcript, notebook, and a local artifact from
+    the other service using the same `WORKSPACE_ROOT`.  
