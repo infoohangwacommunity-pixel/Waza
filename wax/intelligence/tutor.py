@@ -31,6 +31,7 @@ from wax.scheduler import ops as sched
 from wax.world import ops as world_ops
 from wax.surfaces import ops as pub
 from wax.interaction.ops import present_choices
+from wax.identity_link import ops as link_ops
 
 logger = get_logger(__name__)
 
@@ -158,6 +159,34 @@ prompt: <question to the student>
 - <option one>
 - <option two>
 ```
+
+Identity linking — cross-channel account linking via one-time verification code:
+
+When a student wants to link another messaging channel (e.g., Telegram) to their
+existing account, use infrastructure-owned verification. The AI explains the process
+but NEVER guesses or infers links — infrastructure verifies.
+
+```link_request
+pending_channel: telegram        # the channel being linked
+pending_external_id: 123456789   # the external ID on that channel
+code_ttl_seconds: 300           # optional: 60-3600 (default 300)
+display_hint: "Link Telegram to your account"  # optional: customize the hint
+```
+
+This creates a short-lived one-time code. The response includes a `display_hint`
+you can relay to the student. The actual code stays in the database — infrastructure-only.
+
+The student then presents the code from their other device/channel:
+
+```link
+code: ABC123DEF456              # the verification code from the challenge
+presenting_channel: telegram    # the channel presenting the code
+presenting_external_id: 123456789
+```
+
+Infrastructure verifies the code and links the identities to the same Principal.
+Expired/used codes cannot be reused. Wrong-code attempts are rejected.
+Do not automatically merge accounts because names or messages look similar.
 
 After observations, continue or finish with a clear reply to the student.
 Privacy: if they ask to forget something, investigate first (state search or
@@ -330,16 +359,42 @@ class TutorService:
         return {"reply": final_reply, "interactive": interactive}
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
+        """
+        Handle a scheduled action wake-up.
+
+        The scheduler provides factual context (time, reason, payload). The AI
+        decides what the wake-up means — no automatic summarization, memory
+        extraction, or hardcoded workflows. The infrastructure simply tells the
+        AI it has been awakened and provides the relevant factual situation.
+        """
         payload = work.input_payload or {}
         hint = payload.get("message_hint") or payload.get("reason") or "Scheduled follow-up."
+        action_type = payload.get("action_type") or "wake"
+        execute_at = payload.get("execute_at")
+
+        # Build a clear wake-up notification for the AI
+        # This is factual context only — no summarization, no memory extraction
+        wake_context = (
+            f"[system] You have been awakened by the scheduler.\n"
+            f"- trigger: scheduled_action\n"
+            f"- action_type: {action_type}\n"
+            f"- reason: {hint}\n"
+            f"- execute_at: {execute_at or 'unknown'}\n"
+            f"- wakeup_instruction: You decide what this wake-up means. "
+            f"You may update your notebook, inspect history, do nothing, "
+            f"continue a task, or contact the student. "
+            f"No automatic memory summarization or extraction is expected or performed."
+        )
+
         work.input_payload = {
             **payload,
-            "user_text": f"[Scheduled] {hint}",
-            "text": f"[Scheduled] {hint}",
+            "user_text": wake_context,
+            "text": wake_context,
+            "is_wakeup": True,
         }
+
         # Transcript continuity: the wake-up trigger is infrastructure-authored,
-        # so it is recorded as a clearly-marked system Message (never posed as
-        # a student message). Idempotent per Work; safe across retries.
+        # recorded as a clearly-marked system Message (never posed as student message).
         await self._record_system_message(
             work, f"[system] scheduled action fired: {hint}"
         )
@@ -393,6 +448,29 @@ class TutorService:
                     {
                         "choices": f.get("choices") or [],
                         "prompt": f.get("prompt") or d.body,
+                    },
+                    ctx,
+                )
+            if d.channel == "link":
+                return await link_ops.present_code(
+                    self.session,
+                    {
+                        "code": f.get("code") or d.body,
+                        "presenting_channel": f.get("presenting_channel"),
+                        "presenting_external_id": f.get("presenting_external_id")
+                        or ctx.get("target_external_id"),
+                    },
+                    ctx,
+                )
+            if d.channel == "link_request":
+                return await link_ops.request_link(
+                    self.session,
+                    {
+                        "pending_channel": f.get("pending_channel"),
+                        "pending_external_id": f.get("pending_external_id")
+                        or ctx.get("target_external_id"),
+                        "code_ttl_seconds": f.get("code_ttl_seconds"),
+                        "display_hint": f.get("display_hint"),
                     },
                     ctx,
                 )

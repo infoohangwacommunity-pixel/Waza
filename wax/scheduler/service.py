@@ -298,6 +298,40 @@ class SchedulerService:
             action.work_id = None
             await self.session.flush()
 
+        # Build the wake-up payload — factual situation only, no summarization
+        wake_payload = {
+            "scheduled_action_id": str(action.id),
+            "action_type": action.action_type,
+            "reason": action.reason,
+            "execute_at": action.execute_at.isoformat() if action.execute_at else None,
+            "message_hint": (action.payload or {}).get("message_hint")
+            or (action.payload or {}).get("objective")
+            or action.reason
+            or action.action_type,
+            "objective": (action.payload or {}).get("objective")
+            or (action.payload or {}).get("message_hint")
+            or action.reason,
+            "payload": action.payload or {},
+            "channel": (action.payload or {}).get("channel"),
+            "conversation_id": (action.payload or {}).get("conversation_id"),
+            "target_external_id": (action.payload or {}).get("target_external_id"),
+            # Infrastructural context for the wake-up
+            "wakeup": {
+                "triggered_at": datetime.now(timezone.utc).isoformat(),
+                "trigger": "scheduled_action",
+                "action_type": action.action_type,
+                "reason": action.reason,
+                # AI decides what this means — no automatic summarization
+                "ai_instruction": (
+                    "You have been woken up by the scheduler. "
+                    "The reason and objective above are factual context only. "
+                    "You decide what to do: update your notebook, inspect history, "
+                    "do nothing, continue a task, or contact the student. "
+                    "No automatic memory summarization or extraction is expected."
+                ),
+            },
+        }
+
         work = Work(
             id=uuid4(),
             principal_id=action.principal_id,
@@ -305,21 +339,7 @@ class SchedulerService:
             status="queued",
             priority=80,
             objective=action.reason or action.action_type,
-            input_payload={
-                "scheduled_action_id": str(action.id),
-                "action_type": action.action_type,
-                "reason": action.reason,
-                "message_hint": (action.payload or {}).get("message_hint")
-                or (action.payload or {}).get("objective")
-                or action.reason
-                or action.action_type,
-                "objective": (action.payload or {}).get("objective")
-                or (action.payload or {}).get("message_hint")
-                or action.reason,
-                "payload": action.payload or {},
-                "channel": (action.payload or {}).get("channel"),
-                "conversation_id": (action.payload or {}).get("conversation_id"),
-            },
+            input_payload=wake_payload,
         )
         self.session.add(work)
         await self.session.flush()  # works row must exist before FK assign

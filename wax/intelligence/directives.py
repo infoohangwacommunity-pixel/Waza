@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-CHANNELS = frozenset({"world", "state", "time", "publish", "interact"})
+CHANNELS = frozenset({"world", "state", "time", "publish", "interact", "link", "link_request"})
 
 _FENCE = re.compile(
     r"```(world|state|time|publish|interact)\s*\n(.*?)```",
@@ -121,3 +121,19 @@ def _enrich(channel: str, fields: dict[str, Any], body: str) -> None:
 
     if channel == "publish":
         fields.setdefault("html", body)
+
+    if channel == "link":
+        # `code` is the primary field; the rest are contextual
+        if "code" not in fields and body:
+            fields["code"] = body.split()[0] if body.split() else body
+        return
+
+    if channel == "link_request":
+        # AI requests a new link challenge
+        if "pending_channel" not in fields and body:
+            # First line might be the channel
+            first_line = body.splitlines()[0].strip() if body.splitlines() else ""
+            if first_line.lower() in ("whatsapp", "telegram"):
+                fields["pending_channel"] = first_line.lower()
+                fields.setdefault("pending_external_id", body)
+        return

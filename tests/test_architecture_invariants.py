@@ -91,4 +91,8 @@ def test_durable_world_not_ephemeral_policy():
 def test_directive_channels_canonical_only():
     from wax.intelligence.directives import CHANNELS
 
-    assert CHANNELS == frozenset({"world", "state", "time", "publish", "interact"})
+    # Core channels + identity linking channels (cross-channel verification)
+    assert CHANNELS == frozenset({
+        "world", "state", "time", "publish", "interact",
+        "link", "link_request",
+    })

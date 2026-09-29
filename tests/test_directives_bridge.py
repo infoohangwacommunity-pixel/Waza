@@ -4,7 +4,11 @@ from wax.intelligence.directives import parse_agent_output, CHANNELS, Directive
 
 
 def test_canonical_channels_only():
-    assert CHANNELS == frozenset({"world", "state", "time", "publish", "interact"})
+    # Core infrastructure channels + identity linking channels
+    assert CHANNELS == frozenset({
+        "world", "state", "time", "publish", "interact",
+        "link", "link_request",
+    })
 
 
 def test_parse_world_and_state():
