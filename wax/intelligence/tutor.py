@@ -52,6 +52,11 @@ Infrastructure channels (domains of reality, not an app menu):
 python3 -c "print(2+2)"
 ```
 
+```world
+network_mode: pkg
+python3 -m pip install numpy
+```
+
 ```state
 action: search
 query: preferred explanation style
@@ -226,7 +231,12 @@ class TutorService:
         try:
             if d.channel == "world":
                 return await world_ops.world_exec(
-                    self.session, {"command": f.get("command") or d.body}, ctx
+                    self.session,
+                    {
+                        "command": f.get("command") or d.body,
+                        "network_mode": f.get("network_mode") or "none",
+                    },
+                    ctx,
                 )
             if d.channel == "state":
                 return await self._state(d, principal_id)

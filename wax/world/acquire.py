@@ -1,4 +1,8 @@
-"""Generic software acquisition — transactional, verified, world-local."""
+"""Internal package install helper — not an AI-facing product surface.
+
+AI installs packages via world_exec with network_mode=pkg.
+This module remains for structured pip installs into the World venv.
+"""
 
 from __future__ import annotations
 

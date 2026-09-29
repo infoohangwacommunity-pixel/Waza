@@ -96,6 +96,19 @@ The AI decides the objective. Infrastructure validates security and executes.
 No specialized teaching actions. No application capability menu sent to the model.
 
 
+## World execution path
+
+One path only:
+
+```
+AI ```world directive → wax.world.ops.world_exec → wax.world.exec → isolation (bwrap/docker)
+→ observation
+```
+
+No parallel terminal package. No capability registry. Package installs use the same
+path with `network_mode: pkg`. Inbound media is staged into the World; the AI decides
+whether to process it.
+
 ## World persistence
 
 Each principal has an isolated World under `WORKSPACE_ROOT/worlds/<world_id>/`.
