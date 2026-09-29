@@ -76,7 +76,7 @@ def cleanup_old_files(ttl_hours: int | None = None) -> dict:
     if ttl is None:
         ttl = getattr(settings, "workspace_tmp_ttl_hours", None)
     if ttl is None:
-        ttl = getattr(settings, "workspace_ttl_hours", 48)
+        ttl = getattr(settings, "workspace_tmp_ttl_hours", 48)
     ttl = float(ttl or 48)
 
     root = workspace_root()

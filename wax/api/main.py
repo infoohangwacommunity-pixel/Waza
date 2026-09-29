@@ -81,10 +81,9 @@ async def health_detail():
         "primary_provider": settings.primary_provider,
         "fallback_provider": settings.fallback_provider,
         "storage_backend": getattr(settings, "effective_storage_backend", settings.storage_backend),
-        "policy": {
-            "allow_code_execution": getattr(settings, "allow_code_execution", True),
-            "allow_external_network": getattr(settings, "allow_external_network", True),
-            "allow_html_artifacts": getattr(settings, "allow_html_artifacts", True),
+        "isolation": {
+            "enabled": settings.isolation_enabled,
+            "require_sandbox": settings.effective_isolation_require_sandbox,
         },
         "capabilities": [
             "interactions",
