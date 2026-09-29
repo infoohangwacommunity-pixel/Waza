@@ -60,8 +60,12 @@ def _owned(m: Memory | None, principal_id: UUID) -> bool:
     return m is not None and m.principal_id == principal_id
 
 
-def _clean_terms(terms: Any, query: Any) -> tuple[list[str], list[str]]:
-    """Normalize the AI's explicit terms into plain strings + quoted phrases."""
+def _clean_terms(terms: Any, query: Any = None) -> tuple[list[str], list[str]]:
+    """Normalize the AI's explicit terms into plain strings + quoted phrases.
+
+    `query` is a deprecated legacy alias for a single term; it stays purely
+    mechanical (treated as one literal term, never interpreted).
+    """
     raw: list[Any] = []
     if isinstance(terms, str):
         raw = [terms]
@@ -129,7 +133,7 @@ async def memory_search(
     session: AsyncSession,
     principal_id: Any,
     *,
-    query: Any = None,
+    query: Any = None,  # deprecated literal-term alias; never interpreted
     terms: Any = None,
     mode: str = "any",
     fields: Any = None,
@@ -403,39 +407,40 @@ async def memory_forget(
     principal_id: Any,
     memory_id: str | None = None,
     *,
-    query: str | None = None,
+    query: str | None = None,  # deprecated: no longer selects rows to forget
 ) -> dict[str, Any]:
-    """Deactivate memory for this principal only."""
+    """Deactivate ONE explicitly identified memory for this principal only.
+
+    Forgetting is consequential: the AI must name the exact `memory_id` (found
+    by its own search/list/get investigation). Infrastructure deliberately does
+    NOT interpret a free-text query to decide which memories "match" — that
+    selection is intelligence and belongs to the AI, not the store.
+    """
     pid = _as_uuid(principal_id)
     if not pid:
-        return {"ok": False, "error": "no_principal"}
-    forgotten: list[str] = []
+        return {
+            "ok": False,
+            "error": "no_principal",
+            "forgotten_ids": [],
+        }
     mid = _as_uuid(memory_id)
-    if mid:
-        m = await session.get(Memory, mid)
-        if not _owned(m, pid):
-            return {"ok": False, "error": "not_found"}
-        m.is_active = False
-        m.validity_status = "forgotten"
-        forgotten.append(str(m.id))
-        await session.flush()
-        return {"ok": True, "forgotten_ids": forgotten}
-    if query and str(query).strip():
-        q = f"%{str(query).strip()[:200]}%"
-        stmt = (
-            select(Memory)
-            .where(
-                Memory.principal_id == pid,
-                Memory.is_active.is_(True),
-                Memory.content.ilike(q),
-            )
-            .limit(30)
+    if not mid:
+        hint = (
+            " memory_id required: investigate with state search/list, then "
+            "forget the exact ids you chose."
+            if query
+            else ""
         )
-        result = await session.execute(stmt)
-        for m in result.scalars().all():
-            m.is_active = False
-            m.validity_status = "forgotten"
-            forgotten.append(str(m.id))
-        await session.flush()
-        return {"ok": True, "forgotten_ids": forgotten, "count": len(forgotten)}
-    return {"ok": False, "error": "memory_id_or_query_required"}
+        return {
+            "ok": False,
+            "error": "memory_id_required" + hint,
+            "forgotten_ids": [],
+        }
+    m = await session.get(Memory, mid)
+    if not _owned(m, pid):
+        return {"ok": False, "error": "not_found", "forgotten_ids": []}
+    m.is_active = False
+    m.validity_status = "forgotten"
+    await session.flush()
+    logger.info("memory_forgotten", memory_id=str(mid), principal_id=str(pid))
+    return {"ok": True, "forgotten_ids": [str(mid)], "count": 1}

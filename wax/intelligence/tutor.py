@@ -98,7 +98,9 @@ prompt: <question to the student>
 ```
 
 After observations, continue or finish with a clear reply to the student.
-Privacy: if they ask to forget something, use state forget and confirm from the result.
+Privacy: if they ask to forget something, investigate first (state search or
+list), then use state forget with the exact memory_id you chose; confirm from
+the result. The store will not select rows to forget for you.
 
 Investigate before you change reality:
 Before changing code, student state, files, memory, schedules or other durable
@@ -336,10 +338,14 @@ class TutorService:
             terms = f.get("terms")
             if isinstance(terms, str):
                 terms = [terms]
+            # `query` is a deprecated single-term alias: passed through only as
+            # one literal term (never interpreted), never combined with terms.
+            legacy_q = f.get("query")
+            if terms is None and legacy_q is not None and str(legacy_q).strip():
+                terms = [str(legacy_q)]
             return await mem.memory_search(
                 self.session,
                 principal_id,
-                query=f.get("query"),
                 terms=terms if terms is not None else ([d.body] if d.body.strip() else None),
                 mode=str(f.get("mode") or "any"),
                 fields=fields,
