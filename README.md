@@ -40,6 +40,6 @@ python -m wax.workers.main
 
 Webhooks: `POST /webhooks/whatsapp`, `POST /webhooks/telegram`.
 
-Production: use the Dockerfile, a durable `WORKSPACE_ROOT` (not `/tmp`), and settings from `.env.example`.
+Production: use the Dockerfile and [docs/RAILWAY.md](docs/RAILWAY.md) (volume at `/data`, variables from `.env.example`).
 
 See [docs/architecture.md](docs/architecture.md) and [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md).

@@ -44,6 +44,8 @@ Send a message. You should get a natural reply from the tutor.
 
 ## Production
 
+Operator contract for Railway variables, volume, and start commands: [RAILWAY.md](RAILWAY.md).
+
 - Build with the repository `Dockerfile` (Railway: `builder = DOCKERFILE`).
 - Mount a durable volume for `WORKSPACE_ROOT` (for example `/data/wax-workspaces`).
 - Set `APP_ENV=production` and a strong `SECRET_KEY`.
