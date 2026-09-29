@@ -93,7 +93,12 @@ preferences: {<json of explicit settings you and the student agreed on>}
 State also supports `action: preferences` with preference_op read / set /
 clear (clear uses preference_keys). Preferences are durable settings storage
 on your student's identity — you decide what belongs there; infrastructure
-never infers or generates them.
+never infers or generates them. Judgment-bearing notes about the student
+(goals, style, ability, plans) belong in your notebook/memory, not here.
+
+`action: profile` returns read-only FACTUAL context only: display name,
+linked channel identities, first contact, explicit stored settings. What
+those facts mean and how they change your approach is your decision.
 
 ```time
 delay_seconds: <number>
@@ -197,12 +202,23 @@ class TutorService:
 
         history = await self._recent_messages(work, limit=20)
         system = TUTOR_SYSTEM
-        try:
-            from wax.domain.preferences import get_preferences
 
-            prefs = await get_preferences(self.session, principal_id) if principal_id else {}
-            if prefs:
-                system += f"\n\nStudent preferences (explicit settings): {prefs}"
+        # Factual identity context only (name, linked channels, first contact,
+        # explicit stored settings). What these facts MEAN is the AI's call.
+        display_name_note = ""
+        try:
+            if principal_id:
+                from wax.domain.profile import factual_context
+
+                ctx = await factual_context(self.session, principal_id)
+                if ctx.get("found"):
+                    if ctx.get("display_name"):
+                        display_name_note = f"- display_name: {ctx['display_name']}\n"
+                    if ctx.get("preferences"):
+                        system += (
+                            "\n\nExplicit durable settings the student/AI agreed to store: "
+                            f"{ctx['preferences']}"
+                        )
         except Exception:
             pass
 
@@ -210,6 +226,7 @@ class TutorService:
             f"CURRENT ENVIRONMENT\n"
             f"- time_utc: {datetime.now(timezone.utc).isoformat()}\n"
             f"- channel: {channel or 'unknown'}\n"
+            f"{display_name_note}"
             f"- principal_id: {principal_id or 'none'}\n"
             f"{world_root_note}"
             f"- world / state / time / publish / interact: available via fenced directives when needed.\n"
@@ -483,6 +500,16 @@ class TutorService:
             # supplies the patch; infrastructure merges keys mechanically and
             # never infers, classifies, or generates preference content.
             return await self._preferences(f, principal_id)
+        if action == "profile":
+            # Read-only factual identity context (name, linked channels, first
+            # contact, explicit stored settings). Interpretation is the AI's.
+            from wax.domain.profile import factual_context
+
+            pid = mem._as_uuid(principal_id)
+            if not pid:
+                return {"ok": False, "error": "no_principal"}
+            ctx = await factual_context(self.session, pid)
+            return {"ok": True, "profile": ctx}
         return {"ok": False, "error": f"unknown_state_action:{action}"}
 
     async def _preferences(self, f: dict[str, Any], principal_id) -> dict[str, Any]:
