@@ -576,7 +576,7 @@ class SurfaceService:
         self.session.add(ev)
         now = utcnow()
         surface.last_activity_at = now
-        if event_type in ("interaction", "learner_interaction", "state_changed", "save_requested"):
+        if event_type in ("interaction", "state_changed", "save_requested"):
             surface.last_user_interaction_at = now
         await self.session.flush()
 

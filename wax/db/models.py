@@ -2,7 +2,6 @@
 WAX durable reality (not educational theory tables).
 
 Identity & channels: Principal, InterfaceIdentity
-  (ChannelLinkChallenge table may still exist from baseline; feature code removed)
 Conversation: Conversation, Message, InboundEvent
 World: World
 Durable state: Memory (AI-owned; goals live here as memory_type, not a Goal engine)
@@ -413,37 +412,6 @@ class Interaction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     consumed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     consumed_choice_id: Mapped[Optional[str]] = mapped_column(String(256), nullable=True)
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
-
-
-
-
-
-
-class ChannelLinkChallenge(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Challenge to authorize linking another channel identity to a principal."""
-
-    __tablename__ = "channel_link_challenges"
-    __table_args__ = (
-        Index("ix_link_challenge_principal", "principal_id"),
-        Index("ix_link_challenge_status", "status", "expires_at"),
-    )
-
-    principal_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("principals.id", ondelete="CASCADE"), nullable=False
-    )
-    source_channel: Mapped[str] = mapped_column(String(40), nullable=False)
-    target_channel: Mapped[str] = mapped_column(String(40), nullable=False)
-    target_external_id: Mapped[str] = mapped_column(String(255), nullable=False)
-    method: Mapped[str] = mapped_column(String(40), default="otp")  # otp | knowledge
-    code_hash: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(String(40), default="pending")
-    # pending | verified | expired | failed
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    max_attempts: Mapped[int] = mapped_column(Integer, default=5)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
-    metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
-
 
 
 

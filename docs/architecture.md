@@ -61,8 +61,6 @@ works, executions, deliveries, memories, artifacts, scheduled_actions,
 interactions, surfaces.
 
 Educational/intelligence explosion tables are retired.
-Unfinished cross-channel OTP linking code was removed; the optional
-channel_link_challenges table may still exist from the baseline migration.
 
 
 ## Intelligence vs infrastructure safety

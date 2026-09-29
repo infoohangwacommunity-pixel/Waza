@@ -17,6 +17,10 @@ def test_no_goal_episode_link_tool_classes():
         "class Assessment",
         "class Quiz",
         "class Lesson",
+        "class ChannelLinkChallenge",
+        "class Mastery",
+        "class Misconception",
+        "class KnowledgeGraph",
     ):
         assert banned not in src
 
@@ -55,3 +59,13 @@ def test_memory_has_no_evidence_column():
     start = src.find("class Memory(")
     end = src.find("class Artifact(", start)
     assert "evidence" not in src[start:end]
+
+
+def test_no_checkin_settings():
+    src = (ROOT / "wax/config/settings.py").read_text()
+    assert "checkin_" not in src
+
+
+def test_no_publication_token_alias():
+    src = (ROOT / "wax/surfaces/tokens.py").read_text()
+    assert "WAX_PUBLICATION_TOKEN_SECRET" not in src

@@ -109,10 +109,6 @@ class Settings(BaseSettings):
     provider_rate_limit_max_retries: int = 48
     delivery_chunk_delay_seconds: float = 0.55
 
-    # --- Conversational check-in guardrails (AI decides moment; infra gates) ---
-    checkin_min_messages: int = 25
-    checkin_max_per_week: int = 2
-    checkin_suppress_after_feedback_seconds: int = 300
 
 
     @field_validator("database_url", mode="before")

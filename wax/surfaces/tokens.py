@@ -14,7 +14,6 @@ DEFAULT_TOKEN_BYTES = 32
 def _secret() -> bytes:
     raw = (
         os.environ.get("WAX_SURFACE_TOKEN_SECRET")
-        or os.environ.get("WAX_PUBLICATION_TOKEN_SECRET")
         or os.environ.get("WAX_ENCRYPTION_KEY")
         or os.environ.get("SECRET_KEY")
         or "dev-insecure"

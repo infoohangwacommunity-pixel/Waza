@@ -19,7 +19,8 @@ Goals are Memory rows (`memory_type`), not a separate goals table.
 These must not exist (retired architecture):
 
 goals, memory_episodes, memory_links, tool_executions, activities,
-assessments*, publications, learning_events, concepts, evidence, hypotheses
+assessments*, publications, learning_events, concepts, evidence, hypotheses,
+channel_link_challenges, check-in / mastery / quiz product tables
 
 Enforced by `scripts/verify_schema.py`.
 

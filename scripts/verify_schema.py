@@ -30,7 +30,6 @@ REQUIRED_TABLES = (
     "artifacts",
     "scheduled_actions",
     "interactions",
-    "channel_link_challenges",
     "surfaces",
     "surface_revisions",
     "surface_sessions",
@@ -56,6 +55,11 @@ FORBIDDEN_TABLES = (
     "concepts",
     "evidence",
     "hypotheses",
+    "channel_link_challenges",
+    "mastery",
+    "misconceptions",
+    "quizzes",
+    "curriculum",
 )
 
 
