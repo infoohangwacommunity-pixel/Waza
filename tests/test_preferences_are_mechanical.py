@@ -40,11 +40,17 @@ def test_ai_facing_preferences_surface_is_retired():
     assert "preference_op" not in tutor
     # The state directive answers with a clear retirement notice instead.
     assert "preferences_retired" in tutor
-    profile = pathlib.Path("wax/domain/profile.py").read_text()
-    # Only inside a comment explaining the retirement, never as data flow.
-    for line in profile.splitlines():
-        if "preferences" in line:
-            assert line.strip().startswith("#"), f"profile.py uses preferences: {line}"
+    # profile.py must not touch the preferences column at all — prose in the
+    # module docstring is allowed; executable code and comments are not.
+    import io, tokenize
+    profile_src = pathlib.Path("wax/domain/profile.py").read_text()
+    offenders = []
+    for tok in tokenize.generate_tokens(io.StringIO(profile_src).readline):
+        if tok.type == tokenize.COMMENT and "preference" in tok.string.lower():
+            offenders.append(tok.string)
+        elif tok.type == tokenize.NAME and tok.string == "preferences":
+            offenders.append(f"NAME token at line {tok.start[0]}")
+    assert offenders == [], f"profile.py references preferences outside docstrings: {offenders}"
 
 
 def test_get_preferences_returns_only_stored_values():
