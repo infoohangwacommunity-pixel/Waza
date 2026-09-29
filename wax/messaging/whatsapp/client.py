@@ -69,6 +69,13 @@ async def send_text(to: str, text: str) -> dict[str, Any]:
     delay = float(getattr(settings, "delivery_chunk_delay_seconds", 0.55) or 0.55)
     async with httpx.AsyncClient(timeout=30.0) as client:
         for i, chunk in enumerate(chunks):
+            logger.info(
+                "whatsapp_send",
+                to=to,
+                chunk_index=i,
+                chunk_chars=len(chunk),
+                phone_number_id=settings.whatsapp_phone_number_id,
+            )
             body = {
                 "messaging_product": "whatsapp",
                 "to": to,
@@ -76,7 +83,14 @@ async def send_text(to: str, text: str) -> dict[str, Any]:
                 "text": {"body": chunk},
             }
             resp = await client.post(f"{_base_url()}/messages", headers=_headers(), json=body)
-            results.append({"status_code": resp.status_code, "body": resp.text[:300]})
+            resp_body_preview = (resp.text or "")[:300]
+            logger.info(
+                "whatsapp_http_response",
+                status_code=resp.status_code,
+                response_body_preview=resp_body_preview,
+                chunk_index=i,
+            )
+            results.append({"status_code": resp.status_code, "body": resp_body_preview})
             if resp.status_code >= 400:
                 logger.error("whatsapp_text_failed", status=resp.status_code)
                 return {"status": "failed", "results": results}
@@ -122,8 +136,21 @@ async def send_reply_buttons(
         "type": "interactive",
         "interactive": interactive,
     }
+    logger.info(
+        "whatsapp_send",
+        to=to,
+        button_count=len(btns),
+        phone_number_id=settings.whatsapp_phone_number_id,
+    )
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{_base_url()}/messages", headers=_headers(), json=body)
+    resp_body_preview = (resp.text or "")[:300]
+    logger.info(
+        "whatsapp_http_response",
+        status_code=resp.status_code,
+        response_body_preview=resp_body_preview,
+        button_count=len(btns),
+    )
     if resp.status_code >= 400:
         logger.error("whatsapp_buttons_failed", status=resp.status_code, body=resp.text[:300])
         # Fallback to plain text
@@ -160,8 +187,21 @@ async def send_list(
         "type": "interactive",
         "interactive": interactive,
     }
+    logger.info(
+        "whatsapp_send",
+        to=to,
+        section_count=len(sections),
+        phone_number_id=settings.whatsapp_phone_number_id,
+    )
     async with httpx.AsyncClient(timeout=30.0) as client:
         resp = await client.post(f"{_base_url()}/messages", headers=_headers(), json=body)
+    resp_body_preview = (resp.text or "")[:300]
+    logger.info(
+        "whatsapp_http_response",
+        status_code=resp.status_code,
+        response_body_preview=resp_body_preview,
+        section_count=len(sections),
+    )
     if resp.status_code >= 400:
         logger.error("whatsapp_list_failed", status=resp.status_code, body=resp.text[:300])
         return await send_text(to, body_text)
@@ -182,6 +222,14 @@ async def deliver_presentable(to: str, presentable: PresentableResponse) -> dict
     if presentable.interactive_type == "reply_buttons" and presentable.buttons:
         # First bubble can be interactive with a concise body
         body = presentable.text
+        logger.info(
+            "whatsapp_send",
+            to=to,
+            interactive_type="reply_buttons",
+            body_chars=len(body),
+            button_count=len(presentable.buttons),
+            phone_number_id=settings.whatsapp_phone_number_id,
+        )
         # Prefer shorter body for button messages
         if len(body) > 900:
             chunks = chunk_message(body, max_chars=get_profile("whatsapp").max_text_chars)
@@ -200,6 +248,14 @@ async def deliver_presentable(to: str, presentable: PresentableResponse) -> dict
 
     if presentable.interactive_type == "list" and presentable.list_sections:
         body = presentable.text
+        logger.info(
+            "whatsapp_send",
+            to=to,
+            interactive_type="list",
+            body_chars=len(body),
+            section_count=len(presentable.list_sections),
+            phone_number_id=settings.whatsapp_phone_number_id,
+        )
         if len(body) > 900:
             for c in chunk_message(body, max_chars=get_profile("whatsapp").max_text_chars):
                 outcomes.append(await send_text(to, c))

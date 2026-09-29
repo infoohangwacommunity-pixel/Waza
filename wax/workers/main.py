@@ -197,11 +197,68 @@ async def process_message_response(session, work: Work) -> None:
             logger.exception("world_transcript_archive_turn_failed", work_id=str(work.id))
         work.status = "completed"
         work.completed_at = datetime.now(timezone.utc)
+        reply = (result.get("reply") or "").strip()
+        interactive = result.get("interactive")
         work.result_payload = {
-            "reply_preview": (result.get("reply") or "")[:400],
-            "interactive": result.get("interactive"),
+            "reply_preview": reply[:400],
+            "interactive": interactive,
         }
         await session.flush()
+
+        # Durable outbound delivery: one pending Delivery row per successful tutor turn.
+        # This is the single outbound delivery path for normal tutor responses.
+        # _attempt_deliveries() below processes pending Delivery rows — it does not
+        # call WhatsApp directly. The competing direct path in TutorService._deliver()
+        # is removed so that only this durable path reaches Meta.
+        try:
+            from wax.delivery.presentation import present_for_channel
+
+            pl = work.input_payload or {}
+            channel = pl.get("channel") or "whatsapp"
+            target = pl.get("target_external_id")
+            inbound_mid = pl.get("provider_message_id") or pl.get("message_id")
+            if target and work.principal_id and reply:
+                rendered = present_for_channel(reply, channel)
+                idem = f"tutor-reply:{work.id}"
+                existing = await session.scalar(
+                    select(Delivery.id).where(Delivery.idempotency_key == idem)
+                )
+                if not existing:
+                    delivery = Delivery(
+                        id=uuid4(),
+                        work_id=work.id,
+                        principal_id=work.principal_id,
+                        channel=channel,
+                        target_external_id=str(target),
+                        content=rendered,
+                        status="pending",
+                        idempotency_key=idem,
+                        metadata_={
+                            "inbound_external_id": str(inbound_mid) if inbound_mid else None,
+                            "source_message_id": str(inbound_mid) if inbound_mid else None,
+                            "canonical_preview": reply[:500],
+                        },
+                    )
+                    session.add(delivery)
+                    await session.flush()
+                    logger.info(
+                        "delivery_queued",
+                        delivery_id=str(delivery.id),
+                        work_id=str(work.id),
+                        channel=channel,
+                        target_external_id=str(target),
+                        content_chars=len(rendered),
+                        inbound_message_id=str(inbound_mid) if inbound_mid else None,
+                    )
+                else:
+                    logger.info(
+                        "delivery_queued_skipped_duplicate",
+                        work_id=str(work.id),
+                        idempotency_key=idem,
+                    )
+        except Exception:
+            logger.exception("delivery_queued_failed", work_id=str(work.id))
+
         logger.info("work_completed", work_id=str(work.id))
         tel = get_turn()
         if tel:
@@ -527,6 +584,14 @@ async def _attempt_deliveries(session, work_id) -> None:
             meta = delivery.metadata_ or {}
             if isinstance(meta, dict):
                 inbound_mid = meta.get("inbound_external_id") or meta.get("source_message_id")
+            logger.info(
+                "delivery_attempt",
+                delivery_id=str(delivery.id),
+                channel=delivery.channel,
+                target_external_id=delivery.target_external_id,
+                attempt=delivery.attempt + 1,
+                inbound_message_id=str(inbound_mid) if inbound_mid else None,
+            )
             outcome = await channel_deliver(
                 delivery.channel,
                 delivery.target_external_id,
@@ -538,6 +603,7 @@ async def _attempt_deliveries(session, work_id) -> None:
             if outcome.get("status") in ("ok", "skipped"):
                 delivery.status = "delivered"
                 delivery.delivered_at = datetime.now(timezone.utc)
+                delivery.error = None
                 # Prefer real provider message id when present
                 real_id = outcome.get("external_message_id") or outcome.get("message_id")
                 if not real_id:
@@ -558,7 +624,7 @@ async def _attempt_deliveries(session, work_id) -> None:
                 )
             else:
                 delivery.status = "failed"
-                delivery.error = str(outcome)
+                delivery.error = str(outcome)[:500]
                 delivery.attempt += 1
                 logger.warning(
                     "delivery_failed",
@@ -567,7 +633,11 @@ async def _attempt_deliveries(session, work_id) -> None:
                     error=str(outcome)[:200],
                 )
 
-            # Artifact file delivery (Telegram document) when tools created one
+            # Artifact file delivery (Telegram document) when tools created one.
+            # Populated from work.result_payload["actions"] when the agent emits artifact tools.
+            tools = []
+            if wrow and (wrow.result_payload or {}).get("actions"):
+                tools = list((wrow.result_payload or {}).get("actions") or [])
             for tool in tools:
                 if not isinstance(tool, dict):
                     continue

@@ -60,5 +60,6 @@ async def session():
     async with engine.begin() as conn:
         await conn.run_sync(models.Base.metadata.create_all)
     async with Session() as s:
+        s.info["engine"] = engine
         yield s
     await engine.dispose()

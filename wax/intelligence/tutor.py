@@ -762,28 +762,14 @@ class TutorService:
             logger.info("outbound_message_already_recorded", work_id=str(work.id))
 
     async def _deliver(self, work: Work, reply: str, *, interactive=None) -> None:
-        try:
-            from wax.delivery.senders import deliver
-            from wax.domain.identity import primary_channel_target
+        """Record the assistant's reply into durable transcript.
 
-            if not work.principal_id:
-                return
-            target = await primary_channel_target(self.session, work.principal_id)
-            if not target:
-                return
-            ch, external_id = target
-            await deliver(
-                channel=ch,
-                target=external_id,
-                text=reply,
-                interactive=interactive,
-            )
+        Outbound delivery to the messaging channel is handled by the durable
+        Delivery record path in the worker (process_message_response), not by
+        this direct call. This keeps exactly one outbound delivery path and
+        preserves retries/idempotency through the Delivery table.
+        """
+        try:
+            await self._record_outbound_message(work, reply)
         except Exception:
-            logger.exception("tutor_deliver_failed")
-        finally:
-            # The DB must hold the assistant response regardless of whether
-            # external delivery succeeded or failed.
-            try:
-                await self._record_outbound_message(work, reply)
-            except Exception:
-                logger.exception("outbound_message_record_failed")
+            logger.exception("outbound_message_record_failed")
