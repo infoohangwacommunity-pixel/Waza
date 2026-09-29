@@ -44,6 +44,10 @@ SUBDIRS = (
     "state/installs",
     "state/exec",
     "history",
+    # AI-owned notebook: durable files the AI creates/edits through its own
+    # World capabilities. Infrastructure only guarantees persistence, isolation
+    # and safe access — there is no fixed schema for what the AI notes down.
+    "notebook",
 )
 
 

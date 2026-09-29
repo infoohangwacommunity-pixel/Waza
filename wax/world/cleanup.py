@@ -29,6 +29,7 @@ _DURABLE_TOP = frozenset(
         "runtimes",
         "history",
         "bin",
+        "notebook",  # AI-owned durable notes; never age-deleted
         "state",  # locks/lifecycle; not bulk-deleted by age
     }
 )

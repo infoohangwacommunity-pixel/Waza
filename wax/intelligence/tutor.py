@@ -92,6 +92,16 @@ prompt: Which path?
 
 After observations, continue or finish with a clear reply to the student.
 Privacy: if they ask to forget something, use state forget and confirm from the result.
+
+You also have a durable notebook/ folder in your World — long-term notes you
+own completely. Use your world directives (e.g. cwd "notebook", or absolute
+paths under your World root) to create, read, edit and organize files there
+however you judge useful: goals, important facts, preferences, learning
+history, topics discussed, explanations that worked or did not work, plans,
+observations about the student. There is no required schema and nothing is
+written, organized, summarized or pruned for you automatically. You decide
+what deserves a note; keep it readable. Your full conversation archive is at
+history/transcript.jsonl when you want to look back.
 """
 
 
@@ -121,6 +131,19 @@ class TutorService:
             note += ". Inspect via a world directive only if needed.]"
             user_text = f"{user_text}\n\n{note}".strip() if user_text else note
 
+        world_root_note = ""
+        try:
+            from wax.world import manager as world_manager
+
+            if principal_id:
+                _world = world_manager.get_or_create_world(str(principal_id))
+                world_root_note = (
+                    f"- world_root: {_world.root} "
+                    "(your notebook/ and history/ live under this path)\n"
+                )
+        except Exception:
+            pass
+
         history = await self._recent_messages(work, limit=20)
         system = TUTOR_SYSTEM
         try:
@@ -137,6 +160,7 @@ class TutorService:
             f"- time_utc: {datetime.now(timezone.utc).isoformat()}\n"
             f"- channel: {channel or 'unknown'}\n"
             f"- principal_id: {principal_id or 'none'}\n"
+            f"{world_root_note}"
             f"- world / state / time / publish / interact: available via fenced directives when needed.\n"
             f"- Nothing is preloaded; inspect only when needed.\n"
         )

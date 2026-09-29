@@ -7,6 +7,7 @@ If someone re-adds truncation heuristics to tutor.py, this fails loudly.
 """
 
 from pathlib import Path
+import ast
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,11 +24,18 @@ def test_observation_caps_are_fixed_constants():
 
 def test_no_semantic_truncation_heuristics_in_tutor():
     src = _tutor_src()
-    # Strip comments/docstrings: guard behaviour, not prose.
+    # Guard executable behaviour only: strip comments and every string literal
+    # (docstrings, the system prompt, log messages). Prose describing what
+    # infrastructure does NOT do is not a heuristic.
+    tree = ast.parse(src)
+    string_lines: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            string_lines.update(range(node.lineno, node.end_lineno + 1))
     code_lines = []
-    for line in src.splitlines():
+    for i, line in enumerate(src.splitlines(), start=1):
         stripped = line.strip()
-        if stripped.startswith("#"):
+        if stripped.startswith("#") or i in string_lines:
             continue
         code_lines.append(line)
     code = "\n".join(code_lines)
