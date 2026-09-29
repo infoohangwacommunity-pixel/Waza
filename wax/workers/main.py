@@ -137,15 +137,11 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("rate_decision_failed")
 
-    # Media: infrastructure only places the file into the student's World.
-    # The AI decides whether/how to process it. No auto-STT. No media intelligence.
+    # Media: download + place in World only. AI decides whether to inspect.
     payload = work.input_payload or {}
     if payload.get("media_id") and not payload.get("local_media_path") and work.principal_id:
         try:
-            from pathlib import Path as _Path
             from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
-            from wax.world.manager import get_or_create_world
-            from wax.world import files as world_files
 
             channel = payload.get("channel")
             if channel == "whatsapp":
@@ -155,16 +151,7 @@ async def process_message_response(session, work: Work) -> None:
             else:
                 fetched = {}
             if fetched.get("ok") and fetched.get("path"):
-                world = get_or_create_world(str(work.principal_id))
-                src = _Path(str(fetched["path"]))
-                rel = f"workspace/media/{src.name}"
-                data = src.read_bytes()
-                written = world_files.write_file(world, rel, data)
-                local = None
-                if written.get("ok"):
-                    local = str(world.root / rel)
-                else:
-                    local = str(src)
+                local = str(fetched["path"])
                 payload = {
                     **payload,
                     "local_media_path": local,
@@ -178,6 +165,8 @@ async def process_message_response(session, work: Work) -> None:
                     "media_placed_in_world",
                     work_id=str(work.id),
                     path=local,
+                    mime=fetched.get("mime"),
+                    size=fetched.get("size"),
                 )
         except Exception:
             logger.exception("media_world_stage_failed")
@@ -460,48 +449,6 @@ async def _mark_work_terminal(
         except Exception:
             pass
 
-
-async def process_media_prepare(session, work: Work) -> None:
-    """Download inbound media into World only — no STT/OCR/classification."""
-    from wax.messaging.media import fetch_whatsapp_media, fetch_telegram_media
-
-    payload = work.input_payload or {}
-    channel = payload.get("channel")
-    media_id = payload.get("media_id")
-    principal_id = work.principal_id
-    try:
-        if channel == "whatsapp" and media_id and principal_id:
-            result = await fetch_whatsapp_media(media_id, principal_id)
-        elif channel == "telegram" and media_id and principal_id:
-            result = await fetch_telegram_media(media_id, principal_id)
-        else:
-            result = {"ok": False, "error": "no_media"}
-        if result.get("ok") and result.get("path") and principal_id:
-            from wax.world.stage import stage_media_for_work
-            from pathlib import Path as _P
-
-            staged = stage_media_for_work(
-                principal_id,
-                result["path"],
-                work_id=work.id,
-                filename=_P(str(result["path"])).name,
-            )
-            if staged.get("ok"):
-                result = {
-                    **result,
-                    "path": staged.get("work_path") or staged.get("path"),
-                    "principal_media_path": staged.get("path"),
-                    "staged": True,
-                }
-        work.status = "completed"
-        work.completed_at = datetime.now(timezone.utc)
-        work.result_payload = result
-        await session.flush()
-    except Exception as e:
-        logger.exception("media_prepare_failed", work_id=str(work.id))
-        await _mark_work_terminal(
-            session, work, status="failed", error=str(e), error_class="media_failure"
-        )
 
 
 async def process_scheduled_action(session, work: Work) -> None:
@@ -858,8 +805,6 @@ async def worker_loop(worker_id: str) -> None:
                     await process_message_response(session, work)
                 elif work.kind == "surface_ai":
                     await process_surface_ai(session, work)
-                elif work.kind == "media_prepare":
-                    await process_media_prepare(session, work)
                 elif work.kind == "scheduled_action":
                     await process_scheduled_action(session, work)
                 else:

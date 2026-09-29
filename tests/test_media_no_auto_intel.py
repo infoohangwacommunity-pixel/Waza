@@ -1,4 +1,4 @@
-Media path is download+stage only — no auto interpretation.
+"""Media path is download+stage only — no auto interpretation."""
 
 from pathlib import Path
 
@@ -9,6 +9,7 @@ def test_media_module_no_stt_ocr():
     assert "transcri" not in src
     assert "ocr" not in src
     assert "classif" not in src
+    assert "summar" not in src
 
 
 def test_stage_is_placement_only():
@@ -18,5 +19,13 @@ def test_stage_is_placement_only():
 
 def test_worker_message_path_no_auto_stt():
     src = Path("wax/workers/main.py").read_text()
-    assert "No auto-STT" in src or "media_placed_in_world" in src
+    assert "media_placed_in_world" in src
     assert "whisper" not in src.lower()
+    assert "process_media_prepare" not in src
+    assert "media_prepare" not in src
+
+
+def test_tutor_media_is_fact_only():
+    src = Path("wax/intelligence/tutor.py").read_text()
+    assert "Inbound file" in src
+    assert "transcri" not in src.lower() or "no auto transcription" in src.lower()

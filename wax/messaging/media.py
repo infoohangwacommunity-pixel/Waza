@@ -1,9 +1,8 @@
 """
-Inbound channel media download — infrastructure only.
+Inbound media transport — download and place into the student's World.
 
-Download WhatsApp/Telegram media into the student's World workspace.
-Does not transcribe, OCR, classify, or interpret content.
-The AI decides any processing inside the World.
+Does not transcribe, OCR, classify, summarize, or interpret content.
+Returns path + size + mime only. The AI decides whether to inspect the file.
 """
 
 from __future__ import annotations

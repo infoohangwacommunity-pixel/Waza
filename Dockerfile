@@ -1,5 +1,5 @@
 # Authoritative production image (Railway builder = DOCKERFILE).
-# Media/sandbox tools match World isolation allowlist.
+# Host packages available inside World isolation for AI-driven use (not auto-media intelligence).
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
