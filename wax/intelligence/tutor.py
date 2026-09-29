@@ -13,10 +13,12 @@ The model owns teaching decisions; this module only runs the loop.
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.agent.runtime import AgentRuntime
@@ -300,14 +302,21 @@ class TutorService:
             return await mem.memory_forget(self.session, principal_id, mid)
         return {"ok": False, "error": f"unknown_state_action:{action}"}
 
-    @staticmethod
-    def _fmt(result: dict[str, Any]) -> str:
+    # Infrastructure safety cap only — a transport limit on how much observation
+    # text may re-enter the model context. It is NOT summarization or selective
+    # extraction; complete results are preserved wherever practical.
+    OBSERVATION_FIELD_CAP = 8000
+    OBSERVATION_TOTAL_CAP = 32000
+
+    @classmethod
+    def _fmt(cls, result: dict[str, Any]) -> str:
         if not result:
             return "empty"
         if result.get("ok") is False:
-            return f"error: {result.get('error')}"
-        keys = [k for k in result if k != "ok"][:8]
-        return "; ".join(f"{k}={result[k]!r}"[:120] for k in keys)[:800]
+            return f"error: {result.get('error')}"[: cls.OBSERVATION_TOTAL_CAP]
+        parts = [f"{k}={result[k]!r}" for k in result if k != "ok"]
+        text = "\n".join(p[: cls.OBSERVATION_FIELD_CAP] for p in parts)
+        return text[: cls.OBSERVATION_TOTAL_CAP]
 
     async def _recent_messages(self, work: Work, limit: int = 20) -> list[dict[str, str]]:
         if not work.conversation_id:
@@ -333,6 +342,46 @@ class TutorService:
                 out.append({"role": role, "content": content})
         return out
 
+    async def _record_outbound_message(self, work: Work, reply: str) -> None:
+        """Persist the assistant's reply into durable chat history.
+
+        Infrastructure records exactly what was said; the AI owns meaning.
+        Idempotent per Work (unique (channel, external_id='assistant:{work_id}')),
+        so retries of the same turn never duplicate transcript rows.
+        """
+        if not work.conversation_id or not work.principal_id or not work.id:
+            return
+        ext = f"assistant:{work.id}"
+        channel = (work.input_payload or {}).get("channel") or "whatsapp"
+        exists = await self.session.execute(
+            select(Message.id).where(
+                Message.channel == channel, Message.external_id == ext
+            )
+        )
+        if exists.scalar_one_or_none():
+            return
+        try:
+            async with self.session.begin_nested():
+                self.session.add(
+                    Message(
+                        id=uuid.uuid4(),
+                        conversation_id=work.conversation_id,
+                        principal_id=work.principal_id,
+                        channel=channel,
+                        direction="outbound",
+                        role="assistant",
+                        content=reply,
+                        external_id=ext,
+                        work_id=work.id,
+                        metadata_={"source": "tutor_reply"},
+                    )
+                )
+                await self.session.flush()
+        except IntegrityError:
+            # Another attempt already recorded this turn — the savepoint
+            # rollback discarded only this insert; never duplicate transcript rows.
+            logger.info("outbound_message_already_recorded", work_id=str(work.id))
+
     async def _deliver(self, work: Work, reply: str, *, interactive=None) -> None:
         try:
             from wax.delivery.senders import deliver
@@ -345,13 +394,17 @@ class TutorService:
                 return
             ch, external_id = target
             await deliver(
-                self.session,
                 channel=ch,
-                external_id=external_id,
-                content=reply,
-                principal_id=work.principal_id,
-                work_id=work.id,
+                target=external_id,
+                text=reply,
                 interactive=interactive,
             )
         except Exception:
             logger.exception("tutor_deliver_failed")
+        finally:
+            # The DB must hold the assistant response regardless of whether
+            # external delivery succeeded or failed.
+            try:
+                await self._record_outbound_message(work, reply)
+            except Exception:
+                logger.exception("outbound_message_record_failed")
