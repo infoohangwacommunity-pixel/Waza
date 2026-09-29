@@ -93,7 +93,7 @@ async def schedule_action(
     """
     Schedule a future wake. Supports:
       delay_seconds, delay_minutes, delay_hours, execute_at (ISO)
-      optional series: interval_hours + count (finite recurrence)
+      optional series: interval_hours + count (finite; capped for DB safety)
     """
     principal_id = ctx.get("principal_id")
     if not principal_id:
@@ -101,7 +101,7 @@ async def schedule_action(
 
     reason = str(args.get("reason") or args.get("message_hint") or args.get("objective") or "scheduled")[:500]
     message_hint = str(args.get("message_hint") or args.get("objective") or reason)[:2000]
-    action_type = str(args.get("action_type") or "followup")[:80]
+    action_type = str(args.get("action_type") or "wake")[:80]
 
     now = datetime.now(timezone.utc)
     execute_at, err = _resolve_execute_at(args, now)

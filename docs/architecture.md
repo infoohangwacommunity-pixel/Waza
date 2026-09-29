@@ -94,6 +94,12 @@ The AI decides the objective. Infrastructure validates security and executes.
 No specialized teaching actions. No application capability menu sent to the model.
 
 
+## Scheduler
+
+Generic time infrastructure: AI sets delay or absolute time → store → wake Work.
+Finite series capped at 30 occurrences per request (database/DoS protection only).
+No check-in, reminder, or lesson product rules.
+
 ## World execution path
 
 One path only:

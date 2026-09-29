@@ -55,3 +55,13 @@ def test_no_reminder_hardcode_in_scheduler():
         src = open(path, encoding="utf-8").read().lower()
         assert "if reason == \"reminder\"" not in src
         assert "keyword" not in src or "not a" in open(path, encoding="utf-8").read().lower()
+
+
+def test_series_ceiling_is_infrastructure_protection():
+    """Series max is DoS/DB protection, not an AI reasoning budget."""
+    from wax.scheduler.service import MAX_SERIES_OCCURRENCES
+
+    assert MAX_SERIES_OCCURRENCES == 30
+    src = open("wax/scheduler/service.py", encoding="utf-8").read()
+    assert "DoS" in src or "database" in src.lower() or "DB protection" in src
+    assert "not a teaching" in src.lower() or "not an AI" in src or "reasoning limit" in src

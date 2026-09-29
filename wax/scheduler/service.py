@@ -1,8 +1,8 @@
 """
-Durable scheduler — general mechanism, not educational hardcoding.
+Durable scheduler — store time, wake Work. Nothing more.
 
-The tutor decides *whether* and *why* to schedule.
-This service only persists and later wakes the system.
+AI decides whether/when/why. This module persists and later creates Work.
+No reminder, check-in, or lesson semantics.
 """
 
 from __future__ import annotations
@@ -18,6 +18,9 @@ from wax.db.models import ScheduledAction, Work
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Finite series cap — database / DoS protection only (not an AI reasoning limit).
+MAX_SERIES_OCCURRENCES = 30
 
 
 class SchedulerService:
@@ -184,8 +187,12 @@ class SchedulerService:
         reason: str | None = None,
         payload: dict[str, Any] | None = None,
     ) -> list[ScheduledAction]:
-        """Simple finite recurrence — not a cron engine. Max 30 occurrences."""
-        count = max(1, min(int(count), 30))
+        """Finite recurrence helper — not a cron product.
+
+        MAX_SERIES_OCCURRENCES caps rows written per request (DoS / DB protection).
+        It is not a teaching or reasoning limit on the AI.
+        """
+        count = max(1, min(int(count), MAX_SERIES_OCCURRENCES))
         interval_hours = max(0.1, float(interval_hours))
         if first_at.tzinfo is None:
             first_at = first_at.replace(tzinfo=timezone.utc)
