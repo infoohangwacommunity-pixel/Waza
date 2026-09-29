@@ -1,4 +1,4 @@
-Static checks: models FK ownership and single baseline.
+"""Static checks: models FK ownership and single baseline."""
 
 from pathlib import Path
 import re

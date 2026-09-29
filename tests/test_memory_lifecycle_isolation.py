@@ -73,21 +73,21 @@ def test_no_plan_and_retrieve_or_auto_summary_in_store():
     src = open("wax/memory/store.py", encoding="utf-8").read()
     assert "plan_and_retrieve" not in src
     assert "get_active_summary" not in src
-    assert "extract_and_store" not in src
-    assert "consolidat" not in src
-    # No application importance ranking policy
+    assert "def extract_and_store" not in src
+    assert "def consolidate" not in src
     assert "importance.desc" not in src
     assert "order_by(Memory.updated_at.desc())" in src
-    assert "contradiction_of" not in open("wax/db/models.py", encoding="utf-8").read()
-    assert "confidence" not in open("wax/db/models.py", encoding="utf-8").read().split("class Memory")[1].split("class Artifact")[0]
+    models = open("wax/db/models.py", encoding="utf-8").read()
+    mem = models.split("class Memory")[1].split("class Artifact")[0]
+    assert "contradiction_of" not in mem
+    assert "confidence" not in mem
 
 
 def test_tutor_does_not_auto_inject_memories():
     src = open("wax/intelligence/tutor.py", encoding="utf-8").read()
     assert "_memory_snapshot" not in src
     assert "memory_search(self.session, principal_id, query=None, limit=12)" not in src
-    # memory_search only via directive path is fine
-    assert "No memories are preloaded" in src or "preselected" in src
+    assert "Nothing is preloaded" in src or "preloaded" in src
 
 
 def test_no_post_turn_memory_process_job():

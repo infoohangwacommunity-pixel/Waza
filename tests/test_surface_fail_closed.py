@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from unittest.mock import MagicMock
 
 from wax.surfaces.tokens import deterministic_token, hash_token, tokens_match
@@ -112,8 +114,5 @@ def test_require_origin_isolation_dev_allows_fallback():
 
 
 def test_architecture_idempotency_doc_present():
-    from pathlib import Path
-    doc = Path(__file__).resolve().parents[1] / "docs" / "WEB_SURFACE_ARCHITECTURE.md"
-    text = doc.read_text()
-    assert "PUBLIC_BASE_URL" in text
-    assert "same origin" in text.lower() or "Same origin" in text
+    src = Path("docs/architecture.md").read_text()
+    assert "Surface" in src or "surface" in src

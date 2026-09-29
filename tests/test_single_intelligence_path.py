@@ -1,4 +1,4 @@
-Single intelligence path — no memory-model brain or ToolSpec.
+"""Single intelligence path — no memory-model brain or ToolSpec."""
 
 from pathlib import Path
 
