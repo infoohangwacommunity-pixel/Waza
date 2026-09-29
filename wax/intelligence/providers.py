@@ -1,9 +1,8 @@
 """
-Single intelligence path: chat completion for the AI agent.
+Single intelligence path: messages in → text out.
 
-Primary provider (+ optional fallback for resilience only).
-Text-only: no function-calling, no ToolSpec, no second "memory model" brain.
-Embeddings / multimodal are not separate intelligence layers here.
+Primary chat provider, optional fallback for the same task (resilience only).
+No tools, embeddings, multimodal, or secondary model roles.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, AsyncIterator
+from typing import Any
 
 import httpx
 from tenacity import (
@@ -105,11 +104,10 @@ class ProviderError(Exception):
 
 @dataclass
 class ChatMessage:
-    """Text-only chat turn. No tool/function-calling roles."""
+    """Text-only chat turn (system | user | assistant)."""
 
-    role: str  # system | user | assistant
+    role: str
     content: str
-    name: str | None = None
 
 
 @dataclass
@@ -147,13 +145,7 @@ def _serialize_openai_messages(messages: list[ChatMessage]) -> list[dict[str, An
     out: list[dict[str, Any]] = []
     for m in messages:
         role = m.role if m.role in ("system", "user", "assistant") else "user"
-        msg: dict[str, Any] = {
-            "role": role,
-            "content": m.content if m.content is not None else "",
-        }
-        if m.name and role == "user":
-            msg["name"] = m.name
-        out.append(msg)
+        out.append({"role": role, "content": m.content if m.content is not None else ""})
     return out
 
 
