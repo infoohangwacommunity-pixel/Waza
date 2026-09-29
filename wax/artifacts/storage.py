@@ -31,7 +31,15 @@ class StorageBackend(Protocol):
 
 class LocalStorage:
     def __init__(self, root: str | None = None):
-        self.root = Path(root or os.environ.get("WAX_ARTIFACT_ROOT") or "/tmp/wax-artifacts")
+        from wax.config import get_settings
+
+        s = get_settings()
+        shared = (
+            os.environ.get("WAX_SHARED_STORE_PATH")
+            or (getattr(s, "shared_store_root", None) or "").strip()
+        )
+        use_root = root or shared or os.environ.get("WAX_ARTIFACT_ROOT") or "/tmp/wax-artifacts"
+        self.root = Path(use_root)
         self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:

@@ -52,9 +52,18 @@ SUBDIRS = (
 
 
 def workspace_root() -> Path:
-    """Durable host root for all student Worlds (Railway volume in production)."""
+    """Durable host root for all student Worlds (Railway volume in production).
+
+    Web and Worker may mount separate Railway Volumes, but they must present the
+    same logical student World. The shared external store path can be set either
+    via WAX_SHARED_STORE_PATH (new) or the existing WAX_WORKSPACE_ROOT /
+    WORKSPACE_ROOT settings (legacy). When shared_store_root is configured, it
+    is authoritative regardless of per-service local mount names.
+    """
     root = Path(
-        getattr(settings, "workspace_root", None)
+        getattr(settings, "shared_store_root", None)
+        or os.environ.get("WAX_SHARED_STORE_PATH")
+        or getattr(settings, "workspace_root", None)
         or os.environ.get("WAX_WORKSPACE_ROOT")
         or DEFAULT_ROOT
     )

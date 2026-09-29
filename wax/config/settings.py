@@ -16,6 +16,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
+    # Railway volumes are mounted per service. Web and worker each get their own
+    # volume mount, but they must point at the same logical student World. The
+    # canonical World tree lives on a shared external store (same volume family,
+    # object storage, or NFS). Each service resolves its local mount via
+    # WAX_SHARED_STORE_PATH and falls back to the existing WORKSPACE_ROOT path.
+    shared_store_root: str = ""
+
     # --- App ---
     app_name: str = "WAX Prep"
     app_env: Literal["development", "staging", "production", "test"] = "development"
@@ -133,6 +140,21 @@ class Settings(BaseSettings):
         if explicit == "s3" or (self.app_env == "production" and bucket):
             return "s3" if bucket else "local"
         return explicit if explicit in ("local", "s3") else "local"
+
+    @property
+    def effective_workspace_root(self) -> str:
+        import os
+
+        shared = (
+            os.environ.get("WAX_SHARED_STORE_PATH")
+            or (self.shared_store_root or "").strip()
+        )
+        if shared:
+            return shared
+        legacy = os.environ.get("WAX_WORKSPACE_ROOT") or (self.workspace_root or "").strip()
+        if legacy:
+            return legacy
+        return ""
 
     @property
     def effective_isolation_require_sandbox(self) -> bool:
