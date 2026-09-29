@@ -1,8 +1,8 @@
 """
-Learner preferences as evolving state — never hardcoded product rules.
+Explicit student preference data on Principal.
 
-Quiet hours, language, pacing, encouragement style live here as data.
-The tutor and scheduler read preferences; they do not invent rigid rules.
+Stored as free-form JSON. Infrastructure does not schedule engagement from these
+values. The AI may read them when present; the student (or AI via state) may set them.
 """
 
 from __future__ import annotations
@@ -14,17 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from wax.db.models import Principal
 
 
+# Optional keys only — not product engagement policy.
 DEFAULT_PREFERENCES: dict[str, Any] = {
     "language": None,
-    "quiet_hours": None,  # {"start": "22:00", "end": "07:00"} or null
-    "encouragement": None,  # light | direct | minimal | null
-    "explanation_style": None,  # examples_first | theory_first | mixed | null
-    "message_length": None,  # short | medium | detailed | null
-    "timezone": None,  # IANA e.g. Africa/Lagos
-    "proactivity_level": None,  # quiet | balanced | active
-    "emoji": None,  # few | normal | none | null
-    "tone": None,  # casual | formal | mixed | null
-    "learning_style": None,  # talk_through | read | examples | mixed | null
+    "quiet_hours": None,  # {"start": "HH:MM", "end": "HH:MM"} or null
+    "timezone": None,
+    "message_length": None,
+    "tone": None,
+    "emoji": None,
 }
 
 
@@ -55,10 +52,7 @@ async def update_preferences(
 
 
 def is_in_quiet_hours(prefs: dict[str, Any], now_hhmm: str) -> bool:
-    """
-    Pure function over preference data.
-    Returns False if quiet hours unset — no global hardcode forcing silence.
-    """
+    """Pure helper over preference data — not an automatic engagement gate."""
     qh = prefs.get("quiet_hours")
     if not qh or not isinstance(qh, dict):
         return False
@@ -66,7 +60,6 @@ def is_in_quiet_hours(prefs: dict[str, Any], now_hhmm: str) -> bool:
     end = qh.get("end")
     if not start or not end:
         return False
-    # Simple HH:MM compare; overnight windows supported
     if start <= end:
         return start <= now_hhmm < end
     return now_hhmm >= start or now_hhmm < end

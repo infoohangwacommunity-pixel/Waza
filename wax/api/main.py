@@ -439,7 +439,7 @@ async def surface_post_event(token: str, request: Request):
         if len(str(payload)) > 8000:
             payload = {"truncated": True}
         await svc.record_event(surface=surface, event_type=et, payload=payload)
-        # Feedback stays as SurfaceEvent only — no separate learner.signals pipeline.
+        # Durable surface event only — no feedback intelligence engine.
 
         return JSONResponse({"ok": True}, headers=cors)
 
