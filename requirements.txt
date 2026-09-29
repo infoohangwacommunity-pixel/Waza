@@ -1,3 +1,4 @@
+# Production Python runtime (imported by wax/ and scripts/).
 fastapi>=0.110
 uvicorn[standard]>=0.27
 sqlalchemy[asyncio]>=2.0

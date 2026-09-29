@@ -1,5 +1,5 @@
 # Authoritative production image (Railway builder = DOCKERFILE).
-# Host packages available inside World isolation for AI-driven use (not auto-media intelligence).
+# Only packages required for runtime + World isolation.
 FROM python:3.12-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,18 +8,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        tesseract-ocr \
-        tesseract-ocr-eng \
-        sox \
-        mediainfo \
         bubblewrap \
-        poppler-utils \
-        imagemagick \
-        file \
-        unzip \
-        curl \
         ca-certificates \
+        bash \
     && rm -rf /var/lib/apt/lists/* \
     && if [ ! -e /usr/local/bin/python ]; then ln -sf /usr/local/bin/python3 /usr/local/bin/python; fi
 
