@@ -1,17 +1,15 @@
 """
-Agent execution bookkeeping.
+Execution bookkeeping for one Work item.
 
-Continuation is driven by objectives and observations — not tool-call or intelligence budgets.
-
-Infrastructure safety limits below protect against runaway loops and resource exhaustion.
-They are NOT application-level caps on what the AI is conceptually allowed to think or do.
+Resume prior Execution when present. Bound runaway loops and wall-clock.
+Not an application agent framework — no tools, plans, or teaching policy.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -20,11 +18,7 @@ from wax.observability.logging import get_logger, set_execution_id
 
 logger = get_logger(__name__)
 
-# ---------------------------------------------------------------------------
-# Infrastructure safety only — protect the machine and other students.
-# These are NOT teaching/reasoning policy and are never sent to the model.
-# Wall-clock bounds a single Work execution; continuation count bounds runaway loops.
-# ---------------------------------------------------------------------------
+# Infrastructure safety only — never sent to the model as teaching policy.
 _SAFETY_MAX_CONTINUATIONS = 48
 _SAFETY_MAX_WALL_SECONDS = 300
 
@@ -38,13 +32,10 @@ class AgentRuntime:
         self.started_at = datetime.now(timezone.utc)
 
     async def start(self) -> Execution:
-        now = datetime.now(timezone.utc)
         meta = dict(self.work.metadata_ or {})
         existing_id = meta.get("execution_id")
         if existing_id:
             try:
-                from uuid import UUID
-
                 existing = await self.session.get(Execution, UUID(str(existing_id)))
                 if existing and existing.work_id == self.work.id:
                     self.execution = existing
@@ -57,6 +48,7 @@ class AgentRuntime:
             except Exception:
                 pass
 
+        now = datetime.now(timezone.utc)
         ex = Execution(
             id=uuid4(),
             work_id=self.work.id,
@@ -74,12 +66,7 @@ class AgentRuntime:
         return ex
 
     def can_continue(self) -> bool:
-        """
-        Infrastructure safety only.
-
-        Returns False when a runaway loop or wall-clock exhaustion is likely.
-        Does not encode "the AI has used enough intelligence."
-        """
+        """False only when runaway loop or wall-clock exhaustion is likely."""
         if self.continuations >= _SAFETY_MAX_CONTINUATIONS:
             logger.warning(
                 "agent_safety_continuation_ceiling",
@@ -97,7 +84,7 @@ class AgentRuntime:
             return False
         return True
 
-    async def record_continuation(self, kind: str, detail: dict[str, Any] | None = None) -> None:
+    async def tick(self, kind: str = "continue") -> None:
         self.continuations += 1
         if not self.execution:
             return
@@ -108,27 +95,18 @@ class AgentRuntime:
                 "kind": kind,
                 "n": self.continuations,
                 "at": datetime.now(timezone.utc).isoformat(),
-                **(detail or {}),
             }
         )
         self.execution.steps = steps
-        self.execution.checkpoint = {
-            "phase": "continue",
-            "kind": kind,
-            "continuations": self.continuations,
-        }
         await self.session.flush()
 
-    async def complete(self, result: dict[str, Any] | None = None) -> None:
+    async def complete(self, preview: str = "") -> None:
         if not self.execution:
             return
         self.execution.status = "completed"
         self.execution.completed_at = datetime.now(timezone.utc)
-        if result:
-            self.execution.checkpoint = {
-                **(self.execution.checkpoint or {}),
-                "result_preview": str(result)[:500],
-            }
+        if preview:
+            self.execution.checkpoint = {"result_preview": preview[:500]}
         await self.session.flush()
 
     async def fail(self, error: str) -> None:
@@ -136,8 +114,5 @@ class AgentRuntime:
             return
         self.execution.status = "failed"
         self.execution.completed_at = datetime.now(timezone.utc)
-        self.execution.checkpoint = {
-            **(self.execution.checkpoint or {}),
-            "error": error[:1000],
-        }
+        self.execution.checkpoint = {"error": (error or "")[:1000]}
         await self.session.flush()

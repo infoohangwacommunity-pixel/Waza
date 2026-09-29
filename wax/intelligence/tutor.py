@@ -1,23 +1,26 @@
 """
-WAX Tutor — the AI is the agent.
+Tutor — one small agent loop around the model.
 
-No tool registry. No ToolSpec menu. No primitive catalogue sent to the model.
-The AI reasons, writes optional directive blocks, infrastructure executes them,
-observations return, the AI continues until the objective is complete.
+1. Student objective + recent conversation
+2. Ask the AI what to do
+3. Execute infrastructure directives if any
+4. Return observations
+5. Repeat until the AI finishes (or safety bounds)
+6. Deliver the reply
+
+No educational workflow engine. No memory planner. No subject/modality policy.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from wax.agent.runtime import AgentRuntime
-from wax.db.models import Delivery, Message, Work
-from wax.delivery.presentation import InteractiveChoice, PresentableResponse
+from wax.db.models import Message, Work
 from wax.intelligence.directives import parse_agent_output, Directive
 from wax.intelligence.providers import ChatMessage, CompletionRequest, get_intelligence
 from wax.observability.logging import get_logger
@@ -43,10 +46,9 @@ How you work:
 - When you need infrastructure to act, write a fenced block. Infrastructure validates
   security and returns observations. Ordinary chat needs no fences.
 
-Infrastructure channels (not a menu of app features — domains of reality):
+Infrastructure channels (domains of reality, not an app menu):
 
 ```world
-# general execution environment — shell, files, packages inside the student's World
 python3 -c "print(2+2)"
 ```
 
@@ -61,34 +63,8 @@ content: Student prefers short worked examples
 ```
 
 ```time
-action: now
-```
-
-```time
-delay_seconds: 5
-reason: continue after short pause
-```
-
-```time
-delay_minutes: 30
-reason: follow up on the problem set
-```
-
-```time
-execute_at: 2026-09-29T08:00:00+00:00
-reason: morning continuation
-```
-
-```time
-delay_hours: 24
-interval_hours: 24
-count: 7
-reason: daily check-in series
-```
-
-```time
-action: cancel
-id: <scheduled_action_id>
+delay_seconds: 30
+reason: short pause then continue
 ```
 
 ```time
@@ -98,18 +74,7 @@ action: list
 ```publish
 title: Practice sheet
 lifetime_hours: 168
-<div style="background:#c00;color:#fff">…AI-authored HTML/CSS/JS — any design…</div>
-```
-
-```publish
-action: update
-id: <surface_id>
-<html>…revised…</html>
-```
-
-```publish
-action: revoke
-id: <surface_id>
+<div>…AI-authored HTML/CSS/JS…</div>
 ```
 
 ```interact
@@ -118,7 +83,7 @@ prompt: Which path?
 - Try a problem
 ```
 
-After infrastructure observations, continue or finish with a clear reply to the student.
+After observations, continue or finish with a clear reply to the student.
 Privacy: if they ask to forget something, use state forget and confirm from the result.
 """
 
@@ -135,7 +100,8 @@ class TutorService:
         payload = work.input_payload or {}
         user_text = (payload.get("text") or payload.get("user_text") or "").strip()
         channel = payload.get("channel") or ""
-        # Artifact landed in World — facts only, no auto transcription/OCR/classification
+
+        # Inbound file fact only — no auto transcription/OCR
         media_path = payload.get("local_media_path") or payload.get("principal_media_path")
         if media_path:
             mime = payload.get("media_mime") or ""
@@ -145,39 +111,32 @@ class TutorService:
                 note += f", type hint {mime}"
             if size:
                 note += f", size {size} bytes"
-            note += ". Inspect or process it only if needed via a world directive.]"
+            note += ". Inspect via a world directive only if needed.]"
             user_text = f"{user_text}\n\n{note}".strip() if user_text else note
 
-        # Conversation continuity only — no preselected memory/World content.
         history = await self._recent_messages(work, limit=20)
-        now = datetime.now(timezone.utc).isoformat()
-
         system = TUTOR_SYSTEM
         try:
             from wax.domain.preferences import get_preferences
+
             prefs = await get_preferences(self.session, principal_id) if principal_id else {}
             if prefs:
-                # Explicit user settings, not semantic retrieval
                 system += f"\n\nStudent preferences (explicit settings): {prefs}"
         except Exception:
             pass
 
-        # Honest environment facts — not curated memories or a World file listing
-        env_block = (
+        env = (
             f"CURRENT ENVIRONMENT\n"
-            f"- time_utc: {now}\n"
+            f"- time_utc: {datetime.now(timezone.utc).isoformat()}\n"
             f"- channel: {channel or 'unknown'}\n"
             f"- principal_id: {principal_id or 'none'}\n"
-            f"- world: available — persistent isolated workspace (files, packages, terminal). "
-            f"Inspect or act only via a ```world directive when needed.\n"
-            f"- durable state: available — search/get/create/update/supersede/forget via ```state. "
-            f"Nothing is preloaded; inspect only when needed.\n"
-            f"- time / publish / interact: available via matching infrastructure channels when needed.\n"
+            f"- world / state / time / publish / interact: available via fenced directives when needed.\n"
+            f"- Nothing is preloaded; inspect only when needed.\n"
         )
 
         messages: list[ChatMessage] = [
             ChatMessage(role="system", content=system),
-            ChatMessage(role="system", content=env_block),
+            ChatMessage(role="system", content=env),
         ]
         for h in history:
             messages.append(ChatMessage(role=h["role"], content=h["content"]))
@@ -187,81 +146,74 @@ class TutorService:
             messages.append(ChatMessage(role="user", content="(student opened the conversation)"))
 
         intelligence = get_intelligence()
-        observations: list[str] = []
         final_reply = ""
         interactive = None
-        actions_log: list[dict[str, Any]] = []
 
         while agent.can_continue():
-            # No max_tokens / step budget — model uses natural output limits.
-            # agent.can_continue() is infrastructure runaway/wall-clock safety only.
-            req = CompletionRequest(messages=messages, temperature=0.7)
             try:
-                response = await intelligence.complete(req)
+                response = await intelligence.complete(
+                    CompletionRequest(messages=messages, temperature=0.7)
+                )
             except Exception as e:
                 logger.exception("tutor_completion_failed")
                 await agent.fail(str(e))
-                final_reply = "I hit a temporary issue thinking that through. Please try again in a moment."
+                final_reply = (
+                    "I hit a temporary issue thinking that through. "
+                    "Please try again in a moment."
+                )
                 break
 
             content = (response.content or "").strip()
             turn = parse_agent_output(content)
             messages.append(ChatMessage(role="assistant", content=content))
-
             if turn.reply:
                 final_reply = turn.reply
 
             if not turn.directives:
-                await agent.record_continuation("reply", {"chars": len(final_reply)})
+                await agent.tick("reply")
                 break
 
-            # Infrastructure executes; AI decides why
             obs_parts: list[str] = []
             for d in turn.directives:
-                result = await self._execute_directive(d, principal_id=principal_id, work=work)
-                actions_log.append({"channel": d.channel, "ok": result.get("ok"), "summary": str(result)[:300]})
-                obs_parts.append(f"[{d.channel}] {self._format_obs(result)}")
+                result = await self._execute(d, principal_id=principal_id, work=work)
+                obs_parts.append(f"[{d.channel}] {self._fmt(result)}")
                 if d.channel == "interact" and result.get("ok"):
                     interactive = result.get("interactive")
 
-            observation = "OBSERVATIONS:\n" + "\n".join(obs_parts)
-            observations.append(observation)
-            messages.append(ChatMessage(role="user", content=observation))
-            await agent.record_continuation("directive", {"n": len(turn.directives)})
+            messages.append(ChatMessage(role="user", content="OBSERVATIONS:\n" + "\n".join(obs_parts)))
+            await agent.tick("directive")
 
-            channels = {d.channel for d in turn.directives}
-            if channels <= {"interact", "publish"} and final_reply:
+            if {d.channel for d in turn.directives} <= {"interact", "publish"} and final_reply:
                 break
-
         else:
-            # safety ceiling hit
             if not final_reply:
-                final_reply = "I need a moment longer on that — please send a short follow-up and I'll continue."
+                final_reply = (
+                    "I need a moment longer on that — please send a short follow-up "
+                    "and I'll continue."
+                )
 
-        await agent.complete({"reply_preview": final_reply[:400], "actions": len(actions_log)})
-
-        # Deliver
+        await agent.complete(final_reply[:400])
         if principal_id and final_reply:
-            await self._deliver(work, final_reply, interactive=interactive, channel=channel)
-
-        return {
-            "reply": final_reply,
-            "actions": actions_log,
-            "observations": observations,
-            "interactive": interactive,
-        }
+            await self._deliver(work, final_reply, interactive=interactive)
+        return {"reply": final_reply, "interactive": interactive}
 
     async def handle_scheduled_action(self, work: Work) -> dict[str, Any]:
-        """Wake path: same agent, message_hint as the user-facing objective."""
         payload = work.input_payload or {}
         hint = payload.get("message_hint") or payload.get("reason") or "Scheduled follow-up."
-        # Reuse handle_message shape
-        work.input_payload = {**(payload), "user_text": f"[Scheduled] {hint}", "text": f"[Scheduled] {hint}"}
+        work.input_payload = {
+            **payload,
+            "user_text": f"[Scheduled] {hint}",
+            "text": f"[Scheduled] {hint}",
+        }
         return await self.handle_message(work)
 
-    async def _execute_directive(
-        self, d: Directive, *, principal_id, work: Work
-    ) -> dict[str, Any]:
+    async def handle_surface_request(self, work: Work) -> dict[str, Any]:
+        """Same intelligence path as messaging — surface channel is only context."""
+        payload = work.input_payload or {}
+        work.input_payload = {**payload, "channel": payload.get("channel") or "surface"}
+        return await self.handle_message(work)
+
+    async def _execute(self, d: Directive, *, principal_id, work: Work) -> dict[str, Any]:
         payload = work.input_payload or {}
         ctx = {
             "principal_id": principal_id,
@@ -274,24 +226,31 @@ class TutorService:
         try:
             if d.channel == "world":
                 return await world_ops.world_exec(
-                    self.session,
-                    {"command": f.get("command") or d.body},
-                    ctx,
+                    self.session, {"command": f.get("command") or d.body}, ctx
                 )
             if d.channel == "state":
-                return await self._state_directive(d, principal_id)
+                return await self._state(d, principal_id)
             if d.channel == "time":
-                return await sched.handle_time_directive(self.session, {**f, "raw": d.body}, ctx)
+                return await sched.handle_time_directive(
+                    self.session, {**f, "raw": d.body}, ctx
+                )
             if d.channel == "publish":
                 return await pub.handle_publish_directive(
                     self.session,
-                    {**f, "html": f.get("html") or d.body, "title": f.get("title") or "Surface"},
+                    {
+                        **f,
+                        "html": f.get("html") or d.body,
+                        "title": f.get("title") or "Surface",
+                    },
                     ctx,
                 )
             if d.channel == "interact":
                 return await present_choices(
                     self.session,
-                    {"choices": f.get("choices") or [], "prompt": f.get("prompt") or d.body},
+                    {
+                        "choices": f.get("choices") or [],
+                        "prompt": f.get("prompt") or d.body,
+                    },
                     ctx,
                 )
             return {"ok": False, "error": f"unknown_channel:{d.channel}"}
@@ -299,7 +258,7 @@ class TutorService:
             logger.exception("directive_failed", channel=d.channel)
             return {"ok": False, "error": str(e)[:500]}
 
-    async def _state_directive(self, d: Directive, principal_id) -> dict[str, Any]:
+    async def _state(self, d: Directive, principal_id) -> dict[str, Any]:
         f = d.fields
         action = (f.get("action") or "create").lower()
         mid = str(f.get("memory_id") or f.get("id") or "")
@@ -322,21 +281,23 @@ class TutorService:
             )
         if action == "supersede":
             return await mem.memory_supersede(
-                self.session, principal_id, mid, new_content=str(f.get("content") or d.body)
+                self.session,
+                principal_id,
+                mid,
+                new_content=str(f.get("content") or d.body),
             )
         if action in ("forget", "delete"):
             return await mem.memory_forget(self.session, principal_id, mid)
         return {"ok": False, "error": f"unknown_state_action:{action}"}
 
-    def _format_obs(self, result: dict[str, Any]) -> str:
+    @staticmethod
+    def _fmt(result: dict[str, Any]) -> str:
         if not result:
             return "empty"
         if result.get("ok") is False:
             return f"error: {result.get('error')}"
-        # compact
-        keys = [k for k in result if k not in ("ok",)][:8]
-        parts = [f"{k}={result[k]!r}"[:120] for k in keys]
-        return "; ".join(parts)[:800]
+        keys = [k for k in result if k != "ok"][:8]
+        return "; ".join(f"{k}={result[k]!r}"[:120] for k in keys)[:800]
 
     async def _recent_messages(self, work: Work, limit: int = 20) -> list[dict[str, str]]:
         if not work.conversation_id:
@@ -348,10 +309,12 @@ class TutorService:
             .limit(limit)
         )
         rows = (await self.session.execute(q)).scalars().all()
-        out = []
+        out: list[dict[str, str]] = []
         for m in reversed(rows):
             role = (m.role or "").strip() or (
-                "assistant" if (m.direction or "").lower() in ("outbound", "out") else "user"
+                "assistant"
+                if (m.direction or "").lower() in ("outbound", "out")
+                else "user"
             )
             if role not in ("user", "assistant", "system"):
                 role = "assistant" if role in ("tutor", "bot") else "user"
@@ -360,16 +323,7 @@ class TutorService:
                 out.append({"role": role, "content": content})
         return out
 
-
-
-    async def _deliver(
-        self,
-        work: Work,
-        reply: str,
-        *,
-        interactive=None,
-        channel: str = "",
-    ) -> None:
+    async def _deliver(self, work: Work, reply: str, *, interactive=None) -> None:
         try:
             from wax.delivery.senders import deliver
             from wax.domain.identity import primary_channel_target
