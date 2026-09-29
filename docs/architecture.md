@@ -110,6 +110,27 @@ There is **no** automatic expiration of a student's World after 72 hours.
 Isolation is by distinct world roots; paths cannot escape the world root.
 
 
+## World safety limits (infrastructure only)
+
+Documented in `wax/world/resources.py`. One execution profile — no interactive/batch/acquire intelligence classes.
+
+| Limit | Protects against |
+|-------|------------------|
+| wall_sec / cpu_seconds | Runaway processes |
+| memory_bytes | Host OOM / cross-student pressure |
+| pids | Fork bombs |
+| max_output | Unbounded stdout filling the worker |
+| network_mode `none` (default) | SSRF / data exfiltration from student code |
+| network_mode `pkg` (install only) | Needed for package mirrors; still wall-capped |
+| world max_disk / max_env | Disk fill by one student |
+| concurrent execs (world + worker) | One student monopolizing the host |
+| disk floor | Leaving free space for other Worlds |
+| production sandbox (bwrap/docker) | Process escape to host |
+
+These are not teaching or reasoning budgets. The AI is not given different "smartness" quotas per task type.
+
+
+
 ## Surface workspaces
 
 Surfaces are **temporary AI-authored web workspaces**, not a messaging channel.

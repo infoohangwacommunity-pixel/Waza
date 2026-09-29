@@ -1,24 +1,17 @@
-"""World execution — single path into isolation; no command allowlist; no terminal package."""
+"""World execution — single path into isolation; no command allowlist."""
 
 from __future__ import annotations
 
 import json
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 from wax.observability.logging import get_logger
 from wax.world.errors import WorldError, IsolationUnavailable
 from wax.world.isolation import IsolationRequest, run_isolated
 from wax.world.manager import World, assert_operable, set_lifecycle
-from wax.world.resources import (
-    ExecutionBudget,
-    admit_execution,
-    interactive_budget,
-    batch_budget,
-    release_execution,
-)
+from wax.world.resources import execution_limits, admit_execution, release_execution
 
 logger = get_logger(__name__)
 
@@ -31,30 +24,27 @@ async def world_exec(
     runtime: str = "python",
     cwd_rel: str = "workspace",
     network_mode: str = "none",
-    budget_class: str = "interactive",
     env_extra: dict[str, str] | None = None,
 ) -> dict[str, Any]:
+    """Run argv (or a script) inside the student's isolated World."""
     assert_operable(world)
-    if budget_class == "batch":
-        budget = batch_budget()
-    else:
-        budget = interactive_budget()
-    if network_mode in ("none", "pkg"):
-        budget.network_mode = network_mode
+    limits = execution_limits(network_mode=network_mode)
 
     if script is not None:
-        # write script into world tmp and run with runtime
         exec_id = uuid.uuid4().hex[:12]
         script_rel = f"tmp/_wax_script_{exec_id}.py"
         script_path = world.root / script_rel
         script_path.parent.mkdir(parents=True, exist_ok=True)
         script_path.write_text(script, encoding="utf-8")
-        py = _python_bin(world)
-        argv = [py, str(script_path)]
+        argv = [_python_bin(world), str(script_path)]
     if not argv:
         return {"ok": False, "error": "argv_or_script_required"}
 
-    admit_execution(world_root=world.root, world_concurrent=world.active_execs, budget=budget)
+    admit_execution(
+        world_root=world.root,
+        world_concurrent=world.active_execs,
+        budget=limits,
+    )
     world.active_execs += 1
     if world.lifecycle == "READY":
         set_lifecycle(world, "BUSY", "execution active")
@@ -65,23 +55,23 @@ async def world_exec(
         "status": "running",
         "started_at": time.time(),
     }
-    (world.root / "state" / "exec" / f"{exec_id}.json").write_text(json.dumps(rec), encoding="utf-8")
+    (world.root / "state" / "exec" / f"{exec_id}.json").write_text(
+        json.dumps(rec), encoding="utf-8"
+    )
 
     try:
-        # Prefer world venv python on PATH via isolation HOME/bin
         req = IsolationRequest(
             argv=argv,
             world_root=world.root,
             cwd_rel=cwd_rel,
-            network_mode=budget.network_mode,  # type: ignore[arg-type]
-            timeout_sec=budget.wall_sec,
-            max_output=budget.max_output,
-            memory_bytes=budget.memory_bytes,
-            cpu_seconds=budget.cpu_seconds,
-            pids_limit=budget.pids,
+            network_mode=limits.network_mode,  # type: ignore[arg-type]
+            timeout_sec=limits.wall_sec,
+            max_output=limits.max_output,
+            memory_bytes=limits.memory_bytes,
+            cpu_seconds=limits.cpu_seconds,
+            pids_limit=limits.pids,
             env_extra=env_extra or {},
         )
-        # Put world venv bin first if present
         venv_bin = world.root / "runtimes" / "python" / "default" / "bin"
         if venv_bin.is_dir():
             req.env_extra = {
@@ -101,7 +91,9 @@ async def world_exec(
                 "finished_at": time.time(),
             }
         )
-        (world.root / "state" / "exec" / f"{exec_id}.json").write_text(json.dumps(rec), encoding="utf-8")
+        (world.root / "state" / "exec" / f"{exec_id}.json").write_text(
+            json.dumps(rec), encoding="utf-8"
+        )
         return {
             "ok": result.success,
             "execution_id": exec_id,
@@ -119,7 +111,7 @@ async def world_exec(
         return e.to_dict()
     finally:
         world.active_execs = max(0, world.active_execs - 1)
-        release_execution(budget)
+        release_execution(limits)
         if world.active_execs == 0 and world.lifecycle == "BUSY":
             set_lifecycle(world, "READY", "")
 

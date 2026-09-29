@@ -10,7 +10,7 @@ from typing import Any
 
 from wax.world.isolation import IsolationRequest, run_isolated
 from wax.world.providers.base import AcquirePlan, AcquireRequest, AcquireResult
-from wax.world.resources import acquire_budget
+from wax.world.resources import execution_limits
 
 
 class PipProvider:
@@ -30,7 +30,7 @@ class PipProvider:
         )
 
     async def install(self, req: AcquireRequest, world_root: Path, plan: AcquirePlan) -> AcquireResult:
-        budget = acquire_budget()
+        budget = execution_limits(network_mode="pkg")
         venv = world_root / "runtimes" / "python" / "default"
         venv_py = venv / "bin" / "python"
         if not venv_py.is_file():

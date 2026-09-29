@@ -64,7 +64,6 @@ async def world_exec(
         script=script,
         cwd_rel=str(args.get("cwd") or "workspace"),
         network_mode=str(args.get("network_mode") or "none"),
-        budget_class=str(args.get("budget_class") or "interactive"),
     )
 
 
