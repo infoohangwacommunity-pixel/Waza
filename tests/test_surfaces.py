@@ -204,3 +204,12 @@ def test_service_worker_disabled_in_bridge():
     b = inject_runtime_bridge("T")
     assert "service_workers_disabled" in b
     assert "unregister" in b
+
+
+def test_wrap_ai_html_no_brand_theme():
+    from wax.surfaces.runtime import wrap_ai_html
+    html = wrap_ai_html("<div id=x>hello</div>", title="Practice")
+    assert "hello" in html
+    assert "WAX Prep" not in html or "Unavailable" in html  # AI page must not force brand chrome
+    assert "wax-prep-logo" not in html
+    assert "{{SURFACE_TOKEN}}" in html or "WAX.surface" in html

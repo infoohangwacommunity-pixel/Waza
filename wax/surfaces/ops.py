@@ -1,7 +1,8 @@
 """
 Surface ops — infrastructure publish/update/revoke for AI-authored temporary web workspaces.
 
-Not a channel. Not a surface intelligence engine.
+AI requests publish/update/revoke. Infrastructure hosts securely.
+Not a channel. Not a surface recommendation engine.
 AI authors HTML/CSS/JS (and optional lifetime). Infrastructure exposes securely.
 """
 

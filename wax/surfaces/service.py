@@ -1,8 +1,10 @@
-"""Surface service — secure publish, tokens, lifecycle, isolation.
+"""Surface service — temporary secure hosting for AI-authored web experiences.
 
-The AI authors all experience HTML/CSS/JS and chooses lifetime and interaction design.
-Infrastructure: opaque tokens, CSP host, principal isolation, expire/revoke/update.
-Not a surface intelligence engine. Not a product website template.
+AI decides to create/update/revoke a surface and authors all HTML/CSS/JS.
+Infrastructure: opaque tokens, CSP, principal isolation, lifecycle, state/events.
+
+No recommendation engine. No forced branding or teaching layout.
+Idle/dormant transitions are host resource lifecycle, not "student needs a page."
 """
 
 
@@ -268,7 +270,7 @@ class SurfaceService:
             "expires_at": expires.isoformat(),
             "granted_scopes": scopes,
             "note": (
-                "Share page_url with the learner. Same URL stays stable across updates/renames."
+                "page_url is stable across updates; share it with the student when useful."
                 if url
                 else "Set PUBLIC_BASE_URL to issue openable links."
             ),

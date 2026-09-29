@@ -17,29 +17,9 @@ Security model:
 
 from __future__ import annotations
 
-import base64
 import html as html_lib
 import re
-from pathlib import Path
 from typing import Optional
-
-_LOGO_PATH = Path(__file__).resolve().parent.parent / "static" / "brand" / "wax-prep-logo.png"
-_LOGO_CACHE: Optional[str] = None
-
-
-def _logo_data_uri() -> str:
-    global _LOGO_CACHE
-    if _LOGO_CACHE is not None:
-        return _LOGO_CACHE
-    try:
-        _LOGO_CACHE = (
-            "data:image/png;base64,"
-            + base64.b64encode(_LOGO_PATH.read_bytes()).decode("ascii")
-        )
-    except Exception:
-        _LOGO_CACHE = ""
-    return _LOGO_CACHE
-
 
 def _esc(s: str) -> str:
     return html_lib.escape(s or "", quote=True)
@@ -210,12 +190,7 @@ def wrap_ai_html(
 
 
 def render_unavailable(*, reason: str = "expired") -> str:
-    logo = _logo_data_uri()
-    logo_html = (
-        f'<img src="{logo}" alt="WAX Prep" width="48" height="48" style="border-radius:10px"/>'
-        if logo
-        else ""
-    )
+    logo_html = ""
     msg = {
         "expired": "This temporary surface is no longer available.",
         "revoked": "This surface has been withdrawn.",
@@ -229,7 +204,7 @@ def render_unavailable(*, reason: str = "expired") -> str:
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <meta name="robots" content="noindex, nofollow"/>
-<title>Unavailable · WAX Prep</title>
+<title>Unavailable</title>
 <style>
 body {{ font-family: system-ui, sans-serif; background:#f4f7fb; color:#0f172a;
        display:flex; min-height:100vh; align-items:center; justify-content:center; margin:0; }}

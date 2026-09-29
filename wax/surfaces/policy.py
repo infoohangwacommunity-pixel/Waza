@@ -61,7 +61,7 @@ class CapabilityScope(str, Enum):
 
 @dataclass(frozen=True)
 class SurfaceLifecyclePolicy:
-    """Infrastructure bounds — not learner product quotas."""
+    """Infrastructure bounds — host resource lifecycle, not product quotas or teaching policy."""
 
     default_lifetime: timedelta = timedelta(days=7)
     max_lifetime: timedelta = timedelta(days=30)
