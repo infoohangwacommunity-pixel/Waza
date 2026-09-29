@@ -37,8 +37,6 @@ def _row_to_dict(m: Memory) -> dict[str, Any]:
         "id": str(m.id),
         "memory_type": m.memory_type,
         "content": m.content,
-        "confidence": m.confidence,
-        "importance": m.importance,
         "tags": list(m.tags or []),
         "structured": dict(m.structured or {}),
         "is_active": m.is_active,
@@ -114,8 +112,6 @@ async def memory_create(
     *,
     content: str,
     memory_type: str = "semantic",
-    confidence: float = 0.7,
-    importance: float = 0.5,
     tags: list[str] | None = None,
     structured: dict[str, Any] | None = None,
     work_id: Any = None,
@@ -134,14 +130,11 @@ async def memory_create(
         memory_type=str(memory_type or "semantic")[:50],
         content=content[:8000],
         structured=structured or {},
-        confidence=float(confidence if confidence is not None else 0.7),
-        importance=float(importance if importance is not None else 0.5),
         source=str(source or "ai")[:50],
         source_work_id=_as_uuid(work_id),
         is_active=True,
         validity_status="active",
         tags=[str(t)[:80] for t in (tags or [])][:20],
-        last_observed_at=datetime.now(timezone.utc),
     )
     session.add(m)
     await session.flush()
@@ -155,8 +148,6 @@ async def memory_update(
     memory_id: str | None,
     *,
     content: str | None = None,
-    confidence: float | None = None,
-    importance: float | None = None,
     tags: list[str] | None = None,
     structured: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -169,15 +160,10 @@ async def memory_update(
         return {"ok": False, "error": "not_found"}
     if content is not None:
         m.content = str(content).strip()[:8000]
-    if confidence is not None:
-        m.confidence = float(confidence)
-    if importance is not None:
-        m.importance = float(importance)
     if tags is not None:
         m.tags = [str(t)[:80] for t in tags][:20]
     if structured is not None:
         m.structured = dict(structured)
-    m.last_confirmed_at = datetime.now(timezone.utc)
     await session.flush()
     return {"ok": True, "memory": _row_to_dict(m)}
 
@@ -211,8 +197,6 @@ async def memory_supersede(
         pid,
         content=new_content,
         memory_type=memory_type or old.memory_type,
-        confidence=old.confidence,
-        importance=old.importance,
         tags=list(old.tags or []),
         structured={
             **(old.structured or {}),

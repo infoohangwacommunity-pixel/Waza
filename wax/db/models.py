@@ -1,16 +1,11 @@
 """
-WAX durable reality (not educational theory tables).
+WAX durable reality — small infrastructure schema.
 
-Identity & channels: Principal, InterfaceIdentity
-Conversation: Conversation, Message, InboundEvent
-World: World
-Durable state: Memory (AI-owned; goals live here as memory_type, not a Goal engine)
-Files: Artifact
-Time: ScheduledAction
-Work: Work, Execution, Delivery
-Interactive chat: Interaction
-Temporary web workspace: Surface + revision/session/event/ai_request
-Security/rate: PrincipalWorkload
+principals, interface_identities, conversations, messages, inbound_events,
+worlds, memories, artifacts, scheduled_actions, works, executions, deliveries,
+interactions, surfaces (+ revision/session/event/ai_request), principal_workloads.
+
+No educational engines. Memory is AI-owned durable state, not a knowledge graph.
 """
 
 from __future__ import annotations
@@ -113,7 +108,6 @@ class Conversation(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     channel: Mapped[str] = mapped_column(String(50), nullable=False)
     title: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(50), default="active")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
@@ -267,14 +261,13 @@ class Delivery(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
 
 class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
-    """Durable student state row. AI owns lifecycle; infrastructure stores and isolates."""
+    """Durable AI-owned state. Infrastructure stores and isolates; AI owns meaning."""
 
     __tablename__ = "memories"
     __table_args__ = (
         Index("ix_memory_principal", "principal_id"),
         Index("ix_memory_type", "memory_type"),
         Index("ix_memory_active", "principal_id", "is_active"),
-        Index("ix_memory_importance", "importance"),
         Index("ix_memory_expires", "expires_at"),
     )
 
@@ -284,9 +277,8 @@ class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     memory_type: Mapped[str] = mapped_column(String(50), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     structured: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    confidence: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    importance: Mapped[float] = mapped_column(Float, default=0.5, nullable=False)
-    source: Mapped[str] = mapped_column(String(50), nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    source: Mapped[str] = mapped_column(String(50), nullable=False, default="ai")
     source_message_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("messages.id", ondelete="SET NULL"), nullable=True
     )
@@ -298,15 +290,8 @@ class Memory(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     superseded_by_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
     )
-    tags: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
-    last_confirmed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_observed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
-    validity_status: Mapped[str] = mapped_column(
-        String(40), default="active"
-    )  # active | historical | uncertain | expired | superseded | contradicted
-    contradiction_of_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("memories.id", ondelete="SET NULL"), nullable=True
-    )
+    # active | superseded | forgotten — storage lifecycle, not educational validity theory
+    validity_status: Mapped[str] = mapped_column(String(40), default="active")
     metadata_: Mapped[dict[str, Any]] = mapped_column("metadata", JSONB, default=dict, server_default="{}")
 
     principal: Mapped["Principal"] = relationship(back_populates="memories")

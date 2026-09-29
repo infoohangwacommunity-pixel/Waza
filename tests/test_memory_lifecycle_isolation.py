@@ -32,8 +32,6 @@ def test_row_to_dict_shape():
         id=u,
         memory_type="semantic",
         content="likes short examples",
-        confidence=0.8,
-        importance=0.6,
         tags=["pref"],
         structured={},
         is_active=True,
@@ -80,6 +78,8 @@ def test_no_plan_and_retrieve_or_auto_summary_in_store():
     # No application importance ranking policy
     assert "importance.desc" not in src
     assert "order_by(Memory.updated_at.desc())" in src
+    assert "contradiction_of" not in open("wax/db/models.py", encoding="utf-8").read()
+    assert "confidence" not in open("wax/db/models.py", encoding="utf-8").read().split("class Memory")[1].split("class Artifact")[0]
 
 
 def test_tutor_does_not_auto_inject_memories():
