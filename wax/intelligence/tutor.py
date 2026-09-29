@@ -61,27 +61,24 @@ python3 -m pip install numpy
 
 ```state
 action: search
-query: preferred explanation style
-```
-
-```state
-action: search
-terms: ["explanation style", "examples"]
+terms: ["your own words here"]
 mode: any
 fields: content, structured
-tags: teaching
+tags: any tags you chose when creating
 limit: 20
 offset: 0
 ```
 
 ```state
 action: create
-content: Student prefers short worked examples
+content: <a durable fact you decided is worth keeping>
+memory_type: <your own type>
+tags: [<your own tags>]
 ```
 
 ```time
-delay_seconds: 30
-reason: short pause then continue
+delay_seconds: <number>
+reason: <why this wake-up exists>
 ```
 
 ```time
@@ -89,15 +86,15 @@ action: list
 ```
 
 ```publish
-title: Practice sheet
-lifetime_hours: 168
+title: <your title>
+lifetime_hours: <number>
 <div>…AI-authored HTML/CSS/JS…</div>
 ```
 
 ```interact
-prompt: Which path?
-- More examples
-- Try a problem
+prompt: <question to the student>
+- <option one>
+- <option two>
 ```
 
 After observations, continue or finish with a clear reply to the student.
