@@ -329,7 +329,6 @@ async def process_message_response(session, work: Work) -> None:
                 )
                 # One interim student ack (idempotent) — promise we will finish
                 try:
-                    from uuid import uuid4
 
                     target = (work.input_payload or {}).get("target_external_id")
                     channel = (work.input_payload or {}).get("channel") or "whatsapp"
@@ -378,7 +377,6 @@ async def process_message_response(session, work: Work) -> None:
             work.completed_at = datetime.now(timezone.utc)
             # Permanent failure: queue a safe student-facing apology once
             try:
-                from uuid import uuid4
 
                 safe = student_facing_message(e, error_class=work.error_class)
                 target = (work.input_payload or {}).get("target_external_id")
