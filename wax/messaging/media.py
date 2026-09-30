@@ -87,7 +87,8 @@ async def fetch_whatsapp_media(media_id: str, principal_id: Any) -> dict[str, An
             return {"ok": False, "error": f"download_failed:{data_resp.status_code}"}
         data = data_resp.content
 
-    ext = _ext_from_mime(mime or "") or ""
+    # Extension is a transport convenience only; unknown types keep the bytes as .bin
+    ext = _ext_from_mime(mime or "") or ".bin"
     name = f"wa-{media_id[:12]}{ext}"
     dest_dir = principal_workspace(principal_id) / "media"
     path = safe_write_bytes(dest_dir, name, data)

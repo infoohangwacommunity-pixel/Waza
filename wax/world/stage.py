@@ -90,3 +90,40 @@ def stage_media_for_work(
     except Exception as e:
         logger.exception("stage_media_failed", principal_id=str(principal_id))
         return {"ok": False, "error": str(e)[:500]}
+
+
+def stage_bytes(
+    principal_id: str | Any,
+    data: bytes,
+    *,
+    filename: str | None = None,
+    work_id: Any = None,
+) -> dict[str, Any]:
+    """Persist arbitrary student-owned bytes into the World. No type interpretation."""
+    try:
+        ws = principal_workspace(principal_id)
+        media = ws / "media"
+        name = filename or f"inbound-{uuid4().hex[:12]}.bin"
+        dest = safe_write_bytes(media, name, data)
+        work_path = None
+        if work_id:
+            work_dir = ws / "work" / str(work_id)[:36] / "media"
+            work_dir.mkdir(parents=True, exist_ok=True)
+            work_dest = work_dir / dest.name
+            if not work_dest.exists():
+                try:
+                    work_dest.hardlink_to(dest)
+                except OSError:
+                    shutil.copy2(dest, work_dest)
+            work_path = str(work_dest)
+        return {
+            "ok": True,
+            "path": str(dest),
+            "work_path": work_path,
+            "filename": dest.name,
+            "size": len(data),
+            "sha256": content_hash(data),
+        }
+    except Exception as e:
+        logger.exception("stage_bytes_failed", principal_id=str(principal_id))
+        return {"ok": False, "error": str(e)[:500]}
