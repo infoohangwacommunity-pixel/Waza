@@ -181,9 +181,16 @@ async def process_message_response(session, work: Work) -> None:
             pl = work.input_payload or {}
             tgt = pl.get("target_external_id")
             ch = pl.get("channel") or ""
-            inbound = pl.get("provider_message_id") or pl.get("message_id")
+            # WhatsApp typing/read needs the provider wamid — not our internal Message UUID
+            inbound = pl.get("provider_message_id") or pl.get("wamid") or pl.get("external_id")
+            if not inbound and ch != "whatsapp":
+                inbound = pl.get("message_id")
             if tgt and ch:
-                await send_typing(ch, str(tgt), inbound_message_id=str(inbound) if inbound else None)
+                await send_typing(
+                    ch,
+                    str(tgt),
+                    inbound_message_id=str(inbound) if inbound else None,
+                )
         except Exception:
             logger.exception("typing_indicator_failed")
         result = await tutor.handle_message(work)
@@ -216,7 +223,11 @@ async def process_message_response(session, work: Work) -> None:
             pl = work.input_payload or {}
             channel = pl.get("channel") or "whatsapp"
             target = pl.get("target_external_id")
-            inbound_mid = pl.get("provider_message_id") or pl.get("message_id")
+            inbound_mid = (
+                pl.get("provider_message_id")
+                or pl.get("wamid")
+                or pl.get("external_id")
+            )
             if target and work.principal_id and reply:
                 rendered = present_for_channel(reply, channel)
                 idem = f"tutor-reply:{work.id}"
@@ -265,6 +276,7 @@ async def process_message_response(session, work: Work) -> None:
             acts = (result or {}).get("actions") or []
             tel.directives_run = len(acts) if isinstance(acts, list) else 0
             end_turn()
+
         await _attempt_deliveries(session, work.id)
     except Exception as e:
         try:
@@ -317,7 +329,6 @@ async def process_message_response(session, work: Work) -> None:
                 )
                 # One interim student ack (idempotent) — promise we will finish
                 try:
-                    from wax.db.models import Delivery
                     from uuid import uuid4
 
                     target = (work.input_payload or {}).get("target_external_id")
@@ -367,7 +378,6 @@ async def process_message_response(session, work: Work) -> None:
             work.completed_at = datetime.now(timezone.utc)
             # Permanent failure: queue a safe student-facing apology once
             try:
-                from wax.db.models import Delivery
                 from uuid import uuid4
 
                 safe = student_facing_message(e, error_class=work.error_class)
@@ -516,7 +526,7 @@ async def process_scheduled_action(session, work: Work) -> None:
     from uuid import UUID
     from wax.scheduler.service import SchedulerService
     from wax.domain.identity import primary_channel_target
-    from wax.db.models import ScheduledAction, Delivery
+    from wax.db.models import ScheduledAction
 
     tutor = TutorService(session)
     try:
@@ -773,7 +783,6 @@ async def resuscitate_rate_limited_works(session, limit: int = 25) -> int:
             continue
         # Skip if a real reply delivery already exists for this work
         try:
-            from wax.db.models import Delivery
 
             done = await session.scalar(
                 select(Delivery.id).where(
