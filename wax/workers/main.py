@@ -1011,6 +1011,23 @@ async def main() -> None:
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
     _log_provider_config()
+    # Student Worlds: fail closed if production persistence is required but path is /tmp
+    try:
+        from wax.config import validate_production_settings
+        from wax.world.layout import workspace_root
+
+        validate_production_settings(settings)
+        root = workspace_root()
+        logger.info(
+            "world_store_ready",
+            workspace_root=str(root),
+            require_persistent=bool(settings.require_persistent_workspace),
+            note="Worker owns authoritative Student World filesystem on this host",
+        )
+    except Exception:
+        logger.exception("world_store_startup_failed")
+        if settings.app_env == "production" and settings.require_persistent_workspace:
+            raise
     tasks = [asyncio.create_task(worker_loop(f"worker-{i}")) for i in range(2)]
     tasks.append(asyncio.create_task(recovery_loop()))
     await asyncio.gather(*tasks)

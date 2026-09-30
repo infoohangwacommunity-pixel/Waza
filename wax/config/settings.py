@@ -143,18 +143,14 @@ class Settings(BaseSettings):
 
     @property
     def effective_workspace_root(self) -> str:
+        """Canonical World store path (Worker volume in production)."""
         import os
 
-        shared = (
-            os.environ.get("WAX_SHARED_STORE_PATH")
-            or (self.shared_store_root or "").strip()
-        )
-        if shared:
-            return shared
-        legacy = os.environ.get("WAX_WORKSPACE_ROOT") or (self.workspace_root or "").strip()
-        if legacy:
-            return legacy
-        return ""
+        for key in ("WORKSPACE_ROOT", "WAX_WORKSPACE_ROOT", "WAX_SHARED_STORE_PATH"):
+            v = (os.environ.get(key) or "").strip()
+            if v:
+                return v
+        return (self.workspace_root or self.shared_store_root or "").strip()
 
     @property
     def effective_isolation_require_sandbox(self) -> bool:
@@ -186,16 +182,20 @@ def validate_production_settings(s: Settings | None = None) -> None:
         problems.append(
             "PRIMARY_API_KEY is required in production when a provider is configured"
         )
-    root = (s.workspace_root or "").strip()
-    if root.startswith("/tmp"):
-        problems.append(
-            "WORKSPACE_ROOT must not be under /tmp in production "
-            "(use a durable volume, e.g. /data/wax-workspaces)"
-        )
-    if s.require_persistent_workspace and root.startswith("/tmp"):
-        problems.append(
-            "REQUIRE_PERSISTENT_WORKSPACE=true forbids ephemeral WORKSPACE_ROOT"
-        )
+    # Student Worlds are Worker-owned. Only services that require persistent
+    # World FS (Worker: REQUIRE_PERSISTENT_WORKSPACE=true) must have a durable path.
+    root = (s.effective_workspace_root or s.workspace_root or "").strip()
+    if s.require_persistent_workspace:
+        if not root or root.startswith("/tmp"):
+            problems.append(
+                "REQUIRE_PERSISTENT_WORKSPACE=true requires WORKSPACE_ROOT on a "
+                "durable Worker volume (e.g. /data/wax-workspaces). "
+                "Railway volumes are one-per-service; do not use a second independent "
+                "copy on Web."
+            )
+    elif root.startswith("/tmp") and root:
+        # Soft warning only — Web may omit World volume entirely
+        pass
     if not (s.public_base_url or "").strip():
         problems.append(
             "PUBLIC_BASE_URL must be set in production "

@@ -1,13 +1,26 @@
 """
 World filesystem layout.
 
-world_id is independent of principal_id (owner). Identifiers are never interchangeable.
-Single authority for durable workspace roots (no terminal package).
+world_id is independent of principal_id (owner).
 
-Student Worlds are durable. Files under workspace/, projects/, software/, runtimes/
-survive worker restarts and deployments when WORKSPACE_ROOT is a durable volume.
-Age-based cleanup applies only to tmp/ and cache/ (see wax.world.cleanup).
-Worlds are durable; only tmp/ and cache/ are age-scavenged.
+Student Worlds are durable filesystem trees under WORKSPACE_ROOT:
+  {WORKSPACE_ROOT}/worlds/{world_id}/...
+
+On Railway, a Volume attaches to **one** service only. Web and Worker cannot
+share the same block volume. The authoritative Student World store therefore
+lives on the **Worker** volume (Worker creates, executes, stages media, and
+archives transcript). Postgres remains authoritative for identity, Work,
+messages, and memory. Artifacts that must be read by Web use the artifact
+storage backend (prefer S3 in multi-service deploys).
+
+Configuration (single rule):
+  WORKSPACE_ROOT          canonical path (e.g. /data/wax-workspaces)
+  WAX_WORKSPACE_ROOT      accepted alias
+  REQUIRE_PERSISTENT_WORKSPACE=true  forbids /tmp and silent fallback
+
+WAX_SHARED_STORE_PATH is treated as an alias of WORKSPACE_ROOT only — it does
+not create a network shared filesystem. Railway does not provide multi-service
+volume mounts.
 """
 
 from __future__ import annotations
@@ -23,11 +36,8 @@ from wax.config import get_settings
 from wax.observability.logging import get_logger
 
 logger = get_logger(__name__)
-settings = get_settings()
 
 SCHEMA_VERSION = 1
-
-DEFAULT_ROOT = os.environ.get("WAX_WORKSPACE_ROOT", "/tmp/wax-workspaces")
 
 SUBDIRS = (
     "workspace",
@@ -44,57 +54,93 @@ SUBDIRS = (
     "state/installs",
     "state/exec",
     "history",
-    # AI-owned notebook: durable files the AI creates/edits through its own
-    # World capabilities. Infrastructure only guarantees persistence, isolation
-    # and safe access — there is no fixed schema for what the AI notes down.
     "notebook",
 )
 
 
-def workspace_root() -> Path:
-    """Durable host root for all student Worlds (Railway volume in production).
+def _configured_root_string() -> str:
+    """Single deterministic resolution of the configured World store path."""
+    s = get_settings()
+    # Prefer explicit env so deploy vars always win over baked defaults
+    for key in (
+        "WORKSPACE_ROOT",
+        "WAX_WORKSPACE_ROOT",
+        "WAX_SHARED_STORE_PATH",  # legacy alias only
+    ):
+        v = (os.environ.get(key) or "").strip()
+        if v:
+            return v
+    # Settings fields (pydantic also loads WORKSPACE_ROOT → workspace_root)
+    for attr in ("workspace_root", "shared_store_root"):
+        v = (getattr(s, attr, None) or "").strip()
+        if v:
+            return v
+    return ""
 
-    Web and Worker may mount separate Railway Volumes, but they must present the
-    same logical student World. The shared external store path can be set either
-    via WAX_SHARED_STORE_PATH (new) or the existing WAX_WORKSPACE_ROOT /
-    WORKSPACE_ROOT settings (legacy). When shared_store_root is configured, it
-    is authoritative regardless of per-service local mount names.
+
+def workspace_root() -> Path:
     """
-    root = Path(
-        getattr(settings, "shared_store_root", None)
-        or os.environ.get("WAX_SHARED_STORE_PATH")
-        or getattr(settings, "workspace_root", None)
-        or os.environ.get("WAX_WORKSPACE_ROOT")
-        or DEFAULT_ROOT
-    )
-    if settings.app_env == "production" and str(root).startswith("/tmp"):
+    Durable host root for all student Worlds.
+
+    Production: must be a non-/tmp path on a volume attached to this process
+    (the Worker). Never silently falls back to /tmp when persistence is required.
+    """
+    s = get_settings()
+    configured = _configured_root_string()
+    if not configured:
+        if s.app_env == "production" or getattr(s, "require_persistent_workspace", False):
+            raise RuntimeError(
+                "WORKSPACE_ROOT is not set. On Railway, attach a Volume to the "
+                "Worker at /data and set WORKSPACE_ROOT=/data/wax-workspaces "
+                "with REQUIRE_PERSISTENT_WORKSPACE=true."
+            )
+        configured = "/tmp/wax-workspaces"
+        logger.warning(
+            "workspace_root_default_tmp",
+            path=configured,
+            hint="Development only. Production must set WORKSPACE_ROOT on a volume.",
+        )
+
+    root = Path(configured)
+
+    if str(root).startswith("/tmp"):
         logger.error(
             "workspace_root_ephemeral",
             path=str(root),
-            hint="Set WORKSPACE_ROOT=/data/wax-workspaces and attach a Railway Volume at /data",
+            hint=(
+                "Student Worlds must not live under /tmp. "
+                "Attach a Railway Volume to the Worker at /data and set "
+                "WORKSPACE_ROOT=/data/wax-workspaces."
+            ),
         )
-        if getattr(settings, "require_persistent_workspace", False):
+        if s.app_env == "production" or getattr(s, "require_persistent_workspace", False):
             raise RuntimeError(
-                "Production workspace must not use /tmp. "
-                "Attach a Railway Volume at /data and set WORKSPACE_ROOT=/data/wax-workspaces."
+                f"Refusing ephemeral WORKSPACE_ROOT={root}. "
+                "Attach a Railway Volume to the Worker and set "
+                "WORKSPACE_ROOT=/data/wax-workspaces with "
+                "REQUIRE_PERSISTENT_WORKSPACE=true."
             )
+
     try:
         root.mkdir(parents=True, exist_ok=True)
         probe = root / ".wax_write_probe"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
     except OSError as e:
-        if getattr(settings, "require_persistent_workspace", False) or (
-            settings.app_env == "production" and str(root).startswith("/data/")
-        ):
-            raise RuntimeError(
-                f"Workspace path {root} is not writable. "
-                f"Attach a Railway Volume at /data and set WORKSPACE_ROOT=/data/wax-workspaces. "
-                f"Underlying error: {e}"
-            ) from e
+        msg = (
+            f"Workspace path {root} is not writable ({e}). "
+            "On Railway the Volume must be attached to **this** service "
+            "(Worker owns Student Worlds) at the mount path that matches "
+            "WORKSPACE_ROOT (e.g. volume mount /data → WORKSPACE_ROOT=/data/wax-workspaces)."
+        )
+        if s.app_env == "production" or getattr(s, "require_persistent_workspace", False):
+            raise RuntimeError(msg) from e
         logger.warning("workspace_root_not_writable", path=str(root), error=str(e)[:200])
+        # Dev-only escape: never used when persistence is required
         root = Path("/tmp/wax-workspaces")
         root.mkdir(parents=True, exist_ok=True)
+        logger.warning("workspace_root_dev_fallback", path=str(root))
+
     return root
 
 
@@ -118,7 +164,7 @@ def ensure_layout(root: Path) -> None:
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(data, indent=2, default=str), encoding="utf-8")
     tmp.replace(path)
 
 
@@ -127,72 +173,29 @@ def read_json(path: Path) -> dict[str, Any] | None:
         return None
     try:
         return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return None
 
 
-def resolve_under_world(root: Path, rel: str) -> Path:
-    """Resolve rel path under world root; raise on escape."""
-    from wax.world.errors import PathEscape
-
-    if not rel or rel.startswith("/"):
-        candidate = Path(rel).resolve() if rel.startswith("/") else (root / rel).resolve()
-    else:
-        candidate = (root / rel).resolve()
-    root_res = root.resolve()
-    try:
-        candidate.relative_to(root_res)
-    except ValueError as e:
-        raise PathEscape(f"path escapes world root: {rel}") from e
-    for p in [candidate, *candidate.parents]:
-        if p == root_res:
-            break
-        if p.is_symlink():
-            target = p.resolve()
-            try:
-                target.relative_to(root_res)
-            except ValueError as e:
-                raise PathEscape(f"symlink escape: {p}") from e
-    return candidate
-
-
-def import_prior_principal_tree(principal_id: str, world_id: str) -> dict[str, Any]:
-    """If an older principals/<id> tree exists on disk, copy media/files into the World."""
-    prior = workspace_root() / "principals" / str(principal_id).replace("/", "_")[:64]
-    root = world_root(world_id)
-    ensure_layout(root)
-    report: dict[str, Any] = {"prior": str(prior), "copied": [], "skipped": []}
-    if not prior.is_dir():
-        report["status"] = "none"
-        return report
-    mapping = {
-        "media": root / "workspace" / "media",
-        "out": root / "artifacts",
-        "tmp": root / "tmp",
-    }
-    for name, dest in mapping.items():
-        src = prior / name
-        if not src.is_dir():
-            report["skipped"].append(name)
-            continue
-        dest.mkdir(parents=True, exist_ok=True)
-        for item in src.iterdir():
-            target = dest / item.name
-            if target.exists():
-                report["skipped"].append(str(item))
-                continue
-            try:
-                if item.is_dir():
-                    shutil.copytree(item, target, dirs_exist_ok=False)
-                else:
-                    shutil.copy2(item, target)
-                report["copied"].append(str(item))
-            except Exception as e:
-                report.setdefault("errors", []).append(f"{item}: {e}")
-    report["status"] = "ok"
-    logger.info("world_prior_tree_imported", world_id=world_id, copied=len(report["copied"]))
-    return report
-
-
 def new_world_id() -> str:
-    return str(uuid.uuid4())
+    return uuid.uuid4().hex
+
+
+def resolve_under_world(world_root_path: Path, rel: str) -> Path:
+    """Resolve a relative path under a world root without escaping."""
+    safe = (rel or "").replace("..", "").lstrip("/")
+    full = (world_root_path / safe).resolve()
+    root_resolved = world_root_path.resolve()
+    if not str(full).startswith(str(root_resolved)):
+        raise ValueError("path_escape")
+    return full
+
+
+def prior_principal_path(principal_id: str) -> Path:
+    """Legacy principal-keyed path (migration aid only)."""
+    return workspace_root() / "principals" / str(principal_id).replace("/", "_")[:64]
+
+
+def remove_tree(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)

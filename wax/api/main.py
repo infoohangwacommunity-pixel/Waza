@@ -66,9 +66,21 @@ async def ready() -> JSONResponse:
 
 @app.get("/health/detail")
 async def health_detail():
-    from wax.world.layout import workspace_root
+    """Diagnostics. Student Worlds are Worker-owned on Railway (one volume per service)."""
+    from wax.world.layout import workspace_root, _configured_root_string
 
-    root = workspace_root()
+    configured = _configured_root_string()
+    root_str = None
+    world_store = "unconfigured"
+    try:
+        root_str = str(workspace_root())
+        world_store = "local_mount"
+        if root_str.startswith("/tmp"):
+            world_store = "ephemeral_tmp"
+    except RuntimeError as e:
+        world_store = "unavailable_on_this_service"
+        root_str = configured or None
+
     return {
         "status": "ok",
         "app": settings.app_name,
@@ -77,31 +89,17 @@ async def health_detail():
         "whatsapp_enabled": settings.whatsapp_enabled,
         "telegram_enabled": settings.telegram_enabled,
         "world_exec_enabled": settings.isolation_enabled,
-        "workspace_root": str(root),
+        "workspace_root": root_str,
+        "workspace_configured": configured or None,
+        "world_store": world_store,
+        "world_store_note": (
+            "Railway volumes attach to one service only. "
+            "Student Worlds are authoritative on the Worker volume "
+            "(WORKSPACE_ROOT=/data/wax-workspaces). Web does not need a World volume "
+            "for messaging; use S3 for artifacts served by Web if required."
+        ),
         "primary_provider": settings.primary_provider,
-        "fallback_provider": settings.fallback_provider,
         "storage_backend": getattr(settings, "effective_storage_backend", settings.storage_backend),
-        "isolation": {
-            "enabled": settings.isolation_enabled,
-            "require_sandbox": settings.effective_isolation_require_sandbox,
-        },
-        "capabilities": [
-            "interactions",
-            "schedule",
-            "world_exec",
-            "memory_lifecycle",
-            "html_surfaces",
-            "work_leases",
-            "rate_limit_recovery",
-        ],
-        "intelligence": {
-            "provider_rate_limit_max_retries": getattr(
-                settings, "provider_rate_limit_max_retries", 48
-            ),
-            "delivery_chunk_delay_seconds": getattr(
-                settings, "delivery_chunk_delay_seconds", 0.55
-            ),
-        },
     }
 
 
