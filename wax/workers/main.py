@@ -171,6 +171,23 @@ async def process_message_response(session, work: Work) -> None:
         except Exception:
             logger.exception("media_world_stage_failed")
 
+    # Materialize inbound student reality into the World before intelligence runs.
+    # Files + factual inbound record only — no interpretation.
+    try:
+        from wax.world.inbound import materialize_inbound_reality
+
+        reality = await materialize_inbound_reality(session, work)
+        if reality.get("ok"):
+            pl = dict(work.input_payload or {})
+            if reality.get("inbound_fact_path"):
+                pl["inbound_fact_path"] = reality["inbound_fact_path"]
+            if reality.get("world_root"):
+                pl["world_root"] = reality["world_root"]
+            work.input_payload = pl
+            await session.flush()
+    except Exception:
+        logger.exception("inbound_reality_materialize_failed", work_id=str(work.id))
+
     tutor = TutorService(session)
     try:
         await renew_lease(session, work, work.claimed_by or "worker")

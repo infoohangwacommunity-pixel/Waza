@@ -61,6 +61,28 @@ def normalize_whatsapp_message(msg: dict[str, Any], contacts: dict | None = None
         media = msg.get(msg_type) or {}
         media_id = media.get("id")
         text = media.get("caption") or f"[{msg_type} received]"
+    elif msg_type == "location":
+        content_type = "other"
+        loc = msg.get("location") or {}
+        # Factual fields only — AI decides meaning
+        text = (
+            f"[location latitude={loc.get('latitude')} "
+            f"longitude={loc.get('longitude')} "
+            f"name={loc.get('name') or ''} address={loc.get('address') or ''}]"
+        )
+    elif msg_type == "contacts":
+        content_type = "other"
+        contacts_list = msg.get("contacts") or []
+        names = []
+        for c in contacts_list[:5]:
+            n = ((c.get("name") or {}).get("formatted_name") or "")[:80]
+            if n:
+                names.append(n)
+        text = f"[contacts shared: {', '.join(names) or 'count=' + str(len(contacts_list))}]"
+    elif msg_type == "reaction":
+        content_type = "other"
+        react = msg.get("reaction") or {}
+        text = f"[reaction emoji={react.get('emoji') or ''} to={react.get('message_id') or ''}]"
     else:
         content_type = "other"
         text = f"[{msg_type} message]"

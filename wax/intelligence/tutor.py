@@ -239,17 +239,30 @@ class TutorService:
         user_text = (payload.get("text") or payload.get("user_text") or "").strip()
         channel = payload.get("channel") or ""
 
-        # Inbound file fact only (path, size, type)
+        # Factual inbound pointers only — infrastructure does not interpret content.
         media_path = payload.get("local_media_path") or payload.get("principal_media_path")
+        fact_path = payload.get("inbound_fact_path")
+        fact_bits = []
+        if fact_path:
+            fact_bits.append(f"inbound fact record: {fact_path}")
         if media_path:
             mime = payload.get("media_mime") or ""
             size = payload.get("media_size")
-            note = f"[Inbound file in your World at {media_path}"
+            bit = f"inbound file in your World at {media_path}"
             if mime:
-                note += f", type hint {mime}"
-            if size:
-                note += f", size {size} bytes"
-            note += ". Inspect via a world directive only if needed.]"
+                bit += f" (type hint {mime}"
+                if size:
+                    bit += f", {size} bytes"
+                bit += ")"
+            elif size:
+                bit += f" ({size} bytes)"
+            fact_bits.append(bit)
+        if fact_bits:
+            note = (
+                "[Student inbound reality in your World — "
+                + "; ".join(fact_bits)
+                + ". Inspect with a world directive only if needed; decide meaning yourself.]"
+            )
             user_text = f"{user_text}\n\n{note}".strip() if user_text else note
 
         world_root_note = ""
